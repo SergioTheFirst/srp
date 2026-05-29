@@ -8,3 +8,5 @@
 - [Языконезависимость сбора](language-independence.md) — CIM-классы и числовой Level вместо локализованных путей
 - [Байесовские веса не калиброваны](bayesian-weights-uncalibrated.md) — ручная заглушка до survival-модели
 - [Покрытие только server + shared](coverage-scope.md) — агент проверяется живым E2E, не юнит-покрытием
+- [Класс системы: high-trust](system-class-high-trust.md) — degradation detection platform, не «AI предсказывает»; под неопределённостью → UNKNOWN
+- [Контракт telemetry-trust](telemetry-trust-rules.md) — state=gate/weight=modulation, collector⊥semantic, materiality, scope ceiling
