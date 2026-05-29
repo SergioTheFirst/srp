@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ d.hostname or d.device_id }} · SRP{% endblock %}
+{% block subtitle %}{{ d.model or "" }}{% if d.chassis %} · {{ d.chassis }}{% endif %}{% endblock %}
+
+{% set s = d.scores %}
+{% block body %}
+<p class="small"><a href="/">← весь флот</a></p>
+
+<h1 style="margin:0">{{ d.hostname or d.device_id }}</h1>
+<p class="muted small mono">{{ d.device_id }} · агент {{ d.agent_version or "?" }} · крайний контакт {{ d.last_seen or "—" }}</p>
+
+{% if not s %}
+  <p class="muted">Скоры ещё не рассчитаны — устройство известно, но телеметрии недостаточно.</p>
+{% else %}
+
+<h2>Day-1 скоры</h2>
+<div class="scoregrid">
+  {% set cards = [
+      ("Производительность", s.performance, health_color(s.performance), "сейчас"),
+      ("Надёжность", s.reliability, health_color(s.reliability), "история 30д"),
+      ("Остаток ресурса", s.wear, health_color(s.wear), "износ железа"),
+  ] %}
+  {% for lab, val, col, hint in cards %}
+  <div class="scorecard">
+    <div class="lab">{{ lab }}</div>
+    <div class="val {{ col }}">{{ "%.0f"|format(val) if val is not none else "—" }}</div>
+    <div class="bar {{ col }}"><i style="width: {{ val if val is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:8px">{{ hint }}</div>
+  </div>
+  {% endfor %}
+  <div class="scorecard">
+    <div class="lab">Риск-экспозиция</div>
+    <div class="val {{ risk_color(s.risk_exposure) }}">{{ "%.0f"|format(s.risk_exposure) if s.risk_exposure is not none else "—" }}</div>
+    <div class="bar {{ risk_color(s.risk_exposure) }}"><i style="width: {{ s.risk_exposure if s.risk_exposure is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:8px">выше = хуже</div>
+  </div>
+</div>
+
+<h2>Риск по классам отказа</h2>
+{% for c in s.risk.classes %}
+<div class="riskrow">
+  <div class="head">
+    <span class="name">{{ c.label }}</span>
+    <span class="chip {{ level_color(c.level) }}">{{ pct(c.probability) }}</span>
+  </div>
+  <div class="riskbar {{ level_color(c.level) }}"><i style="width: {{ (c.probability * 100)|round(1) }}%"></i></div>
+  <ul class="factors">
+    {% for f in c.factors %}
+    <li>
+      <span>{{ f.label }}</span>
+      <span class="w {{ 'pos' if f.weight > 0 else 'neg' }}">{{ "%+.2f"|format(f.weight) }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+
+<h2>Что повлияло на day-1 скоры</h2>
+{% set groups = [
+    ("Производительность", s.risk.day1_factors.performance),
+    ("Надёжность", s.risk.day1_factors.reliability),
+    ("Остаток ресурса", s.risk.day1_factors.wear),
+    ("Риск-экспозиция", s.risk.day1_factors.risk_exposure),
+] %}
+{% for title, items in groups %}
+<details {% if items %}open{% endif %}>
+  <summary>{{ title }} — {{ items|length }} фактор(ов)</summary>
+  {% if items %}
+  <ul class="factors">
+    {% for f in items %}
+    <li>
+      <span>{{ f.label }}</span>
+      <span class="w {{ 'neg' if f.delta < 0 else 'pos' }}">{{ "%+.1f"|format(f.delta) }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted small">Замечаний нет.</p>
+  {% endif %}
+</details>
+{% endfor %}
+{% endif %}
+
+<h2>Недавние события</h2>
+{% if not d.events %}
+  <p class="muted small">Событий не получено.</p>
+{% else %}
+<table>
+  <thead>
+    <tr><th>Время</th><th>Журнал</th><th>Источник</th><th>ID</th><th>Уровень</th><th>Сообщение</th></tr>
+  </thead>
+  <tbody>
+    {% for e in d.events %}
+    <tr>
+      <td class="muted small mono">{{ e.ts or "—" }}</td>
+      <td class="small">{{ e.log or "—" }}</td>
+      <td class="small">{{ e.source or "—" }}</td>
+      <td class="mono small">{{ e.event_id if e.event_id is not none else "—" }}</td>
+      <td><span class="chip {{ {'Critical':'bad','Error':'bad','Warning':'warn','Information':'na'}.get(e.level, 'na') }}">{{ e.level or "—" }}</span></td>
+      <td class="small">{{ e.message or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Инвентарь</h2>
+{% set inv = d.inventory %}
+{% set hb = d.latest_heartbeat %}
+<table>
+  <tbody>
+    <tr><td class="muted">Производитель / модель</td><td>{{ d.manufacturer or "—" }} / {{ d.model or "—" }}</td></tr>
+    {% if inv %}
+    <tr><td class="muted">ОС</td><td>{{ inv.os_caption or "—" }} {{ inv.os_version or "" }}</td></tr>
+    <tr><td class="muted">CPU</td><td>{{ inv.cpu_name or "—" }}</td></tr>
+    <tr><td class="muted">RAM</td><td>{{ inv.total_ram_gb }} ГБ{% if inv.total_ram_gb is none %}—{% endif %}</td></tr>
+    <tr><td class="muted">BIOS</td><td>{{ inv.bios_version or "—" }} ({{ inv.bios_release_date or "?" }})</td></tr>
+    <tr><td class="muted">Диски</td><td>
+      {% for disk in inv.disks or [] %}
+        <div class="small">{{ disk.model or "?" }} · {{ disk.media_type or "?" }} · {{ disk.size_gb }} ГБ</div>
+      {% else %}—{% endfor %}
+    </td></tr>
+    {% endif %}
+    {% if hb %}
+    <tr><td class="muted">Сейчас (heartbeat)</td><td class="small">
+      CPU {{ "%.0f"|format(hb.cpu_pct) if hb.cpu_pct is not none else "?" }}% ·
+      своб. RAM {{ hb.mem_avail_mb if hb.mem_avail_mb is not none else "?" }} МБ ·
+      своб. диск {{ "%.0f"|format(hb.free_space_pct) if hb.free_space_pct is not none else "?" }}% ·
+      аптайм {{ "%.0f"|format(hb.uptime_hours) if hb.uptime_hours is not none else "?" }} ч
+    </td></tr>
+    {% endif %}
+    <tr><td class="muted">Впервые / крайний контакт</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
+  </tbody>
+</table>
+{% endblock %}

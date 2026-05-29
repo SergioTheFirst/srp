@@ -1,0 +1,53 @@
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Lint / type / test / coverage caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# --- Packaging / build ---
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- SRP runtime artifacts (generated; must never be committed) ---
+# SQLite store the server creates at runtime
+srp.db
+srp.db-journal
+srp.db-wal
+srp.db-shm
+# Agent offline spool
+buffer.jsonl
+client/buffer.jsonl
+# Local helpers left behind by manual E2E runs
+.srv.pid
+client/config.json.bak
+
+# NOTE: server/config.json and client/config.json are tracked TEMPLATES and are
+# intentionally NOT ignored. The shipped client/config.json keeps device_id ""
+# (the real MachineGuid is resolved at runtime and must stay out of git).
+
+# --- IDE / editor ---
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- OS cruft ---
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,10 @@
+{
+  "server_url": "http://212.42.56.189:8000",
+  "device_id": "",
+  "inventory_interval_sec": 86400,
+  "historical_interval_sec": 86400,
+  "heartbeat_interval_sec": 300,
+  "events_interval_sec": 900,
+  "http_timeout_sec": 15,
+  "buffer_path": "buffer.jsonl"
+}

@@ -1,0 +1,10 @@
+# SRP server runtime dependencies (Python 3.9+).
+#
+# The agent (client/) deliberately needs NONE of these -- it is pure Python
+# standard library (urllib, subprocess, json, winreg), so it drops onto a
+# domain PC without a pip install. Only the server needs the packages below.
+
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27
+pydantic>=2.6,<3.0
+jinja2>=3.1

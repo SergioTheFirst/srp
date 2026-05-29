@@ -1,0 +1,71 @@
+name: CI
+
+# Every push and pull request must pass build + checks before it can be trusted.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Newer commits on the same ref supersede in-flight runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Platform-independent gates: lint, type-check, security. One Python is enough.
+  quality:
+    name: Lint, type-check & security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Ruff lint
+        run: python -m ruff check --output-format=github .
+      - name: Mypy (shared + server)
+        run: python -m mypy
+      - name: Bandit (security)
+        run: python -m bandit -c pyproject.toml -q -r server shared client
+
+  # Tests run on Windows -- the agent's real target OS (winreg / PowerShell live
+  # here) -- across the supported Python range. The server floor is 3.9.
+  test:
+    name: Tests (Windows, py${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Pytest with coverage (server + shared, gate 80%)
+        run: python -m pytest --cov=server --cov=shared --cov-report=term-missing --cov-report=xml
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
+      # Optional: publish to Codecov once this repo lives on GitHub. Add the
+      # CODECOV_TOKEN secret (private repos), then uncomment.
+      # - name: Upload coverage to Codecov
+      #   if: matrix.python-version == '3.12'
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     files: coverage.xml
+      #     token: ${{ secrets.CODECOV_TOKEN }}

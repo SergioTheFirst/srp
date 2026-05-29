@@ -1,0 +1,99 @@
+# SRP -- single source of truth for tooling (lint / format / type / security /
+# test / coverage). SRP is run from the source tree (python -m server.main,
+# python -m client.agent); it is not packaged for distribution, so there is no
+# [build-system] / [project] table here -- only [tool.*] configuration.
+
+# --------------------------------------------------------------------------- #
+# Ruff -- linter + formatter (replaces flake8 + isort + black)
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+target-version = "py39"          # server floor is Python 3.9 (see requirements.txt)
+line-length = 100
+src = ["server", "shared", "client", "tests"]
+extend-exclude = ["__pycache__", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (import ordering)
+    "B",    # flake8-bugbear (likely bugs)
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+]
+# `UP` (pyupgrade) is intentionally NOT selected: the codebase uses explicit
+# `Optional[...]` consistently and the support floor is Python 3.9, so we keep
+# that style rather than rewriting to `X | None`. Security is handled by
+# `bandit` (see [tool.bandit]), so ruff skips the `S` rules to avoid duplicates.
+
+[tool.ruff.lint.per-file-ignores]
+# E501 (line length) is waived only where long lines are intrinsic content, not
+# sloppy code: embedded PowerShell scripts, one-line explainability labels, and
+# inline reference telemetry used by tests.
+"client/collectors/*" = ["E501"]
+"server/scoring/bayesian.py" = ["E501"]
+"smoke.py" = ["E501"]
+"tests/*" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# --------------------------------------------------------------------------- #
+# mypy -- static type checking (gradual; scoped to the analytics core)
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+python_version = "3.9"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+# The stdlib-only agent (client/) and the tests are excluded for now; the value
+# of type checking concentrates on the contract + server scoring logic.
+files = ["shared", "server"]
+
+[tool.pydantic-mypy]
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --------------------------------------------------------------------------- #
+# bandit -- static security analysis  (bandit -c pyproject.toml -r server shared client)
+# --------------------------------------------------------------------------- #
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+# The agent shells out to PowerShell with a fully static argv (no user input in
+# the command list; the script is base64-encoded and passed as data). Those
+# specific lines carry inline `# nosec B603 B607` justifications instead of a
+# blanket skip, so any *new* subprocess use is still flagged.
+
+# --------------------------------------------------------------------------- #
+# pytest
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "unit: pure-function tests (scoring, contract, transport) with no network I/O",
+    "integration: tests that exercise the API + SQLite through TestClient",
+]
+
+# --------------------------------------------------------------------------- #
+# coverage -- the analytics core (server + shared). The stdlib-only agent is
+# validated by the live E2E run, not by unit coverage.
+# --------------------------------------------------------------------------- #
+[tool.coverage.run]
+source = ["server", "shared"]
+branch = true
+omit = ["*/__pycache__/*", "tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
