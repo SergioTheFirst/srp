@@ -1,0 +1,16 @@
+{
+  "$comment": "Shared, committed Claude Code config for SRP. Hooks keep edited Python files ruff-clean automatically; the authoritative gate is still `make check` / CI. Per-developer overrides go in settings.local.json (gitignored).",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/ruff_format.py"
+          }
+        ]
+      }
+    ]
+  }
+}
