@@ -13,6 +13,10 @@
   <p class="muted">Скоры ещё не рассчитаны — устройство известно, но телеметрии недостаточно.</p>
 {% else %}
 
+{% if s.risk.device_trust == "untrusted" %}
+<p class="chip bad" style="display:block; padding:10px 14px; margin:14px 0">⚠ Идентичность устройства недостоверна — оценки могут быть ненадёжны (untrusted).</p>
+{% endif %}
+
 <h2>Day-1 скоры</h2>
 <div class="scoregrid">
   {% set cards = [
@@ -41,9 +45,13 @@
 <div class="riskrow">
   <div class="head">
     <span class="name">{{ c.label }}</span>
+    {% if c.trust == "unknown" %}
+    <span class="chip na" title="источник недостоверен — вероятность не показывается">UNKNOWN</span>
+    {% else %}
     <span class="chip {{ level_color(c.level) }}">{{ pct(c.probability) }}</span>
+    {% endif %}
   </div>
-  <div class="riskbar {{ level_color(c.level) }}"><i style="width: {{ (c.probability * 100)|round(1) }}%"></i></div>
+  <div class="riskbar {{ 'na' if c.trust == 'unknown' else level_color(c.level) }}"><i style="width: {{ 0 if c.trust == 'unknown' else (c.probability * 100)|round(1) }}%"></i></div>
   <ul class="factors">
     {% for f in c.factors %}
     <li>
@@ -54,6 +62,18 @@
   </ul>
 </div>
 {% endfor %}
+
+{% if s.risk.domains %}
+<h2>Доверие телеметрии (покрытие источников)</h2>
+<div class="cards">
+  {% for name, d in s.risk.domains.items() %}
+  <div class="stat">
+    <div class="n" style="font-size:15px"><span class="chip {{ {'trusted':'good','unknown':'na','not_applicable':'na'}.get(d.state,'na') }}">{{ {'trusted':'OK','unknown':'UNKNOWN','not_applicable':'—'}.get(d.state, d.state) }}</span></div>
+    <div class="l">{{ name }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <h2>Что повлияло на day-1 скоры</h2>
 {% set groups = [
