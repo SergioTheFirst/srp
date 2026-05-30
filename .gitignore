@@ -18,6 +18,9 @@ ENV/
 coverage.xml
 htmlcov/
 
+# --- CodeGraph semantic index (regenerable; do not commit) ---
+.codegraph/
+
 # --- Packaging / build ---
 build/
 dist/

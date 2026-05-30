@@ -10,3 +10,4 @@
 - [Покрытие только server + shared](coverage-scope.md) — агент проверяется живым E2E, не юнит-покрытием
 - [Класс системы: high-trust](system-class-high-trust.md) — degradation detection platform, не «AI предсказывает»; под неопределённостью → UNKNOWN
 - [Контракт telemetry-trust](telemetry-trust-rules.md) — state=gate/weight=modulation, collector⊥semantic, materiality, scope ceiling
+- [Как работать с пользователем](working-style-governors.md) — анти-сикофантия в обе стороны, анти-оверинжиниринг, строгие контракты, прозовый ко-дизайн
