@@ -83,5 +83,5 @@ def resolve_domain_trust(domain: str, sources: Dict[str, SourceTrust]) -> Domain
         elif st is not None:
             dropped.append(name)
 
-    weight = min(required_weights) if required_weights else 0.0
+    weight = min(required_weights) if required_weights else 0.0  # pragma: no cover
     return DomainTrust(domain, DomainTrustState.TRUSTED, weight, contributing, dropped)

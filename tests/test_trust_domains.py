@@ -45,3 +45,18 @@ def test_degraded_required_lowers_domain_weight():
     d = resolve_domain_trust("storage", sources)
     assert d.state is DomainTrustState.TRUSTED
     assert d.weight == 0.5
+
+
+def test_optional_source_success_adds_to_contributing():
+    sources = {
+        "storage_reliability": _src("storage_reliability", SourceState.OK, 1.0),
+        "disk_latency": _src("disk_latency", SourceState.OK, 1.0),
+    }
+    d = resolve_domain_trust("storage", sources)
+    assert d.state is DomainTrustState.TRUSTED
+    assert "disk_latency" in d.contributing
+
+
+def test_unknown_domain_is_unknown():
+    d = resolve_domain_trust("nope", {})
+    assert d.state is DomainTrustState.UNKNOWN

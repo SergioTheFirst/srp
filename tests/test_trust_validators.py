@@ -105,3 +105,80 @@ def test_material_sources_set_excludes_raw_perf():
     assert "cpu_pct" not in MATERIAL_SOURCES
     assert "disk_queue" not in MATERIAL_SOURCES
     assert "storage_reliability" in MATERIAL_SOURCES
+
+
+# ---------------------------------------------------------------------------
+# validate_source: reliability range (0..10)
+# ---------------------------------------------------------------------------
+
+
+def test_reliability_above_max_is_implausible():
+    status, _ = validate_source("reliability", {"value": 11.0}, None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+# ---------------------------------------------------------------------------
+# validate_source: boot_time range (0..600000)
+# ---------------------------------------------------------------------------
+
+
+def test_boot_time_above_max_is_implausible():
+    status, _ = validate_source("boot_time", {"value": 700000.0}, None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+# ---------------------------------------------------------------------------
+# validate_source: event_counts — negative count and clean dict
+# ---------------------------------------------------------------------------
+
+
+def test_event_counts_negative_value_is_implausible():
+    status, _ = validate_source("event_counts", {"kp41": 3, "bad": -1}, None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_event_counts_clean_dict_is_plausible():
+    status, _ = validate_source("event_counts", {"kp41": 3, "ds": 0}, None)
+    assert status is SemanticStatus.PLAUSIBLE
+
+
+# ---------------------------------------------------------------------------
+# validate_storage_item: counter-reset detection
+# ---------------------------------------------------------------------------
+
+
+def test_storage_counter_reset_is_inconsistent():
+    status, reason = validate_storage_item({"power_on_hours": 100}, last={"power_on_hours": 5000})
+    assert status is SemanticStatus.INCONSISTENT
+    assert reason  # non-empty
+    assert "power_on_hours" in reason or "drop" in reason.lower() or "reset" in reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# validate_battery: additional branches
+# ---------------------------------------------------------------------------
+
+
+def test_battery_not_present_is_plausible():
+    status, _ = validate_battery({"present": False})
+    assert status is SemanticStatus.PLAUSIBLE
+
+
+def test_battery_wear_above_100_is_implausible():
+    status, _ = validate_battery({"present": True, "design_capacity_mwh": 50000, "wear_pct": 150})
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_battery_dispatch_no_design_is_inconsistent():
+    status, _ = validate_source("battery", {"present": True, "design_capacity_mwh": None}, None)
+    assert status is SemanticStatus.INCONSISTENT
+
+
+# ---------------------------------------------------------------------------
+# validate_scalar_range: non-numeric value is skipped, not a crash
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_range_non_numeric_value_is_plausible():
+    status, _ = validate_scalar_range("free_space", "garbage", 0.0, 100.0)
+    assert status is SemanticStatus.PLAUSIBLE

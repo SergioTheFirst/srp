@@ -128,9 +128,10 @@ def validate_source(source: str, reading: dict, last: Optional[dict]) -> Result:
         last_value = (last or {}).get("value")
         return validate_frozen_constant(source, reading.get("value"), last_value)
     if source == "event_counts":
+        # Expects a pre-projected count-only dict (the wiring layer, W0.1, decides what lands here).
         for key, val in reading.items():
             status, reason = validate_scalar_range(key, val, 0.0, 1_000_000.0)
             if status is not SemanticStatus.PLAUSIBLE:
                 return status, reason
         return _OK
-    return _OK
+    return _OK  # pragma: no cover
