@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
+from server.trust.gate import derive_state
 from server.trust.states import (
     CollectorStatus,
     SemanticStatus,
@@ -9,6 +12,10 @@ from server.trust.states import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _state(collector, semantic, age=0.0, stale_after=300.0, applicable=True):
+    return derive_state(collector, semantic, age, stale_after, applicable)
 
 
 def test_gate_pass_only_for_ok_and_degraded():
@@ -27,8 +34,38 @@ def test_gate_pass_only_for_ok_and_degraded():
 
 
 def test_source_trust_is_immutable():
-    import dataclasses
-
     t = SourceTrust("battery", SourceState.OK, 1.0, CollectorStatus.OK, SemanticStatus.PLAUSIBLE)
     with pytest.raises(dataclasses.FrozenInstanceError):
         t.weight = 0.9  # frozen dataclass -> FrozenInstanceError
+
+
+def test_not_applicable_wins_over_everything():
+    # Battery on a desktop: not a degradation, the domain simply does not exist.
+    s = _state(CollectorStatus.ABSENT, SemanticStatus.UNCHECKED, applicable=False)
+    assert s is SourceState.NOT_APPLICABLE
+
+
+def test_suspect_beats_collector_ok():
+    # A fresh, complete, but lying source is more dangerous than an absent one.
+    s = _state(CollectorStatus.OK, SemanticStatus.FROZEN)
+    assert s is SourceState.SUSPECT
+
+
+def test_collector_failure_is_unavailable():
+    s = _state(CollectorStatus.BLOCKED, SemanticStatus.PLAUSIBLE)
+    assert s is SourceState.UNAVAILABLE
+
+
+def test_old_sample_is_stale():
+    s = _state(CollectorStatus.OK, SemanticStatus.PLAUSIBLE, age=9000.0, stale_after=300.0)
+    assert s is SourceState.STALE
+
+
+def test_partial_payload_is_degraded():
+    s = _state(CollectorStatus.PARTIAL, SemanticStatus.PLAUSIBLE)
+    assert s is SourceState.DEGRADED
+
+
+def test_clean_source_is_ok():
+    s = _state(CollectorStatus.OK, SemanticStatus.PLAUSIBLE)
+    assert s is SourceState.OK
