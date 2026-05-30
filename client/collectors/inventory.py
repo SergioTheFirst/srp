@@ -10,8 +10,9 @@ import hashlib
 from typing import Any, Optional
 
 from client.collectors.ps import run_ps
+from client.collectors.sources import IDENTITY, CollectorResult, failed, field_status, health
 
-_GIB = 1024 ** 3
+_GIB = 1024**3
 
 # SMBIOS chassis type codes -> coarse class.
 _LAPTOP = {8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32}
@@ -99,10 +100,12 @@ def _gb(num_bytes: Any) -> Optional[float]:
     return round(b / _GIB, 1) if b > 0 else None
 
 
-def collect_inventory() -> Optional[dict[str, Any]]:
-    raw = run_ps(_SCRIPT, timeout=60)
-    if not isinstance(raw, dict):
-        return None
+def collect_inventory() -> CollectorResult:
+    result = run_ps(_SCRIPT, timeout=60)
+    if result.status != "ok" or not isinstance(result.data, dict):
+        status = result.status if result.status != "ok" else "partial"
+        return CollectorResult(None, failed([IDENTITY], status))
+    raw = result.data
 
     disks = []
     for d in raw.get("disks") or []:
@@ -129,7 +132,7 @@ def collect_inventory() -> Optional[dict[str, Any]]:
             }
         )
 
-    return {
+    payload = {
         "hostname": raw.get("hostname"),
         "manufacturer": raw.get("manufacturer") or None,
         "model": raw.get("model") or None,
@@ -149,3 +152,5 @@ def collect_inventory() -> Optional[dict[str, Any]]:
         "driver_problem_count": raw.get("driver_problem_count"),
         "pending_reboot": bool(raw.get("pending_reboot")),
     }
+    present = bool(payload.get("hostname") or payload.get("model"))
+    return CollectorResult(payload, {IDENTITY: health(field_status(present))})

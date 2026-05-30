@@ -115,3 +115,25 @@ def test_buffer_is_trimmed_to_cap(tmp_path, monkeypatch):
     assert len(lines) == 3
     # oldest dropped -> the kept lines are the last three appended.
     assert [json.loads(ln)["payload"]["n"] for ln in lines] == [2, 3, 4]
+
+
+def test_envelope_includes_source_health(tmp_path):
+    t, _ = _make(tmp_path)
+    env = t._envelope("heartbeat", {}, {"free_space": {"status": "ok"}})
+    assert env["source_health"]["free_space"]["status"] == "ok"
+
+
+def test_envelope_source_health_defaults_empty(tmp_path):
+    t, _ = _make(tmp_path)
+    env = t._envelope("heartbeat", {"cpu_pct": 1.0})
+    assert env["source_health"] == {}
+
+
+def test_send_payload_none_with_health_is_delivered(tmp_path, monkeypatch):
+    """No payload but a source is down -> still send, so the server learns it."""
+    t, _ = _make(tmp_path)
+    sent: dict = {}
+    monkeypatch.setattr(t, "_deliver", lambda env: sent.update(env) or True)
+    assert t.send("heartbeat", None, {"throttle": {"status": "timeout"}}) is True
+    assert sent["payload"] == {}
+    assert sent["source_health"]["throttle"]["status"] == "timeout"

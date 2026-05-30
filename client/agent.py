@@ -25,12 +25,13 @@ from client.collectors import (
     collect_historical,
     collect_inventory,
 )
+from client.collectors.sources import CollectorResult
 from client.config import ClientConfig, load_config
 from client.transport import Transport
 
 log = logging.getLogger("srp.agent")
 
-Collector = Callable[[], Optional[dict]]
+Collector = Callable[[], CollectorResult]
 
 # (msg_type, collector, name-of-interval-field-on-the-config)
 TASKS: list[tuple[str, Collector, str]] = [
@@ -72,23 +73,25 @@ class Agent:
 
     def _run_task(self, msg_type: str, collector: Collector) -> None:
         try:
-            payload = collector()
+            result = collector()
         except Exception:  # noqa: BLE001 -- a broken collector must not kill the loop
             log.exception("collector %s raised", msg_type)
             return
-        if payload is None:
+        if result.payload is None and not result.source_health:
             log.warning("%s: collector produced nothing (source blocked?)", msg_type)
             return
-        delivered = self._transport.send(msg_type, payload)
+        delivered = self._transport.send(msg_type, result.payload, result.source_health)
         log.info("%s: %s", msg_type, "sent" if delivered else "buffered (offline)")
 
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="srp-agent", description="SRP telemetry agent")
-    parser.add_argument("--once", action="store_true",
-                        help="run each collector once and exit (no loop)")
-    parser.add_argument("--server", metavar="URL",
-                        help="override server_url from config for this run")
+    parser.add_argument(
+        "--once", action="store_true", help="run each collector once and exit (no loop)"
+    )
+    parser.add_argument(
+        "--server", metavar="URL", help="override server_url from config for this run"
+    )
     parser.add_argument("--verbose", action="store_true", help="debug logging")
     return parser.parse_args(argv)
 
