@@ -85,6 +85,11 @@ def test_envelope_rejects_bad_msg_type():
 # --------------------------------------------------------------------------- #
 
 
+def test_source_health_rejects_unknown_status():
+    with pytest.raises(ValueError):
+        SourceHealth(status="bogus")
+
+
 def test_source_health_validates_status():
     sh = SourceHealth(status="ok")
     assert sh.status == "ok"

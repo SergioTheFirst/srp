@@ -157,7 +157,7 @@ class SourceHealth(_Base):
     collected_at: UTC ISO timestamp when the collector ran (None if it never ran).
     """
 
-    status: str
+    status: Literal["ok", "partial", "empty", "timeout", "blocked", "absent"]
     collected_at: Optional[str] = None
 
 

@@ -119,7 +119,9 @@ def collect_historical() -> CollectorResult:
     rel_status = "ok" if rsi is not None else ("partial" if counts_present else "empty")
     sh = {
         STORAGE_RELIABILITY: health(field_status(bool(raw["storage"]))),
-        BATTERY: health("ok"),
+        BATTERY: health(
+            "ok"
+        ),  # collection ok; battery N/A (desktop) is derived from payload.battery.present at the trust layer
         RELIABILITY: health(rel_status),
         BOOT_TIME: health(field_status(raw.get("avg_boot_ms") is not None)),
     }

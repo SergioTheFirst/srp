@@ -9,7 +9,7 @@ server never mistakes "source blocked/empty" for "source healthy".
 from __future__ import annotations
 
 import pytest
-from client.collectors import heartbeat, historical, inventory
+from client.collectors import events, heartbeat, historical, inventory
 from client.collectors.ps import PsResult
 
 pytestmark = pytest.mark.unit
@@ -121,3 +121,28 @@ def test_inventory_absent_marks_identity(monkeypatch):
     res = inventory.collect_inventory()
     assert res.payload is None
     assert res.source_health["identity"]["status"] == "absent"
+
+
+# --------------------------------------------------------------------------- #
+# events
+# --------------------------------------------------------------------------- #
+def test_events_ok_reports_source(monkeypatch):
+    monkeypatch.setattr(
+        events, "run_ps", lambda *a, **k: _ok({"events": [{"event_id": 41}], "window_hours": 24.0})
+    )
+    res = events.collect_events()
+    assert res.payload is not None
+    assert res.source_health["events"]["status"] == "ok"
+
+
+def test_events_empty_is_empty(monkeypatch):
+    monkeypatch.setattr(events, "run_ps", lambda *a, **k: _ok({"events": [], "window_hours": 24.0}))
+    res = events.collect_events()
+    assert res.source_health["events"]["status"] == "empty"
+
+
+def test_events_timeout_marks_source(monkeypatch):
+    monkeypatch.setattr(events, "run_ps", lambda *a, **k: PsResult("timeout"))
+    res = events.collect_events()
+    assert res.payload is None
+    assert res.source_health["events"]["status"] == "timeout"

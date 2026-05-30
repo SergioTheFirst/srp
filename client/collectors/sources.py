@@ -7,7 +7,7 @@ server can key collector-status to the right trust domain. Pure stdlib.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 # Logical source names (keys in Envelope.source_health), aligned with
 # server/trust/domains.py DOMAIN_SOURCES.
@@ -25,15 +25,15 @@ EVENTS = "events"
 class CollectorResult(NamedTuple):
     """What a collector returns: a payload (None on failure) + per-source health."""
 
-    payload: Optional[Dict[str, Any]]
-    source_health: Dict[str, Dict[str, Any]]
+    payload: Optional[dict[str, Any]]
+    source_health: dict[str, dict[str, Any]]
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def health(status: str) -> Dict[str, Any]:
+def health(status: str) -> dict[str, Any]:
     """One source_health entry: a collector status stamped with the collection time."""
     return {"status": status, "collected_at": _now_iso()}
 
@@ -45,6 +45,6 @@ def field_status(present: bool, complete: bool = True) -> str:
     return "ok" if complete else "partial"
 
 
-def failed(sources: List[str], status: str) -> Dict[str, Dict[str, Any]]:
+def failed(sources: list[str], status: str) -> dict[str, dict[str, Any]]:
     """Mark every owned source with the same failure status (run_ps returned no data)."""
     return {s: health(status) for s in sources}
