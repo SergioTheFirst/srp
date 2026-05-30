@@ -16,6 +16,9 @@
 {% if s.risk.device_trust == "untrusted" %}
 <p class="chip bad" style="display:block; padding:10px 14px; margin:14px 0">⚠ Идентичность устройства недостоверна — оценки могут быть ненадёжны (untrusted).</p>
 {% endif %}
+{% if s.risk.regressed_sources %}
+<p class="chip warn" style="display:block; padding:10px 14px; margin:14px 0">⚠ Источники пропали (были доступны, перестали отвечать): {{ s.risk.regressed_sources|join(", ") }}</p>
+{% endif %}
 
 <h2>Day-1 скоры</h2>
 <div class="scoregrid">

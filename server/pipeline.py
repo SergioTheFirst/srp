@@ -32,6 +32,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Collector statuses meaning "the source did not deliver" (newly-blocked detection, 3e).
+_COLLECTOR_FAIL = (
+    CollectorStatus.EMPTY,
+    CollectorStatus.TIMEOUT,
+    CollectorStatus.BLOCKED,
+    CollectorStatus.ABSENT,
+)
+
+
 # --------------------------------------------------------------------------- #
 # Source-reading extraction helpers
 # --------------------------------------------------------------------------- #
@@ -147,6 +156,10 @@ def evaluate_trust(
             "state": st.state.value,
             "weight": st.weight,
             "reason": st.reason,
+            # 3e: a source that delivered before (has a last-good) but now fails is
+            # "newly-blocked" (regressed) -- distinct from a source never seen.
+            "regressed": st.collector_status in _COLLECTOR_FAIL
+            and db.get_last_good(device_id, src) is not None,
         }
         for src, st in source_map.items()
     }
@@ -272,6 +285,9 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
             perf = rel = wear = risk_exp = None
             for c in risk["classes"]:
                 c["trust"] = "unknown"
+        regressed = [s for s, v in trust.get("sources", {}).items() if v.get("regressed")]
+        if regressed:
+            risk_block["regressed_sources"] = sorted(regressed)
 
     scores = {
         "performance": perf,
