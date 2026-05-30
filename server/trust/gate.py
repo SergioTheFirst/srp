@@ -47,3 +47,14 @@ def derive_state(
     if collector_status == CollectorStatus.PARTIAL:
         return SourceState.DEGRADED
     return SourceState.OK
+
+
+_DEGRADED_WEIGHT = 0.5  # single attenuation band; no continuous calculus (scope ceiling)
+
+
+def compute_weight(state: SourceState) -> float:
+    if state == SourceState.OK:
+        return 1.0
+    if state == SourceState.DEGRADED:
+        return _DEGRADED_WEIGHT
+    return 0.0  # gate-fail: weight is irrelevant and never reanimates

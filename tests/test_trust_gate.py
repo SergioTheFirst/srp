@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from server.trust.gate import derive_state
+from server.trust.gate import compute_weight, derive_state
 from server.trust.states import (
     CollectorStatus,
     SemanticStatus,
@@ -69,3 +69,20 @@ def test_partial_payload_is_degraded():
 def test_clean_source_is_ok():
     s = _state(CollectorStatus.OK, SemanticStatus.PLAUSIBLE)
     assert s is SourceState.OK
+
+
+def test_weight_full_for_ok():
+    assert compute_weight(SourceState.OK) == 1.0
+
+
+def test_weight_attenuated_for_degraded():
+    assert compute_weight(SourceState.DEGRADED) == 0.5
+
+
+@pytest.mark.parametrize(
+    "state",
+    [SourceState.STALE, SourceState.UNAVAILABLE, SourceState.SUSPECT, SourceState.NOT_APPLICABLE],
+)
+def test_weight_zero_for_gate_fail(state):
+    # Hard rule: weight never reanimates a gate-failed source.
+    assert compute_weight(state) == 0.0
