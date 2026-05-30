@@ -203,6 +203,29 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     }
 
 
+# Bayesian failure class -> trust domain (3c). "memory" is intentionally ungated:
+# RAM signals (WHEA/bugcheck) are not a trust domain in v1.
+_CLASS_DOMAIN = {
+    "storage": "storage",
+    "battery": "battery",
+    "power_thermal": "thermal",
+    "stability": "os_stability",
+}
+
+
+def _annotate_class_trust(classes: list, domains: dict) -> None:
+    """Tag each bayesian class with its mapped domain's trust state (None if ungated)."""
+    for c in classes:
+        dom = _CLASS_DOMAIN.get(c.get("name"))
+        c["trust"] = domains.get(dom, {}).get("state") if dom else None
+
+
+def _device_trust(trust: dict) -> str:
+    """A device is untrusted when its identity source could not be trusted."""
+    state = (trust.get("sources", {}).get("identity") or {}).get("state")
+    return "untrusted" if state in ("unavailable", "suspect", "stale") else "ok"
+
+
 def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     inv = db.get_inventory(device_id)
     hist = db.get_historical(device_id)
@@ -213,17 +236,27 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     day1 = compute_day1_scores(inv, hist, hb)
     risk = compute_risk(inv, hist, hb)
+    risk_block: dict[str, Any] = {
+        "classes": risk["classes"],
+        "top": risk["top"],
+        "overall": risk["overall"],
+        "day1_factors": day1["factors"],
+    }
+
+    # 3c: gate the explainable risk by the per-domain trust computed on ingest.
+    trust = db.get_trust(device_id)
+    if trust:
+        domains = trust.get("domains", {})
+        _annotate_class_trust(risk["classes"], domains)
+        risk_block["domains"] = domains
+        risk_block["device_trust"] = _device_trust(trust)
+
     scores = {
         "performance": day1["performance"],
         "reliability": day1["reliability"],
         "wear": day1["wear"],
         "risk_exposure": day1["risk_exposure"],
-        "risk": {
-            "classes": risk["classes"],
-            "top": risk["top"],
-            "overall": risk["overall"],
-            "day1_factors": day1["factors"],
-        },
+        "risk": risk_block,
     }
     db.store_scores(device_id, _now_iso(), scores)
     return scores
