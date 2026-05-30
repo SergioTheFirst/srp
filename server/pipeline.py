@@ -16,6 +16,7 @@ from server import db
 from server.scoring import compute_day1_scores, compute_risk
 from server.trust import (
     DOMAIN_SOURCES,
+    GATE_PASS,
     CollectorStatus,
     SemanticStatus,
     SourceState,
@@ -43,6 +44,7 @@ def _extract_reading(source: str, payload: dict) -> dict:
     validate_source will mark it UNCHECKED, which can never become SUSPECT.
     """
     if source == "storage_reliability":
+        # v1: validates the first disk only; multi-disk coverage deferred.
         items = payload.get("storage") or [{}]
         return items[0] if items else {}
     if source == "battery":
@@ -84,7 +86,7 @@ def _build_source_trust_map(device_id: str) -> dict[str, SourceTrust]:
 def evaluate_trust(
     device_id: str,
     payload: dict,
-    source_health: dict,
+    source_health: dict[str, dict[str, Any]],
     ts: str,
 ) -> dict[str, Any]:
     """Compute and persist per-source + per-domain trust for one envelope.
@@ -204,7 +206,8 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
 
 
 # Bayesian failure class -> trust domain (3c). "memory" is intentionally ungated:
-# RAM signals (WHEA/bugcheck) are not a trust domain in v1.
+# RAM signals (WHEA/bugcheck) are not a trust domain in v1. The disk_fill/boot
+# domains are tracked for lineage but gate no scoring class in v1 (no class maps).
 _CLASS_DOMAIN = {
     "storage": "storage",
     "battery": "battery",
@@ -221,9 +224,19 @@ def _annotate_class_trust(classes: list, domains: dict) -> None:
 
 
 def _device_trust(trust: dict) -> str:
-    """A device is untrusted when its identity source could not be trusted."""
-    state = (trust.get("sources", {}).get("identity") or {}).get("state")
-    return "untrusted" if state in ("unavailable", "suspect", "stale") else "ok"
+    """A device is untrusted when its identity source fails the trust gate.
+
+    Resolved through SourceState/GATE_PASS (single source of truth) so a future
+    gate-fail state is covered automatically; an unknown DB value does not flag.
+    """
+    raw = (trust.get("sources", {}).get("identity") or {}).get("state")
+    if raw is None:
+        return "ok"
+    try:
+        state = SourceState(raw)
+    except ValueError:
+        return "ok"
+    return "untrusted" if state not in GATE_PASS else "ok"
 
 
 def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
@@ -236,6 +249,8 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     day1 = compute_day1_scores(inv, hist, hb)
     risk = compute_risk(inv, hist, hb)
+    perf, rel = day1["performance"], day1["reliability"]
+    wear, risk_exp = day1["wear"], day1["risk_exposure"]
     risk_block: dict[str, Any] = {
         "classes": risk["classes"],
         "top": risk["top"],
@@ -249,13 +264,20 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         domains = trust.get("domains", {})
         _annotate_class_trust(risk["classes"], domains)
         risk_block["domains"] = domains
-        risk_block["device_trust"] = _device_trust(trust)
+        device_trust = _device_trust(trust)
+        risk_block["device_trust"] = device_trust
+        if device_trust == "untrusted":
+            # Contract §7: untrusted identity -> no reliable priors/cohort, so
+            # withhold the day-1 scores instead of showing meaningless numbers.
+            perf = rel = wear = risk_exp = None
+            for c in risk["classes"]:
+                c["trust"] = "unknown"
 
     scores = {
-        "performance": day1["performance"],
-        "reliability": day1["reliability"],
-        "wear": day1["wear"],
-        "risk_exposure": day1["risk_exposure"],
+        "performance": perf,
+        "reliability": rel,
+        "wear": wear,
+        "risk_exposure": risk_exp,
         "risk": risk_block,
     }
     db.store_scores(device_id, _now_iso(), scores)

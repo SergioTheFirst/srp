@@ -71,6 +71,9 @@ def test_device_untrusted_when_identity_fails(client):
     )
     dev = client.get("/api/v1/devices/dev-unt").json()
     assert dev["scores"]["risk"]["device_trust"] == "untrusted"
+    # contract §7: untrusted identity -> day-1 scores withheld (None), not shown
+    assert dev["scores"]["performance"] is None
+    assert dev["scores"]["risk_exposure"] is None
 
 
 def test_no_source_health_leaves_scores_ungated(client):
