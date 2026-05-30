@@ -27,6 +27,7 @@
     <tr>
       <th>Устройство</th>
       <th>Модель</th>
+      <th>Объект</th>
       <th>Производит.</th>
       <th>Надёжность</th>
       <th>Износ</th>
@@ -43,6 +44,7 @@
         {% if d.chassis %}<div class="muted small">{{ d.chassis }}</div>{% endif %}
       </td>
       <td class="muted small">{{ d.model or "—" }}</td>
+      <td class="small">{{ d.site_name or d.site_code or "—" }}</td>
       <td><span class="chip {{ health_color(d.performance) }}">{{ "%.0f"|format(d.performance) if d.performance is not none else "—" }}</span></td>
       <td><span class="chip {{ health_color(d.reliability) }}">{{ "%.0f"|format(d.reliability) if d.reliability is not none else "—" }}</span></td>
       <td><span class="chip {{ health_color(d.wear) }}">{{ "%.0f"|format(d.wear) if d.wear is not none else "—" }}</span></td>

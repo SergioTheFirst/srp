@@ -106,6 +106,10 @@ class Transport:
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
             "source_health": source_health or {},
+            # W1.1: send None when empty so the server's COALESCE keeps any
+            # existing value rather than overwriting a known site with NULL.
+            "site_code": self._cfg.site_code or None,
+            "site_name": self._cfg.site_name or None,
         }
 
     def _deliver(self, envelope: dict[str, Any]) -> bool:

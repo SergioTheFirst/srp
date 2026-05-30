@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS devices (
   chassis       TEXT,
   agent_version TEXT,
   first_seen    TEXT,
-  last_seen     TEXT
+  last_seen     TEXT,
+  site_code     TEXT,
+  site_name     TEXT
 );
 CREATE TABLE IF NOT EXISTS inventory (
   device_id TEXT PRIMARY KEY,
@@ -124,36 +126,61 @@ def upsert_device(
     manufacturer: Optional[str] = None,
     model: Optional[str] = None,
     chassis: Optional[str] = None,
+    site_code: Optional[str] = None,
+    site_name: Optional[str] = None,
 ) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO devices
               (device_id, hostname, manufacturer, model, chassis,
-               agent_version, first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?)
+               agent_version, first_seen, last_seen, site_code, site_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               hostname     = COALESCE(excluded.hostname, devices.hostname),
               manufacturer = COALESCE(excluded.manufacturer, devices.manufacturer),
               model        = COALESCE(excluded.model, devices.model),
               chassis      = COALESCE(excluded.chassis, devices.chassis),
               agent_version= excluded.agent_version,
-              last_seen    = excluded.last_seen
+              last_seen    = excluded.last_seen,
+              site_code    = COALESCE(excluded.site_code, devices.site_code),
+              site_name    = COALESCE(excluded.site_name, devices.site_name)
             """,
-            (device_id, hostname, manufacturer, model, chassis, agent_version, ts, ts),
+            (
+                device_id,
+                hostname,
+                manufacturer,
+                model,
+                chassis,
+                agent_version,
+                ts,
+                ts,
+                site_code,
+                site_name,
+            ),
         )
 
 
-def touch_device(device_id: str, ts: str, agent_version: str) -> None:
+def touch_device(
+    device_id: str,
+    ts: str,
+    agent_version: str,
+    site_code: Optional[str] = None,
+    site_name: Optional[str] = None,
+) -> None:
     """Ensure a device row exists and bump last_seen (for heartbeat/events)."""
     with _lock, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO devices (device_id, agent_version, first_seen, last_seen)
-            VALUES (?,?,?,?)
-            ON CONFLICT(device_id) DO UPDATE SET last_seen = excluded.last_seen
+            INSERT INTO devices
+              (device_id, agent_version, first_seen, last_seen, site_code, site_name)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET
+              last_seen = excluded.last_seen,
+              site_code = COALESCE(excluded.site_code, devices.site_code),
+              site_name = COALESCE(excluded.site_name, devices.site_name)
             """,
-            (device_id, agent_version, ts, ts),
+            (device_id, agent_version, ts, ts, site_code, site_name),
         )
 
 
@@ -262,6 +289,7 @@ def get_devices() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
+                   d.site_code, d.site_name,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk
             FROM devices d LEFT JOIN scores s ON s.device_id = d.device_id
             ORDER BY COALESCE(s.risk_exposure, 0) DESC, d.last_seen DESC
@@ -277,6 +305,8 @@ def get_devices() -> list[dict[str, Any]]:
                 "model": r["model"],
                 "chassis": r["chassis"],
                 "last_seen": r["last_seen"],
+                "site_code": r["site_code"],
+                "site_name": r["site_name"],
                 "performance": r["performance"],
                 "reliability": r["reliability"],
                 "wear": r["wear"],
@@ -330,6 +360,8 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "manufacturer": d["manufacturer"],
         "model": d["model"],
         "chassis": d["chassis"],
+        "site_code": d["site_code"],
+        "site_name": d["site_name"],
         "agent_version": d["agent_version"],
         "first_seen": d["first_seen"],
         "last_seen": d["last_seen"],
