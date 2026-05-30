@@ -5,9 +5,10 @@ depending on pywin32 -- the agent stays a near-zero-dependency drop-in. Scripts
 are passed via ``-EncodedCommand`` (base64 UTF-16LE) so embedded quotes never
 fight the shell, and output is forced to UTF-8 so Cyrillic event text survives.
 
-Every helper is failure-tolerant: a missing source, a blocked cmdlet, or a
-timeout returns ``None``/empty rather than raising -- a PC that can't report a
-signal must not crash the agent (and, upstream, must not look healthy).
+``run_ps`` returns a :class:`PsResult` -- a collector-status plus parsed data --
+so callers can tell *why* a source produced nothing (timeout / blocked / empty /
+absent) rather than collapsing every failure to ``None``. A PC that cannot report
+a signal must not look healthy: the status is reported, not swallowed.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess  # nosec B404
-from typing import Any
+from typing import Any, NamedTuple
 
 _PREAMBLE = (
     "$ProgressPreference='SilentlyContinue';"
@@ -24,8 +25,24 @@ _PREAMBLE = (
 )
 
 
-def run_ps(script: str, timeout: int = 30) -> Any:
-    """Execute *script* in PowerShell; return parsed JSON, or None on any failure."""
+class PsResult(NamedTuple):
+    """Outcome of a PowerShell run.
+
+    status: ok | empty | timeout | blocked | absent | partial
+      ok      -- ran and returned parseable JSON (``data`` is set)
+      empty   -- ran but produced no output
+      partial -- ran, produced output, but it was not valid JSON
+      timeout -- the call exceeded its timeout
+      blocked -- an OS error prevented the call (policy / ACL / etc.)
+      absent  -- powershell.exe was not found
+    """
+
+    status: str
+    data: Any = None
+
+
+def run_ps(script: str, timeout: int = 30) -> PsResult:
+    """Execute *script* in PowerShell; return a PsResult (status + parsed JSON)."""
     encoded = base64.b64encode((_PREAMBLE + script).encode("utf-16-le")).decode("ascii")
     try:
         # B603/B607: static argv, no shell; "powershell" resolved from PATH, no user input.
@@ -42,16 +59,20 @@ def run_ps(script: str, timeout: int = 30) -> Any:
             capture_output=True,
             timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return None
+    except FileNotFoundError:
+        return PsResult("absent")
+    except subprocess.TimeoutExpired:
+        return PsResult("timeout")
+    except OSError:
+        return PsResult("blocked")
 
     out = proc.stdout.decode("utf-8", errors="replace").strip()
     if not out:
-        return None
+        return PsResult("empty")
     try:
-        return json.loads(out)
+        return PsResult("ok", json.loads(out))
     except json.JSONDecodeError:
-        return None
+        return PsResult("partial")
 
 
 def as_list(value: Any) -> list[Any]:

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from client.collectors.ps import as_list, run_ps
+from client.collectors.sources import EVENTS, CollectorResult, failed, field_status, health
 
 _MAX_MESSAGE = 500  # server truncates to this too; clamp early to bound payload
 
@@ -87,14 +88,17 @@ def _clean_event(ev: Any) -> Optional[dict[str, Any]]:
     }
 
 
-def collect_events() -> Optional[dict[str, Any]]:
-    raw = run_ps(_SCRIPT, timeout=60)
-    if not isinstance(raw, dict):
-        return None
+def collect_events() -> CollectorResult:
+    result = run_ps(_SCRIPT, timeout=60)
+    if result.status != "ok" or not isinstance(result.data, dict):
+        status = result.status if result.status != "ok" else "partial"
+        return CollectorResult(None, failed([EVENTS], status))
+    raw = result.data
     events = [e for e in (_clean_event(x) for x in as_list(raw.get("events"))) if e]
     window = raw.get("window_hours")
     try:
         window = float(window) if window is not None else 24.0
     except (TypeError, ValueError):
         window = 24.0
-    return {"events": events, "window_hours": window}
+    payload = {"events": events, "window_hours": window}
+    return CollectorResult(payload, {EVENTS: health(field_status(bool(events)))})

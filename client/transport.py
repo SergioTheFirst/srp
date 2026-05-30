@@ -26,8 +26,8 @@ log = logging.getLogger(__name__)
 # (duplicated, not imported, so the client needs no pydantic install).
 AGENT_VERSION = "0.1.0"
 
-_MAX_BUFFER_LINES = 5000      # oldest dropped past this -- bound disk use
-_SEND_ATTEMPTS = 2            # quick in-process retries before buffering
+_MAX_BUFFER_LINES = 5000  # oldest dropped past this -- bound disk use
+_SEND_ATTEMPTS = 2  # quick in-process retries before buffering
 _RETRY_BACKOFF_SEC = 1.0
 
 
@@ -40,16 +40,23 @@ class Transport:
         self._buffer = cfg.resolved_buffer_path()
 
     # -- public API -------------------------------------------------------- #
-    def send(self, msg_type: str, payload: Optional[dict[str, Any]]) -> bool:
+    def send(
+        self,
+        msg_type: str,
+        payload: Optional[dict[str, Any]],
+        source_health: Optional[dict[str, Any]] = None,
+    ) -> bool:
         """Build and deliver an envelope. Buffer it on transient failure.
 
         Returns True if the envelope was delivered (or permanently rejected),
-        False if it was buffered for a later retry.
+        False if it was buffered for a later retry. An envelope with no payload
+        is still sent when it carries source_health (so the server learns a
+        source is down); a fully empty send is a no-op.
         """
-        if payload is None:
-            log.debug("skipping %s: collector returned no payload", msg_type)
+        if payload is None and not source_health:
+            log.debug("skipping %s: no payload and no source health", msg_type)
             return True
-        envelope = self._envelope(msg_type, payload)
+        envelope = self._envelope(msg_type, payload or {}, source_health)
         if self._deliver(envelope):
             self.flush_buffer()  # server is reachable -- drain backlog too
             return True
@@ -89,13 +96,16 @@ class Transport:
         return handled
 
     # -- delivery ---------------------------------------------------------- #
-    def _envelope(self, msg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _envelope(
+        self, msg_type: str, payload: dict[str, Any], source_health: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         return {
             "device_id": self._cfg.device_id,
             "agent_version": AGENT_VERSION,
             "msg_type": msg_type,
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
+            "source_health": source_health or {},
         }
 
     def _deliver(self, envelope: dict[str, Any]) -> bool:
@@ -123,8 +133,9 @@ class Transport:
                 return "ok"  # urlopen only returns for 2xx/3xx
         except urllib.error.HTTPError as exc:  # subclass of URLError -> catch first
             if 400 <= exc.code < 500:
-                log.warning("server rejected %s (HTTP %d) -- dropping",
-                            envelope.get("msg_type"), exc.code)
+                log.warning(
+                    "server rejected %s (HTTP %d) -- dropping", envelope.get("msg_type"), exc.code
+                )
                 return "drop"
             log.warning("server error HTTP %d on %s", exc.code, envelope.get("msg_type"))
             return "retry"

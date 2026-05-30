@@ -8,9 +8,17 @@ or missing counter yields a neutral gap, not a crash.
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 from client.collectors.ps import as_list, run_ps
+from client.collectors.sources import (
+    BATTERY,
+    BOOT_TIME,
+    RELIABILITY,
+    STORAGE_RELIABILITY,
+    CollectorResult,
+    failed,
+    field_status,
+    health,
+)
 
 _SCRIPT = r"""
 $start = (Get-Date).AddDays(-30)
@@ -85,12 +93,34 @@ try {
 """
 
 
-def collect_historical() -> Optional[dict[str, Any]]:
-    raw = run_ps(_SCRIPT, timeout=120)
-    if not isinstance(raw, dict):
-        return None
+def collect_historical() -> CollectorResult:
+    result = run_ps(_SCRIPT, timeout=120)
+    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME]
+    if result.status != "ok" or not isinstance(result.data, dict):
+        status = result.status if result.status != "ok" else "partial"
+        return CollectorResult(None, failed(owned, status))
+    raw = result.data
     raw["storage"] = as_list(raw.get("storage"))
     bat = raw.get("battery")
     if not isinstance(bat, dict):
         raw["battery"] = {"present": False}
-    return raw
+
+    rsi = raw.get("reliability_stability_index")
+    counts_present = any(
+        raw.get(k) is not None
+        for k in (
+            "kernel_power_41_30d",
+            "dirty_shutdowns_30d",
+            "bugchecks_30d",
+            "app_crashes_30d",
+            "whea_errors_30d",
+        )
+    )
+    rel_status = "ok" if rsi is not None else ("partial" if counts_present else "empty")
+    sh = {
+        STORAGE_RELIABILITY: health(field_status(bool(raw["storage"]))),
+        BATTERY: health("ok"),
+        RELIABILITY: health(rel_status),
+        BOOT_TIME: health(field_status(raw.get("avg_boot_ms") is not None)),
+    }
+    return CollectorResult(raw, sh)

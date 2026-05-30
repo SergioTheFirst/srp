@@ -17,6 +17,15 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from client.collectors.ps import run_ps
+from client.collectors.sources import (
+    DISK_LATENCY,
+    FREE_SPACE,
+    THROTTLE,
+    CollectorResult,
+    failed,
+    field_status,
+    health,
+)
 
 _SCRIPT = r"""
 $cpu  = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
@@ -66,11 +75,14 @@ def _i(v: Any) -> Optional[int]:
     return None if f is None else int(f)
 
 
-def collect_heartbeat() -> Optional[dict[str, Any]]:
-    raw = run_ps(_SCRIPT, timeout=45)
-    if not isinstance(raw, dict):
-        return None
-    return {
+def collect_heartbeat() -> CollectorResult:
+    result = run_ps(_SCRIPT, timeout=45)
+    owned = [FREE_SPACE, THROTTLE, DISK_LATENCY]
+    if result.status != "ok" or not isinstance(result.data, dict):
+        status = result.status if result.status != "ok" else "partial"
+        return CollectorResult(None, failed(owned, status))
+    raw = result.data
+    payload = {
         "cpu_pct": _f(raw.get("cpu_pct")),
         "cpu_perf_pct": _f(raw.get("cpu_perf_pct")),
         "mem_avail_mb": _f(raw.get("mem_avail_mb")),
@@ -85,3 +97,14 @@ def collect_heartbeat() -> Optional[dict[str, Any]]:
         "user_present": bool(raw.get("user_present")),
         "uptime_hours": _f(raw.get("uptime_hours")),
     }
+    sh = {
+        FREE_SPACE: health(field_status(payload.get("free_space_pct") is not None)),
+        THROTTLE: health(field_status(payload.get("cpu_perf_pct") is not None)),
+        DISK_LATENCY: health(
+            field_status(
+                payload.get("disk_read_sec") is not None
+                or payload.get("disk_write_sec") is not None
+            )
+        ),
+    }
+    return CollectorResult(payload, sh)
