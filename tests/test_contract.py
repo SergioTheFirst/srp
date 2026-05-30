@@ -11,6 +11,7 @@ from shared.schema import (
     HeartbeatPayload,
     HistoricalPayload,
     InventoryPayload,
+    SourceHealth,
     parse_payload,
 )
 from tests.conftest import degrading, healthy
@@ -77,3 +78,65 @@ def test_envelope_defaults_version_and_timestamp():
 def test_envelope_rejects_bad_msg_type():
     with pytest.raises(ValueError):
         Envelope(device_id="dev-1", msg_type="nonsense", payload={})
+
+
+# --------------------------------------------------------------------------- #
+# SourceHealth and source_health on Envelope (Plan 2)
+# --------------------------------------------------------------------------- #
+
+
+def test_source_health_validates_status():
+    sh = SourceHealth(status="ok")
+    assert sh.status == "ok"
+    assert sh.collected_at is None
+
+
+def test_source_health_with_collected_at():
+    sh = SourceHealth(status="timeout", collected_at="2026-05-30T10:00:00+00:00")
+    assert sh.status == "timeout"
+    assert sh.collected_at == "2026-05-30T10:00:00+00:00"
+
+
+def test_source_health_is_forward_compatible():
+    """Extra fields on SourceHealth must be tolerated (extra='allow' on _Base)."""
+    sh = SourceHealth(status="partial", collected_at=None, future_field="x")
+    assert sh.model_dump()["future_field"] == "x"
+
+
+def test_envelope_default_source_health_is_empty():
+    env = Envelope(device_id="dev-1", msg_type="heartbeat", payload={})
+    assert env.source_health == {}
+
+
+def test_envelope_accepts_source_health_block():
+    env = Envelope(
+        device_id="dev-1",
+        msg_type="heartbeat",
+        payload={},
+        source_health={
+            "free_space": {"status": "ok", "collected_at": "2026-05-30T10:00:00+00:00"},
+            "throttle": {"status": "timeout", "collected_at": None},
+        },
+    )
+    assert isinstance(env.source_health["free_space"], SourceHealth)
+    assert env.source_health["free_space"].status == "ok"
+    assert env.source_health["throttle"].status == "timeout"
+
+
+def test_envelope_source_health_round_trips_through_parse_payload():
+    """parse_payload works unaffected; source_health lives on the Envelope only."""
+    payload = healthy("heartbeat")
+    parsed = parse_payload("heartbeat", payload)
+    assert parsed.cpu_perf_pct == 100.0
+
+
+def test_envelope_without_source_health_still_valid():
+    """Old agents that don't send source_health produce a valid Envelope."""
+    raw = {
+        "device_id": "old-agent",
+        "agent_version": CONTRACT_VERSION,
+        "msg_type": "heartbeat",
+        "payload": {},
+    }
+    env = Envelope(**raw)
+    assert env.source_health == {}
