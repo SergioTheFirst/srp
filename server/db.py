@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS scores (
   risk_exposure REAL,
   risk          TEXT
 );
+CREATE TABLE IF NOT EXISTS source_last_good (
+  device_id TEXT,
+  source    TEXT,
+  reading   TEXT,
+  ts        TEXT,
+  PRIMARY KEY (device_id, source)
+);
+CREATE TABLE IF NOT EXISTS trust (
+  device_id TEXT PRIMARY KEY,
+  ts        TEXT,
+  result    TEXT
+);
 """
 
 
@@ -274,9 +286,7 @@ def _top_risk(risk: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 def get_device(device_id: str) -> Optional[dict[str, Any]]:
     with _connect() as conn:
-        d = conn.execute(
-            "SELECT * FROM devices WHERE device_id=?", (device_id,)
-        ).fetchone()
+        d = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
         if d is None:
             return None
         inventory = _load(conn, "inventory", device_id)
@@ -285,17 +295,13 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
             "SELECT ts, payload FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT 1",
             (device_id,),
         ).fetchone()
-        latest_hb = (
-            {"ts": hb_row["ts"], **json.loads(hb_row["payload"])} if hb_row else None
-        )
+        latest_hb = {"ts": hb_row["ts"], **json.loads(hb_row["payload"])} if hb_row else None
         ev_rows = conn.execute(
             """SELECT ts, log, source, event_id, level, message
                FROM events WHERE device_id=? ORDER BY id DESC LIMIT 50""",
             (device_id,),
         ).fetchall()
-        s = conn.execute(
-            "SELECT * FROM scores WHERE device_id=?", (device_id,)
-        ).fetchone()
+        s = conn.execute("SELECT * FROM scores WHERE device_id=?", (device_id,)).fetchone()
 
     scores = None
     if s is not None:
@@ -354,3 +360,63 @@ def count_recent_events(device_id: str, event_ids: list[int]) -> int:
             (device_id, *event_ids),
         ).fetchone()
     return int(row["n"])
+
+
+# --------------------------------------------------------------------------- #
+# Telemetry-trust helpers (Plan 3)
+# --------------------------------------------------------------------------- #
+def set_last_good(device_id: str, source: str, reading: dict[str, Any], ts: str) -> None:
+    """Upsert the latest known-good reading for a (device, source) pair.
+
+    Future semantic validators (frozen-value, impossible-delta) read this to
+    compare incoming telemetry against the previous accepted sample.
+    """
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO source_last_good (device_id, source, reading, ts)
+            VALUES (?,?,?,?)
+            ON CONFLICT(device_id, source) DO UPDATE SET
+              reading = excluded.reading,
+              ts      = excluded.ts
+            """,
+            (device_id, source, json.dumps(reading), ts),
+        )
+
+
+def get_last_good(device_id: str, source: str) -> Optional[dict]:
+    """Return the last good reading for a (device, source) pair, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT reading FROM source_last_good WHERE device_id=? AND source=?",
+            (device_id, source),
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row["reading"])
+
+
+def store_trust(device_id: str, ts: str, result: dict[str, Any]) -> None:
+    """Upsert the latest trust result (per-domain states + lineage) for a device."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO trust (device_id, ts, result) VALUES (?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET
+              ts     = excluded.ts,
+              result = excluded.result
+            """,
+            (device_id, ts, json.dumps(result)),
+        )
+
+
+def get_trust(device_id: str) -> Optional[dict]:
+    """Return the latest trust result for a device, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT result FROM trust WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row["result"])
