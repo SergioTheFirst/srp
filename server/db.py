@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS trust (
   ts        TEXT,
   result    TEXT
 );
+CREATE TABLE IF NOT EXISTS device_source_trust (
+  device_id         TEXT,
+  source            TEXT,
+  state             TEXT,
+  weight            REAL,
+  collector_status  TEXT,
+  semantic_status   TEXT,
+  reason            TEXT,
+  ts                TEXT,
+  PRIMARY KEY (device_id, source)
+);
 """
 
 
@@ -420,3 +431,57 @@ def get_trust(device_id: str) -> Optional[dict]:
     if row is None:
         return None
     return json.loads(row["result"])
+
+
+def upsert_source_trust(
+    device_id: str,
+    source: str,
+    state: str,
+    weight: float,
+    collector_status: str,
+    semantic_status: str,
+    reason: str,
+    ts: str,
+) -> None:
+    """Insert or replace the per-source trust row for a (device, source) pair."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO device_source_trust
+              (device_id, source, state, weight, collector_status, semantic_status, reason, ts)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_id, source) DO UPDATE SET
+              state            = excluded.state,
+              weight           = excluded.weight,
+              collector_status = excluded.collector_status,
+              semantic_status  = excluded.semantic_status,
+              reason           = excluded.reason,
+              ts               = excluded.ts
+            """,
+            (device_id, source, state, weight, collector_status, semantic_status, reason, ts),
+        )
+
+
+def get_source_trusts(device_id: str) -> dict[str, dict]:
+    """Return all per-source trust rows for a device as {source: row_dict}."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT source, state, weight, collector_status, semantic_status, reason, ts
+            FROM device_source_trust
+            WHERE device_id=?
+            """,
+            (device_id,),
+        ).fetchall()
+    return {
+        r["source"]: {
+            "source": r["source"],
+            "state": r["state"],
+            "weight": r["weight"],
+            "collector_status": r["collector_status"],
+            "semantic_status": r["semantic_status"],
+            "reason": r["reason"],
+            "ts": r["ts"],
+        }
+        for r in rows
+    }
