@@ -1,5 +1,7 @@
 """Pure server-side telemetry-trust core (see telemetry-trust-contract.md)."""
 
+from server.trust.domains import DOMAIN_SOURCES, DomainTrust, DomainTrustState, resolve_domain_trust
+from server.trust.gate import compute_weight, derive_state
 from server.trust.states import (
     GATE_PASS,
     CollectorStatus,
@@ -7,6 +9,7 @@ from server.trust.states import (
     SourceState,
     SourceTrust,
 )
+from server.trust.validators import MATERIAL_SOURCES, validate_source
 
 __all__ = [
     "GATE_PASS",
@@ -14,4 +17,12 @@ __all__ = [
     "SemanticStatus",
     "SourceState",
     "SourceTrust",
+    "derive_state",
+    "compute_weight",
+    "validate_source",
+    "MATERIAL_SOURCES",
+    "DOMAIN_SOURCES",
+    "DomainTrust",
+    "DomainTrustState",
+    "resolve_domain_trust",
 ]
