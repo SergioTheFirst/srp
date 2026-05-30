@@ -189,16 +189,24 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             manufacturer=inv.get("manufacturer"),
             model=inv.get("model"),
             chassis=inv.get("chassis"),
+            site_code=env.site_code,
+            site_name=env.site_name,
         )
         db.store_inventory(did, ts, inv)
     elif env.msg_type == "historical":
-        db.touch_device(did, ts, env.agent_version)
+        db.touch_device(
+            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+        )
         db.store_historical(did, ts, env.payload)
     elif env.msg_type == "heartbeat":
-        db.touch_device(did, ts, env.agent_version)
+        db.touch_device(
+            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+        )
         db.store_heartbeat(did, ts, env.payload)
     elif env.msg_type == "events":
-        db.touch_device(did, ts, env.agent_version)
+        db.touch_device(
+            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+        )
         db.store_events(did, env.payload.get("events", []))
 
     if env.source_health:

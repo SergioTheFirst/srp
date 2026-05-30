@@ -174,6 +174,11 @@ class Envelope(_Base):
     # old servers with extra="allow" silently accept it; missing means no health
     # block from older agents (treated as absent on server side).
     source_health: dict[str, SourceHealth] = Field(default_factory=dict)
+    # Site/org identity (W1.1).  Additive optional fields; old agents that omit
+    # them produce None here; COALESCE on the server preserves any previously-set
+    # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).
+    site_code: Optional[str] = None
+    site_name: Optional[str] = None
 
 
 _PAYLOAD_MODELS: dict[str, type[_Base]] = {
