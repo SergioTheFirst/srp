@@ -15,8 +15,12 @@ Run it::
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import time
+import urllib.parse
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Callable, Optional
 
 from client.collectors import (
@@ -84,6 +88,45 @@ class Agent:
         log.info("%s: %s", msg_type, "sent" if delivered else "buffered (offline)")
 
 
+_LOG_MAX_BYTES = 1_000_000  # ~1 MB per file
+_LOG_BACKUPS = 3  # keep srp-agent.log plus .1/.2/.3
+
+
+def setup_logging(verbose: bool, log_file: Optional[str] = None) -> None:
+    """Configure root logging: console always, plus an optional rotating file.
+
+    A SYSTEM scheduled task has no console, so the install step passes
+    ``--log-file`` to capture diagnostics to a bounded, rotating file. Idempotent:
+    re-running replaces handlers rather than stacking duplicates.
+    """
+    level = logging.DEBUG if verbose else logging.INFO
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in list(root.handlers):
+        handler.close()
+        root.removeHandler(handler)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    if log_file:
+        path = Path(log_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotating = RotatingFileHandler(
+            path, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUPS, encoding="utf-8"
+        )
+        rotating.setFormatter(fmt)
+        root.addHandler(rotating)
+
+
+def _redacted_url(url: str) -> str:
+    """Strip any ``user:pass@`` userinfo from a URL before it is logged."""
+    split = urllib.parse.urlsplit(url)
+    if "@" in split.netloc:
+        split = split._replace(netloc=split.netloc.rsplit("@", 1)[1])
+    return urllib.parse.urlunsplit(split)
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="srp-agent", description="SRP telemetry agent")
     parser.add_argument(
@@ -92,16 +135,18 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--server", metavar="URL", help="override server_url from config for this run"
     )
+    parser.add_argument(
+        "--log-file",
+        metavar="PATH",
+        help="also write logs to this rotating file (used when running as a service)",
+    )
     parser.add_argument("--verbose", action="store_true", help="debug logging")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     args = _parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+    setup_logging(args.verbose, args.log_file)
     cfg = load_config()
     if args.server:
         cfg.server_url = args.server
@@ -110,7 +155,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     except ConfigError as exc:
         log.error("%s", exc)
         raise SystemExit(2) from exc
-    log.info("SRP agent starting -- device_id=%s server=%s", cfg.device_id, cfg.server_url)
+    log.info(
+        "SRP agent starting -- user=%s device_id=%s server=%s",
+        getpass.getuser(),
+        cfg.device_id,
+        _redacted_url(cfg.server_url),
+    )
 
     agent = Agent(cfg)
     if args.once:
