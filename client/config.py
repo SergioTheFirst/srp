@@ -1,9 +1,11 @@
 """Client/agent configuration from ``client/config.json`` with safe defaults.
 
 The server address lives here so the same agent binary points at whatever
-server the deployment uses -- default is the production box on the global
-network. ``device_id`` is resolved once and persisted so a machine keeps a
-stable identity across agent restarts.
+server the deployment uses. There is deliberately **no default** target: the
+operator sets ``server_url`` at install time (a LAN server is typical; a public
+address is a valid explicit choice). An unset URL is a hard error at startup --
+we never silently phone home to a hard-coded host. ``device_id`` is resolved
+once and persisted so a machine keeps a stable identity across agent restarts.
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ from pathlib import Path
 
 _CONFIG_PATH = Path(__file__).with_name("config.json")
 
-# Default points at the production server on the global network (overridable).
-_DEFAULT_SERVER_URL = "http://212.42.56.189:8000"
+
+class ConfigError(ValueError):
+    """Raised when required client configuration is missing or invalid."""
 
 
 @dataclass
 class ClientConfig:
-    server_url: str = _DEFAULT_SERVER_URL
+    server_url: str = ""  # required: operator sets this per deployment (no default)
     device_id: str = ""  # resolved on first run, then persisted
     inventory_interval_sec: int = 86400  # identity changes slowly -> daily
     historical_interval_sec: int = 86400  # 30-day rollups -> daily is plenty
@@ -71,3 +74,18 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
 def _persist(cfg: ClientConfig, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def validate_runtime_config(cfg: ClientConfig) -> None:
+    """Validate config that must be present before the agent can run.
+
+    Called at agent startup *after* any ``--server`` override is applied, so the
+    operator can supply the target via config.json or the CLI. Raises
+    :class:`ConfigError` (with actionable guidance) when ``server_url`` is unset.
+    """
+    if not cfg.server_url.strip():
+        raise ConfigError(
+            'server_url is not set. Edit client/config.json and set "server_url" to your '
+            "SRP server -- a LAN address is typical (e.g. http://192.168.1.10:8000) -- or pass "
+            "--server URL on the command line."
+        )
