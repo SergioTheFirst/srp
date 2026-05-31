@@ -34,6 +34,7 @@ class ClientConfig:
     # COALESCE keeps any previously-stored value rather than wiping it.
     site_code: str = ""
     site_name: str = ""
+    ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment to match server
 
     def resolved_buffer_path(self) -> Path:
         p = Path(self.buffer_path)
