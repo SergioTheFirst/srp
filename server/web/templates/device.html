@@ -139,7 +139,7 @@
     {% set days = days_until(cert.not_after) %}
     <tr>
       <td class="small mono">{{ (cert.subject or "—")[:80] }}{% if cert.subject and cert.subject|length > 80 %}…{% endif %}</td>
-      <td class="small muted">{{ cert.issuer or "—" }}</td>
+      <td class="small muted">{{ (cert.issuer or "—")[:60] }}{% if cert.issuer and cert.issuer|length > 60 %}…{% endif %}</td>
       <td>
         {% if days is none %}
           <span class="chip na">—</span>
