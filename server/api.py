@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from shared.schema import Envelope
+from pydantic import BaseModel, Field
+from shared.schema import Envelope, utcnow_iso
 
 from server import db
 from server.pipeline import ingest_envelope
@@ -35,3 +36,16 @@ def get_device(device_id: str) -> dict:
     if device is None:
         raise HTTPException(status_code=404, detail="device not found")
     return device
+
+
+class AckBody(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+@router.post("/devices/{device_id}/ack")
+def ack_device(device_id: str, body: AckBody) -> dict:
+    """Operator feedback: acknowledge a device + attach a note."""
+    if db.get_device(device_id) is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    db.set_ack(device_id, body.note, utcnow_iso())
+    return {"status": "ok"}
