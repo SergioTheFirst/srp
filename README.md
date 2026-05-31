@@ -126,6 +126,42 @@ python -m client.agent --server http://192.168.1.10:8000 --once
 
 ---
 
+## Развёртывание агента как службы (LocalSystem)
+
+В боевом режиме агент должен работать **под LocalSystem (SYSTEM)**: без прав
+SYSTEM часть сборщиков (SMART / `Get-StorageReliabilityCounter`, ряд WMI-классов)
+возвращает `blocked`/пусто, и слой доверия помечает их источники как UNKNOWN.
+Запуск под SYSTEM их разблокирует.
+
+Механизм — **Планировщик заданий** (нативный, без сторонних бинарей; агент
+сам по себе устойчив — крутит цикл и буферизует офлайн). Скрипты в
+`client/deploy/` запускают из **PowerShell от имени администратора**:
+
+```powershell
+# установить: пишет server_url в config.json, проверяет одним проходом,
+# регистрирует SYSTEM-задачу «SRP Agent» (запуск при старте, рестарт при сбое)
+powershell -ExecutionPolicy Bypass -File client\deploy\install-service.ps1 `
+  -ServerUrl http://192.168.1.10:8000        # LAN-адрес типичен; публичный — тоже допустим
+  # -SiteCode HQ -SiteName "Головной офис" -IngestToken <токен> -PythonExe C:\Python\python.exe
+
+# проверить
+Get-ScheduledTask -TaskName "SRP Agent" | Get-ScheduledTaskInfo
+
+# удалить
+powershell -ExecutionPolicy Bypass -File client\deploy\uninstall-service.ps1
+```
+
+Логи службы (консоли нет) пишутся в `client/srp-agent.log` (ротация ~1 МБ × 3).
+В стартовой строке лога есть `user=...` — убедитесь, что там `SYSTEM`. После
+первого хартбита проверьте на дашборде: источники SMART/WMI должны стать `ok`.
+
+**TLS.** Собственного PKI у агента нет — TLS терминируется на обратном прокси
+(nginx/Caddy) перед сервером. Поднимите прокси с сертификатом (напр. Let's
+Encrypt), проксируйте на `127.0.0.1:8000`, а в `server_url` укажите `https://…`.
+Агент (stdlib `urllib`) по умолчанию проверяет сертификат сервера.
+
+---
+
 ## Безопасность
 
 - Серийные номера дисков **хешируются (SHA-256)** в агенте; сырой серийник
@@ -137,8 +173,10 @@ python -m client.agent --server http://192.168.1.10:8000 --once
 - Входные данные валидируются на границе через pydantic-модели.
 - Секретов в коде нет.
 
-> MVP-замечание: канал `/api/v1/ingest` пока без аутентификации — для боевого
-> развёртывания добавьте общий токен/mTLS и HTTPS на reverse-proxy.
+- **Аутентификация ingest** (опц.): задайте `ingest_token` на сервере и в
+  `client/config.json` — тогда `/api/v1/ingest` требует заголовок `X-SRP-Token`
+  (сверка в постоянном времени), иначе 401. Пусто = выключено (MVP-совместимо).
+  TLS — на reverse-proxy (см. «Развёртывание агента как службы»).
 
 ---
 
