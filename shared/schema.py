@@ -98,6 +98,14 @@ class BatteryInfo(_Base):
     cycle_count: Optional[int] = None
 
 
+class CertInfo(_Base):
+    subject: Optional[str] = None
+    issuer: Optional[str] = None
+    thumbprint: Optional[str] = None
+    not_after: Optional[str] = None
+    not_before: Optional[str] = None
+
+
 class HistoricalPayload(_Base):
     reliability_stability_index: Optional[float] = None  # 0..10, latest sample
     kernel_power_41_30d: Optional[int] = None  # unexpected power loss / hang
@@ -109,6 +117,7 @@ class HistoricalPayload(_Base):
     storage: list[StorageReliability] = Field(default_factory=list)
     battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
+    certificates: list[CertInfo] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

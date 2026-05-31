@@ -6,6 +6,7 @@ model, event message) is HTML-escaped -- no stored XSS from telemetry.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -48,11 +49,30 @@ def pct(v: Optional[float]) -> str:
     return f"{v * 100:.0f}%" if v is not None else "—"
 
 
+def days_until(iso: Optional[str]) -> Optional[int]:
+    """Whole days from now until the given ISO datetime (negative if in the past).
+
+    Returns None if *iso* is None or cannot be parsed.
+    """
+    if not iso:
+        return None
+    s = iso.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = dt - datetime.now(timezone.utc)
+    return int(delta.total_seconds() // 86400)
+
+
 _TEMPLATES.env.globals.update(
     health_color=health_color,
     risk_color=risk_color,
     level_color=level_color,
     pct=pct,
+    days_until=days_until,
 )
 
 router = APIRouter()
