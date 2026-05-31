@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
 from server import db
@@ -39,7 +39,7 @@ def get_device(device_id: str) -> dict:
 
 
 class AckBody(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=1000)
 
 
 @router.post("/devices/{device_id}/ack")

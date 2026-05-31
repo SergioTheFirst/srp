@@ -71,6 +71,8 @@ def fmt_age(sec: Optional[int]) -> str:
     """Compact human age for last-contact: 45с / 12м / 3ч / 5д."""
     if sec is None:
         return "—"
+    if sec <= 0:
+        return "только что"
     if sec < 90:
         return f"{sec}с"
     if sec < 5400:
@@ -133,9 +135,9 @@ def _group_by_site(devices: list) -> list:
 
 
 def _fleet_context(devices: list) -> dict:
-    for d in devices:
-        d["flags"] = _device_flags(d)
-    return {"summary": _fleet_summary(devices), "groups": _group_by_site(devices)}
+    # Build enriched copies (do not mutate db-owned dicts) -- immutable pattern.
+    enriched = [{**d, "flags": _device_flags(d)} for d in devices]
+    return {"summary": _fleet_summary(enriched), "groups": _group_by_site(enriched)}
 
 
 router = APIRouter()
