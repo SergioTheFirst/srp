@@ -1,0 +1,59 @@
+{# Fleet KPIs + site-grouped device table. Rendered on first load AND polled via
+   /fleet/fragment for near-real-time updates. Device strings are autoescaped. #}
+<div class="kpis">
+  <div class="kpi" data-filter="all"><div class="kn">{{ summary.total }}</div><div class="kl">устройств</div></div>
+  <div class="kpi" data-filter="at_risk"><div class="kn bad">{{ summary.at_risk }}</div><div class="kl">в зоне риска</div></div>
+  <div class="kpi" data-filter="unknown"><div class="kn na">{{ summary.unknown }}</div><div class="kl">UNKNOWN</div></div>
+  <div class="kpi" data-filter="regressed"><div class="kn high">{{ summary.regressed }}</div><div class="kl">источник пропал</div></div>
+  <div class="kpi" data-filter="stale"><div class="kn warn">{{ summary.stale }}</div><div class="kl">не на связи</div></div>
+  <div class="kpi" data-filter="expiring"><div class="kn bad">{{ summary.expiring }}</div><div class="kl">сертификат ≤30д</div></div>
+  <div class="kpi" data-filter="untrusted"><div class="kn bad">{{ summary.untrusted }}</div><div class="kl">untrusted</div></div>
+</div>
+
+{% if not groups %}
+  <p class="muted">Пока нет данных. Запустите агента — он пришлёт первую телеметрию.</p>
+{% else %}
+{% for site, devs in groups %}
+<div class="site">
+  <div class="site-head">
+    <span class="site-name">Объект: {{ site }}</span>
+    <span class="muted small">{{ devs|length }} устр.</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Устройство</th><th>Произв.</th><th>Надёжн.</th><th>Износ</th><th>Риск</th>
+        <th>Алерты</th><th>Связь</th><th>Квит.</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in devs %}
+      <tr class="devrow" data-flags="{{ d.flags|join(' ') }}"
+          data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id ~ ' ' ~ site)|lower }}">
+        <td>
+          <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>
+          {% if d.chassis %}<div class="muted small">{{ d.chassis }}</div>{% endif %}
+        </td>
+        <td><span class="chip {{ health_color(d.performance) }}">{{ "%.0f"|format(d.performance) if d.performance is not none else "—" }}</span></td>
+        <td><span class="chip {{ health_color(d.reliability) }}">{{ "%.0f"|format(d.reliability) if d.reliability is not none else "—" }}</span></td>
+        <td><span class="chip {{ health_color(d.wear) }}">{{ "%.0f"|format(d.wear) if d.wear is not none else "—" }}</span></td>
+        <td><span class="chip {{ risk_color(d.risk_exposure) }}">{{ "%.0f"|format(d.risk_exposure) if d.risk_exposure is not none else "—" }}</span></td>
+        <td class="alerts">
+          {% if d.device_trust == "untrusted" %}<span class="badge bad" title="идентичность недостоверна">untrusted</span>{% endif %}
+          {% if d.unknown_domains %}<span class="badge na" title="доменов без достоверных данных">{{ d.unknown_domains }}×UNKNOWN</span>{% endif %}
+          {% if d.regressed_count %}<span class="badge high" title="источник был, перестал отвечать">{{ d.regressed_count }}×пропал</span>{% endif %}
+          {% if d.cert_expiring %}<span class="badge bad" title="сертификат скоро истекает">cert {{ d.cert_min_days }}д</span>{% endif %}
+          {% if d.stale %}<span class="badge warn" title="агент молчит">не на связи</span>{% endif %}
+        </td>
+        <td class="muted small mono" title="{{ d.last_seen or '' }}">{{ fmt_age(d.last_seen_age_sec) }}{% if d.stale %} ⚠{% endif %}</td>
+        <td>
+          <button class="ackbtn {{ 'acked' if d.ack else '' }}" data-id="{{ d.device_id }}"
+                  title="{{ d.ack.note if d.ack else 'квитировать (отметить + заметка)' }}">{{ '✓' if d.ack else 'квит.' }}</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+{% endif %}

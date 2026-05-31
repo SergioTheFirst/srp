@@ -1,66 +1,129 @@
 {% extends "base.html" %}
 {% block title %}Флот · SRP{% endblock %}
-{% block subtitle %}обзор парка машин · {{ summary.total }} устройств{% endblock %}
+{% block subtitle %}мониторинг в реальном времени · {{ summary.total }} устройств{% endblock %}
 
 {% block body %}
-<div class="cards">
-  <div class="stat">
-    <div class="n">{{ summary.total }}</div>
-    <div class="l">Всего машин</div>
-  </div>
-  <div class="stat">
-    <div class="n" style="color:var(--bad)">{{ summary.at_risk }}</div>
-    <div class="l">В зоне риска (≥50)</div>
-  </div>
-  <div class="stat">
-    <div class="n" style="color:var(--warn)">{{ summary.watch }}</div>
-    <div class="l">Под наблюдением (25–49)</div>
-  </div>
+<div class="toolbar">
+  <input id="q" class="search" type="search" placeholder="поиск: имя устройства, объект, id…" autocomplete="off" spellcheck="false">
+  <div class="live"><span class="dot" id="livedot"></span><span id="liveinfo" class="muted small">обновлено только что</span></div>
 </div>
 
-<h2>Парк машин</h2>
-{% if not devices %}
-  <p class="muted">Пока нет данных. Запустите агента — он пришлёт первую телеметрию.</p>
-{% else %}
-<table>
-  <thead>
-    <tr>
-      <th>Устройство</th>
-      <th>Модель</th>
-      <th>Объект</th>
-      <th>Производит.</th>
-      <th>Надёжность</th>
-      <th>Износ</th>
-      <th>Риск</th>
-      <th>Главная угроза</th>
-      <th>Последний контакт</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for d in devices %}
-    <tr>
-      <td>
-        <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>
-        {% if d.chassis %}<div class="muted small">{{ d.chassis }}</div>{% endif %}
-      </td>
-      <td class="muted small">{{ d.model or "—" }}</td>
-      <td class="small">{{ d.site_name or d.site_code or "—" }}</td>
-      <td><span class="chip {{ health_color(d.performance) }}">{{ "%.0f"|format(d.performance) if d.performance is not none else "—" }}</span></td>
-      <td><span class="chip {{ health_color(d.reliability) }}">{{ "%.0f"|format(d.reliability) if d.reliability is not none else "—" }}</span></td>
-      <td><span class="chip {{ health_color(d.wear) }}">{{ "%.0f"|format(d.wear) if d.wear is not none else "—" }}</span></td>
-      <td><span class="chip {{ risk_color(d.risk_exposure) }}">{{ "%.0f"|format(d.risk_exposure) if d.risk_exposure is not none else "—" }}</span></td>
-      <td>
-        {% if d.top_risk and d.top_risk.name %}
-          <span class="pill">{{ d.top_risk.name }}</span>
-          <span class="mono small">{{ pct(d.top_risk.probability) }}</span>
-        {% else %}
-          <span class="muted small">—</span>
-        {% endif %}
-      </td>
-      <td class="muted small mono">{{ d.last_seen or "—" }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<p class="muted small" style="margin:-6px 0 16px">Карточки сверху — фильтры (клик). Кнопка «квит.» — квитировать устройство с заметкой.</p>
+
+<div id="fleet">{% include "_fleet_body.html" %}</div>
+
+<style>
+  .toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
+  .search { flex: 1; min-width: 240px; background: var(--panel); border: 1px solid var(--line);
+            color: var(--text); border-radius: 8px; padding: 9px 12px; font: 14px/1.4 inherit; }
+  .search:focus { outline: none; border-color: var(--accent); }
+  .live { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good);
+         animation: pulse 2.2s infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,.5); }
+    70%  { box-shadow: 0 0 0 7px rgba(63,185,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+  }
+  .kpis { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+         padding: 12px 16px; min-width: 104px; cursor: pointer;
+         transition: border-color .12s ease, transform .12s ease; }
+  .kpi:hover { transform: translateY(-1px); }
+  .kpi.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .kpi .kn { font: 700 24px/1 var(--mono); }
+  .kpi .kn.good { color: var(--good); } .kpi .kn.warn { color: var(--warn); }
+  .kpi .kn.high { color: var(--high); } .kpi .kn.bad { color: var(--bad); }
+  .kpi .kn.na { color: var(--na); }
+  .kpi .kl { color: var(--muted); font-size: 11px; text-transform: uppercase;
+             letter-spacing: .6px; margin-top: 4px; }
+  .site { margin-bottom: 22px; }
+  .site-head { display: flex; align-items: baseline; gap: 12px; padding: 6px 2px;
+               border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+  .site-name { font-weight: 650; letter-spacing: .3px; }
+  .alerts { display: flex; flex-wrap: wrap; gap: 5px; }
+  .badge { font: 600 11px/1 var(--mono); padding: 3px 7px; border-radius: 5px;
+           border: 1px solid transparent; white-space: nowrap; }
+  .badge.good { color: var(--good); background: rgba(63,185,80,.10); border-color: rgba(63,185,80,.30); }
+  .badge.warn { color: var(--warn); background: rgba(210,153,34,.10); border-color: rgba(210,153,34,.30); }
+  .badge.high { color: var(--high); background: rgba(219,109,40,.12); border-color: rgba(219,109,40,.35); }
+  .badge.bad  { color: var(--bad);  background: rgba(248,81,73,.12);  border-color: rgba(248,81,73,.35); }
+  .badge.na   { color: var(--na);   background: rgba(110,118,129,.12); border-color: rgba(110,118,129,.30); }
+  .ackbtn { font: 600 11px/1 inherit; padding: 5px 9px; border-radius: 6px; cursor: pointer;
+            background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+  .ackbtn:hover { border-color: var(--accent); color: var(--text); }
+  .ackbtn.acked { color: var(--good); border-color: rgba(63,185,80,.4); }
+</style>
+
+<script>
+(function () {
+  "use strict";
+  var POLL_MS = 12000;
+  var fleet = document.getElementById("fleet");
+  var q = document.getElementById("q");
+  var liveinfo = document.getElementById("liveinfo");
+  var activeFilter = null;
+  var lastUpdate = Date.now();
+
+  function applyFilter() {
+    var query = (q.value || "").trim().toLowerCase();
+    fleet.querySelectorAll(".site").forEach(function (site) {
+      var visible = 0;
+      site.querySelectorAll(".devrow").forEach(function (row) {
+        var text = row.getAttribute("data-text") || "";
+        var flags = (row.getAttribute("data-flags") || "").split(" ");
+        var okText = !query || text.indexOf(query) !== -1;
+        var okFlag = !activeFilter || activeFilter === "all" || flags.indexOf(activeFilter) !== -1;
+        var show = okText && okFlag;
+        row.style.display = show ? "" : "none";
+        if (show) visible++;
+      });
+      site.style.display = visible ? "" : "none";
+    });
+    fleet.querySelectorAll(".kpi").forEach(function (k) {
+      k.classList.toggle("active", k.getAttribute("data-filter") === activeFilter);
+    });
+  }
+
+  function refresh() {
+    fetch("/fleet/fragment").then(function (r) {
+      return r.ok ? r.text() : null;
+    }).then(function (html) {
+      if (html === null) return;
+      fleet.innerHTML = html;
+      lastUpdate = Date.now();
+      applyFilter();
+    }).catch(function () { /* keep last good view on transient error */ });
+  }
+
+  fleet.addEventListener("click", function (e) {
+    var kpi = e.target.closest(".kpi[data-filter]");
+    if (kpi) {
+      var f = kpi.getAttribute("data-filter");
+      activeFilter = (f === "all" || activeFilter === f) ? null : f;
+      applyFilter();
+      return;
+    }
+    var ack = e.target.closest(".ackbtn");
+    if (ack) {
+      e.preventDefault();
+      var id = ack.getAttribute("data-id");
+      var note = window.prompt("Квитирование — заметка (необязательно):", "");
+      if (note === null) return;
+      fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: note })
+      }).then(refresh).catch(function () {});
+    }
+  });
+
+  q.addEventListener("input", applyFilter);
+  setInterval(refresh, POLL_MS);
+  setInterval(function () {
+    var s = Math.round((Date.now() - lastUpdate) / 1000);
+    liveinfo.textContent = "обновлено " + (s < 2 ? "только что" : s + "с назад");
+  }, 1000);
+})();
+</script>
 {% endblock %}
