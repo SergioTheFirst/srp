@@ -26,7 +26,7 @@ from client.collectors import (
     collect_inventory,
 )
 from client.collectors.sources import CollectorResult
-from client.config import ClientConfig, load_config
+from client.config import ClientConfig, ConfigError, load_config, validate_runtime_config
 from client.transport import Transport
 
 log = logging.getLogger("srp.agent")
@@ -105,6 +105,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     cfg = load_config()
     if args.server:
         cfg.server_url = args.server
+    try:
+        validate_runtime_config(cfg)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        raise SystemExit(2) from exc
     log.info("SRP agent starting -- device_id=%s server=%s", cfg.device_id, cfg.server_url)
 
     agent = Agent(cfg)

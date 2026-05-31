@@ -102,14 +102,17 @@ python -m client.agent --once
 python -m client.agent
 
 # разовое переопределение адреса сервера
-python -m client.agent --server http://212.42.56.189:8000 --once
+python -m client.agent --server http://192.168.1.10:8000 --once
 ```
 
-**IP сервера задаётся в `client/config.json`** (поле `server_url`).
-По умолчанию — `http://212.42.56.189:8000` (глобальный адрес).
+**Адрес сервера обязателен — дефолта нет.** Оператор задаёт `server_url` при
+установке: в `client/config.json` или флагом `--server`. Обычно это сервер в
+локальной сети (`http://192.168.1.10:8000`); публичный адрес
+(`http://212.42.56.189:8000`) — тоже допустимый явный выбор. Если `server_url`
+пуст, агент не запускается (выводит подсказку), а не шлёт телеметрию в неизвестный хост.
 
 ```json
-{ "server_url": "http://212.42.56.189:8000",
+{ "server_url": "http://192.168.1.10:8000",
   "device_id": "",
   "heartbeat_interval_sec": 300, "events_interval_sec": 900,
   "inventory_interval_sec": 86400, "historical_interval_sec": 86400,
