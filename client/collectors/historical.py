@@ -12,6 +12,7 @@ from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import (
     BATTERY,
     BOOT_TIME,
+    CERTIFICATES,
     RELIABILITY,
     STORAGE_RELIABILITY,
     CollectorResult,
@@ -92,10 +93,25 @@ try {
 } | ConvertTo-Json -Depth 5 -Compress
 """
 
+_CERT_SCRIPT = r"""
+$certs = @()
+foreach ($store in 'Cert:\LocalMachine\My','Cert:\CurrentUser\My') {
+  try {
+    foreach ($c in Get-ChildItem $store -ErrorAction SilentlyContinue) {
+      $certs += [ordered]@{
+        subject="$($c.Subject)"; issuer="$($c.Issuer)"; thumbprint="$($c.Thumbprint)";
+        not_after=$c.NotAfter.ToUniversalTime().ToString('o');
+        not_before=$c.NotBefore.ToUniversalTime().ToString('o') }
+    }
+  } catch {}
+}
+@{ certificates = @($certs) } | ConvertTo-Json -Depth 4 -Compress
+"""
+
 
 def collect_historical() -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=120)
-    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME]
+    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME, CERTIFICATES]
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
         return CollectorResult(None, failed(owned, status))
@@ -125,4 +141,26 @@ def collect_historical() -> CollectorResult:
         RELIABILITY: health(rel_status),
         BOOT_TIME: health(field_status(raw.get("avg_boot_ms") is not None)),
     }
+
+    # Certificate metadata: separate script, separate error domain.
+    cert_res = run_ps(_CERT_SCRIPT, timeout=60)
+    if cert_res.status == "ok" and isinstance(cert_res.data, dict):
+        certs = [
+            {
+                "subject": c.get("subject"),
+                "issuer": c.get("issuer"),
+                "thumbprint": c.get("thumbprint"),
+                "not_after": c.get("not_after"),
+                "not_before": c.get("not_before"),
+            }
+            for c in as_list(cert_res.data.get("certificates"))
+            if isinstance(c, dict)
+        ]
+        raw["certificates"] = certs
+        sh[CERTIFICATES] = health(field_status(bool(certs)))
+    else:
+        raw["certificates"] = []
+        err_status = cert_res.status if cert_res.status != "ok" else "empty"
+        sh[CERTIFICATES] = health(err_status)
+
     return CollectorResult(raw, sh)

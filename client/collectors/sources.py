@@ -20,6 +20,7 @@ BOOT_TIME = "boot_time"
 THROTTLE = "throttle"
 IDENTITY = "identity"
 EVENTS = "events"
+CERTIFICATES = "certificates"
 
 
 class CollectorResult(NamedTuple):
