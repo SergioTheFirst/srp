@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import hmac
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
@@ -18,7 +20,11 @@ def health() -> dict:
 
 
 @router.post("/ingest")
-def ingest(env: Envelope) -> dict:
+def ingest(env: Envelope, request: Request) -> dict:
+    expected = getattr(request.app.state, "ingest_token", "")
+    provided = request.headers.get("x-srp-token") or ""
+    if expected and not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid or missing ingest token")
     try:
         return ingest_envelope(env)
     except ValueError as exc:

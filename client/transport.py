@@ -125,11 +125,14 @@ class Transport:
     def _attempt(self, envelope: dict[str, Any]) -> str:
         """One POST. Returns 'ok' | 'drop' | 'retry'."""
         body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._cfg.ingest_token:
+            headers["X-SRP-Token"] = self._cfg.ingest_token
         req = urllib.request.Request(
             self._ingest_url,
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             # B310: scheme is the operator-configured server_url, not user input.

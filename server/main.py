@@ -34,6 +34,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         title="SRP — раннее предупреждение отказов",
         lifespan=lifespan,
     )
+    app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
     app.include_router(api_router)
     app.include_router(web_router)
     return app
