@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,6 +82,11 @@ CREATE TABLE IF NOT EXISTS trust (
   device_id TEXT PRIMARY KEY,
   ts        TEXT,
   result    TEXT
+);
+CREATE TABLE IF NOT EXISTS acknowledgements (
+  device_id TEXT PRIMARY KEY,
+  note      TEXT,
+  acked_at  TEXT
 );
 CREATE TABLE IF NOT EXISTS device_source_trust (
   device_id         TEXT,
@@ -284,20 +290,94 @@ def _load(conn: sqlite3.Connection, table: str, device_id: str) -> Optional[dict
     return {"ts": row["ts"], **json.loads(row["payload"])}
 
 
+_STALE_AFTER_SEC = 900  # no contact for >15 min -> "stale" (agent silent / box off)
+_CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _age_seconds(iso: Optional[str]) -> Optional[int]:
+    dt = _parse_iso(iso)
+    return None if dt is None else int((datetime.now(timezone.utc) - dt).total_seconds())
+
+
+def _days_until(iso: Optional[str]) -> Optional[int]:
+    dt = _parse_iso(iso)
+    return None if dt is None else (dt - datetime.now(timezone.utc)).days
+
+
+def _risk_alerts(risk: dict[str, Any]) -> tuple[Optional[str], int, int]:
+    """(device_trust, count of UNKNOWN domains, count of regressed sources)."""
+    domains = risk.get("domains") or {}
+    unknown = sum(1 for d in domains.values() if d.get("state") == "unknown")
+    regressed = len(risk.get("regressed_sources") or [])
+    return risk.get("device_trust"), unknown, regressed
+
+
+def _cert_summary(hist_payload: Optional[str]) -> tuple[Optional[int], bool]:
+    """(min days-to-expiry across the device's certs, is any expiring < 30d)."""
+    if not hist_payload:
+        return None, False
+    try:
+        certs = json.loads(hist_payload).get("certificates") or []
+    except (ValueError, AttributeError):
+        return None, False
+    days = [d for d in (_days_until(c.get("not_after")) for c in certs) if d is not None]
+    if not days:
+        return None, False
+    lo = min(days)
+    return lo, lo < _CERT_SOON_DAYS
+
+
+def set_ack(device_id: str, note: str, ts: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO acknowledgements (device_id, note, acked_at) VALUES (?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET note=excluded.note, acked_at=excluded.acked_at
+            """,
+            (device_id, note, ts),
+        )
+
+
+def get_ack(device_id: str) -> Optional[dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT note, acked_at FROM acknowledgements WHERE device_id=?", (device_id,)
+        ).fetchone()
+    return {"note": row["note"], "acked_at": row["acked_at"]} if row else None
+
+
 def get_devices() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
             SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
                    d.site_code, d.site_name,
-                   s.performance, s.reliability, s.wear, s.risk_exposure, s.risk
-            FROM devices d LEFT JOIN scores s ON s.device_id = d.device_id
+                   s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
+                   h.payload AS hist_payload,
+                   a.note AS ack_note, a.acked_at AS ack_at
+            FROM devices d
+            LEFT JOIN scores s ON s.device_id = d.device_id
+            LEFT JOIN historical h ON h.device_id = d.device_id
+            LEFT JOIN acknowledgements a ON a.device_id = d.device_id
             ORDER BY COALESCE(s.risk_exposure, 0) DESC, d.last_seen DESC
             """
         ).fetchall()
     out = []
     for r in rows:
         risk = json.loads(r["risk"]) if r["risk"] else {}
+        device_trust, unknown_domains, regressed_count = _risk_alerts(risk)
+        cert_min_days, cert_expiring = _cert_summary(r["hist_payload"])
+        age = _age_seconds(r["last_seen"])
         out.append(
             {
                 "device_id": r["device_id"],
@@ -305,6 +385,8 @@ def get_devices() -> list[dict[str, Any]]:
                 "model": r["model"],
                 "chassis": r["chassis"],
                 "last_seen": r["last_seen"],
+                "last_seen_age_sec": age,
+                "stale": age is not None and age > _STALE_AFTER_SEC,
                 "site_code": r["site_code"],
                 "site_name": r["site_name"],
                 "performance": r["performance"],
@@ -312,6 +394,12 @@ def get_devices() -> list[dict[str, Any]]:
                 "wear": r["wear"],
                 "risk_exposure": r["risk_exposure"],
                 "top_risk": _top_risk(risk),
+                "device_trust": device_trust,
+                "unknown_domains": unknown_domains,
+                "regressed_count": regressed_count,
+                "cert_min_days": cert_min_days,
+                "cert_expiring": cert_expiring,
+                "ack": {"note": r["ack_note"], "acked_at": r["ack_at"]} if r["ack_at"] else None,
             }
         )
     return out
@@ -370,6 +458,7 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "latest_heartbeat": latest_hb,
         "events": [dict(r) for r in ev_rows],
         "scores": scores,
+        "ack": get_ack(device_id),
     }
 
 
