@@ -1,78 +1,48 @@
-# CLAUDE.md — SRP (система раннего предупреждения отказов)
+# CLAUDE.md — SRP (failure early-warning: thin Windows agent → FastAPI+SQLite server → live dashboard)
+> Auto-loaded every turn → keep ≤80 lines, MUST not advice. Deep specs (§4) read on-demand, never auto-read.
 
-Тонкий агент собирает телеметрию офисных ПК на Windows; толстый сервер (FastAPI +
-SQLite) хранит историю, считает оценки здоровья и байесовский риск, рендерит дашборд.
-Главный тезис: **информация живёт в производных** (тренды, базовые линии), а не в
-абсолютных значениях. Подробности — `README.md`, `srp_mvp_plan.md`.
+## 0 · Token discipline (non-negotiable)
+- Never read a whole file for one fact → locate via §1, read only that span.
+- Main thread = conclusions + the edit; fan-out → subagents (§3) return verdicts, not dumps.
+- One fact = one source of truth; never restate state across memory files (§4).
 
-## Команды (единая точка входа — Makefile; без make те же команды напрямую)
+## 1 · `.codegraph/` = navigation source of truth
+- A daemon keeps `.codegraph/` fresh (symbols/callers/deps/file-map). GENERATED: never edit, gitignored, never commit.
+- ANY "where defined / what calls / imports / which module" → query `.codegraph/` FIRST; Glob/grep only on a miss.
+- If `.codegraph/` mtime predates your last edit → re-read that symbol from disk before trusting it.
 
-| Команда          | Действие                                                       |
-|------------------|----------------------------------------------------------------|
-| `make check`     | Полный гейт: lint → typecheck → security → coverage (что в CI) |
-| `make lint`      | `ruff check .` (E,W,F,I,B,C4,SIM)                              |
-| `make typecheck` | `mypy` (только `shared` + `server`, плагин pydantic)           |
-| `make security`  | `bandit -c pyproject.toml -r server shared client`            |
-| `make coverage`  | `pytest` с порогом покрытия **80 %** (server + shared)         |
-| `python smoke.py`| Быстрый E2E без сети и PowerShell (TestClient)                 |
+## 2 · Model routing (classify task → pick; DEFAULT = Sonnet 4.6)
+| Tier | For | Triggers |
+|---|---|---|
+| Haiku 4.5 | mechanical · 1 file · deterministic | rename/format, boilerplate, test scaffold, grep/log triage, doc/CHANGELOG line |
+| Sonnet 4.6 | standard build (DEFAULT) | feature in a known pattern, bugfix w/ repro, write tests, review one diff |
+| Opus 4.8 | hard reasoning · high blast-radius | architecture, ambiguous spec, multi-module/contract change, subtle debug, security/correctness-critical, the decomposition itself |
+- Rule: LOW ambiguity ∧ 1 file → Haiku · known pattern → Sonnet · ambiguous ∨ cross-module ∨ touches contract/security/scoring → Opus. Unsure → +1 tier.
 
-**Перед любым коммитом `make check` обязан быть зелёным.** Вся конфигурация
-инструментов — в `pyproject.toml` (единый источник истины).
+## 3 · Subagents = delegate by default (almost always)
+- DEFAULT = spawn a subagent; main thread keeps only the decision + the edit + the merge.
+- search / explore / verify / review spanning >1 file → subagent (Explore=search · general-purpose=multi-step+TDD · Plan=design). Independent tasks → parallel in ONE message.
+- Reviews ALWAYS via subagent: review every diff; `security-reviewer` for agent/PowerShell/ingest/SQL/cert. Skip a subagent ONLY for a single known-symbol lookup or a trivial edit.
 
-**Затронул видимое поведение → строка в `## [Unreleased]` файла `CHANGELOG.md`**
-в том же коммите (раздел Added/Changed/Fixed/Security и т.д.). Формат и правила —
-в шапке `CHANGELOG.md`. Чисто внутренние правки (рефактор/тесты/CI) можно не писать.
+## 4 · Project memory — write to EXACTLY one
+| File | Role | Write when |
+|---|---|---|
+| CLAUDE.md | static rules (this) | a rule changes |
+| CONTINUITY.md | LIVE ledger (goal/decisions/state); survives compaction | read at top of EVERY turn, then update |
+| .claude/memory/ | durable invariants: `MEMORY.md` index + 1 fact/file, `[[links]]` | learned a non-obvious decision/why |
+| CHANGELOG.md | user-visible changes, `## [Unreleased]` (Keep a Changelog) | same commit as a visible-behavior change |
+- `cctodo.md` (roadmap) · `telemetry-trust-contract.md`/`-plan.md` (specs) = read on-demand; never auto-read, never duplicate into memory.
 
-## Жёсткие инварианты (НЕ нарушать)
+## 5 · Hard invariants (MUST; never weaken)
+- Agent `client/` = pure stdlib, ZERO deps (urllib/subprocess/json/winreg). Any `requirements.txt` import = bug. `[[agent-stdlib-only]]`
+- Language-independent collection: `Win32_PerfFormattedData_*` CIM (not Get-Counter), numeric `$e.Level` (not LevelDisplayName). `[[language-independence]]`
+- Privacy: disk serials SHA-256 in agent; raw serial never leaves it. Certificates = metadata only, NEVER private keys.
+- Server: Jinja2 autoescape ON (no `|safe`); ALL SQL parameterized; validate at the boundary via pydantic v2 (`shared/schema.py` = contract).
+- Trust (`server/trust/`): `state`=gate, `weight`=modulation (never revives a gate-failed source); collector⊥semantic; **UNKNOWN over false confidence**; semantic-validate only decision-material signals; bayesian weights uncalibrated. `[[bayesian-weights-uncalibrated]]`
+- Python 3.9 floor: explicit `Optional` (UP off), line 100, double quotes; `# nosec <code>` only with a reason. Immutable; files <800 / funcs <50; early returns.
+- PostToolUse hook runs `ruff --fix`+`format` on each `.py` edit (strips not-yet-used imports → add an import WITH its first use; accept its formatting).
 
-- **Агент (`client/`) — чистый стандартный Python, ноль сторонних зависимостей.**
-  Только `urllib`, `subprocess`, `json`, `winreg`. Любой `import` пакета из
-  `requirements.txt` в `client/` — ошибка. См. `[[agent-stdlib-only]]`.
-- **Языконезависимость сбора.** CIM-классы `Win32_PerfFormattedData_*` (не
-  `Get-Counter`), уровни событий по числовому `$e.Level` (не `LevelDisplayName`).
-  Англопути счётчиков ломаются на русской Windows. См. `[[language-independence]]`.
-- **Приватность.** Серийники дисков хешируются (SHA-256) в агенте; сырой серийник
-  не покидает процесс — сервер видит только `serial_hash`.
-- **Безопасность сервера.** Jinja2 autoescape вкл.; весь SQL параметризован; вход
-  валидируется на границе через pydantic v2 (`shared/schema.py` — контракт).
-- **Python floor 3.9.** Явный `Optional[...]` (правило `UP` намеренно выключено),
-  line-length 100, двойные кавычки. Осознанные `# nosec <код>` — с пояснением рядом.
-- Байесовские веса заданы вручную и **не калиброваны** — заглушка. См.
-  `[[bayesian-weights-uncalibrated]]`.
-
-## Стиль
-
-Immutable-паттерны, файлы < 800 строк, функции < 50 строк, ранние возвраты.
-Комментарии в коде выровнены намеренно — `ruff format` НЕ в pre-commit; запускай
-`make format` явно и проверяй, что выравнивание не сломалось.
-
-## Skills и субагенты — применять ПОСТОЯННО (не опционально)
-
-Перед написанием кода вызывай профильный skill, после — ревью-skill:
-
-| Когда                                   | Skill / субагент                        |
-|-----------------------------------------|-----------------------------------------|
-| Любой код на сервере / агенте           | `python-pro`                            |
-| Эндпоинты, pipeline, web-рендер         | `fastapi-pro`                           |
-| Новая фича или фикс бага (сначала тест) | `tdd-workflow` / субагент `tdd-guide`   |
-| Сразу после написания кода              | субагент `code-reviewer` + `python-reviewer` |
-| PowerShell-сбор, `/api/v1/ingest`, ввод | `security-reviewer` (ОБЯЗАТЕЛЬНО)        |
-| Сложная фича / рефакторинг              | субагент `planner`, затем `architect`   |
-| Падает сборка / типы                    | субагент `build-error-resolver`         |
-
-Независимые проверки запускай субагентами **параллельно**. Security-чувствительный
-код (агент шелл-аут в PowerShell, ingest без auth) — `security-reviewer` всегда.
-
-## Память проекта — `.claude/memory/`
-
-В начале сессии читай `.claude/memory/MEMORY.md` (индекс инвариантов проекта).
-Узнал НЕОЧЕВИДНЫЙ факт (решение, ограничение, why) — добавь файл-заметку и строку
-в `MEMORY.md`. Не дублируй то, что уже в коде / README / git. Формат — во
-фронтматтере существующих заметок; связывай через `[[имя]]`.
-
-## Чего НЕ делать
-
-- Не тащить зависимости в агент. Не ломать языконезависимость.
-- Не логировать сырые серийники / PII. Не отключать autoescape.
-- Не понижать порог покрытия 80 %. Не коммитить `srp.db` / `buffer.jsonl` (в `.gitignore`).
-- Боевое развёртывание: ingest без auth — добавить токен/mTLS + HTTPS (вне MVP).
+## 6 · Process + "Done" gates (verify; never claim green unverified)
+- Big/ambiguous change → design first (brainstorm/Plan) → TDD (test RED→GREEN) → subagent review → fix. Invoke the matching skill BEFORE coding.
+- Git: branch-first → gate green → `merge --no-ff` → `push origin main`; conventional commits, NO attribution; commit/push only when asked.
+- GATES before "done"/merge: `make check` (ruff · mypy[server+shared] · bandit · pytest cov ≥80%) ALL GREEN · `python smoke.py` OK · visible change → CHANGELOG line in the same commit.
