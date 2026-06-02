@@ -12,3 +12,4 @@
 - [Контракт telemetry-trust](telemetry-trust-rules.md) — state=gate/weight=modulation, collector⊥semantic, materiality, scope ceiling
 - [Как работать с пользователем](working-style-governors.md) — анти-сикофантия в обе стороны, анти-оверинжиниринг, строгие контракты, прозовый ко-дизайн
 - [Служба агента = Планировщик заданий](agent-service-task-scheduler.md) — LocalSystem через schtasks, не nssm/sc (pywin32 запрещён); конфиг без BOM
+- [Коды org/dept = ярлыки, не тенантность](identity-labels-not-tenancy.md) — изоляция/RBAC паркуются до 2-го недоверяющего клиента; глобального ingest_token достаточно

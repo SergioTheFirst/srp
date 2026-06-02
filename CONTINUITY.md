@@ -4,8 +4,13 @@ _Canonical briefing. Survives compaction. Facts only; mark `UNCONFIRMED` if unsu
 
 ## Goal (incl. success criteria)
 - Evolve SRP (Windows PC failure early-warning) from MVP toward production per `cctodo.md`.
-- Immediate thread: **telemetry-trust subsystem (W0.3)** — the P0 data-integrity foundation.
-- Success: built to `telemetry-trust-contract.md` (§14); trustworthy data layer; scoring can return UNKNOWN.
+- Immediate thread: **CLOSE P0 data-integrity foundation (W0.1/W0.2/W0.5/W0.4)** before any analytics (§4/W4.*). Strategy §8: nothing in Analytics is trusted until P0 closed.
+- Success: append-only longitudinal history (trends + labels possible); server-stamped time; scores degrade to UNKNOWN/insufficient-data under low coverage (D2 enforced at score level); CONTRACT_VERSION compat tested.
+
+## RE-PLAN (2026-06-01) — strategy-driven, follow to end
+- **Finding:** ledger jumped to P1 deployability (W1.x) after W0.3, but P0 §2 items W0.1/W0.2/W0.4/W0.5 remain OPEN (verified in code: `db.py` historical+scores still PK(device_id) overwrite; `pipeline.py` trusts `env.ts`; `scores.py` starts at 100 with no coverage gate). Strategy §8 mandates ALL P0 before Analytics.
+- **Decision:** close P0 in dependency order; remaining P1 polish (signed config, transport jitter/idempotency, rate-limit) deferred behind P0 (§3 = "without ceremony", non-blocking).
+- **Order this run:** (1) W0.1 append-only historical+scores [linchpin: trends+labels] → (2) W0.2 server `received_at`+clock-drift → (3) W0.5 confidence-gated scoring → (4) W0.4 CONTRACT_VERSION compat. Each: branch → TDD → gate green → subagent review → `merge --no-ff` → `push origin main` → ledger update. Push if tokens run low.
 
 ## Constraints/Assumptions
 - System class: **high-trust degradation detection platform**, NOT "AI predicts failures". Prime directive: under uncertainty → UNKNOWN, never guess.
@@ -26,6 +31,7 @@ _Canonical briefing. Survives compaction. Facts only; mark `UNCONFIRMED` if unsu
 - **3c mapping (decided):** bayesian CLASS→trust DOMAIN gate — storage→storage, battery→battery, power_thermal→thermal, stability→os_stability; **memory ungated**; disk_fill/boot tracked but gate no class (v1).
 - **3e:** reuse `source_last_good` — a source with a stored last-good that now reports a collector failure = **regressed (newly-blocked)**; flag in lineage + dashboard. Distinguishes "was capable, now lost it" from "never seen".
 - **W1 design (decided, governor-driven):** `site_code` = grouping/identity only (no auth/isolation now); certs folded into `historical` (no new msg_type), never read private keys, surfaced directly (not a bayesian class); dashboard = vanilla-JS poll (no SPA/websocket); feedback = ack+note only (no remote agent control). Each piece justified; nothing speculative.
+- **Identity-labels (NOT tenancy) — designed+DESCOPED 2026-06-02, DEFERRED behind P0; integrated into `cctodo.md` §3:** org/dept = additive numeric LABELS extending `site_code` (server-side name directory `organizations`/`departments`; client never gets names; contract additive, no version bump; edge `0`/'' → «no dept»/NULL). Onboarding = interactive numbers + `install-service.ps1` args (GPO/SCCM). User confirmed **external-only threat model** → existing global `ingest_token` (merged `b49a738`) is the sufficient anti-spoof boundary. **Data-isolation / per-org secrets / dashboard-auth NOT built** — `cctodo.md` §1 anti-goal «multi-tenant orchestration» + D7; parked until a real 2nd mutually-distrusting customer (D8 keeps the option via additive labels). Storage-isolation Q moot (nothing to isolate — I over-asked). Why → memory `[[identity-labels-not-tenancy]]`.
 
 ## State
 

@@ -44,7 +44,7 @@ disk-fill — это детерминированная арифметика (п
 
 ### Анти-цели (НЕ строить сейчас — premature infra gravity)
 - Unified ML-оракул / «general PC health AI» / random-death prediction.
-- RBAC-cathedral, PKI-empire, multi-tenant policy orchestration.
+- RBAC-cathedral, PKI-empire, multi-tenant policy orchestration. (Числовые org/dept *ярлыки* — OK как расширение `site_code`, см. §3; *изоляция данных / RBAC / per-org секреты* — сюда, до доказанной нужды: реальный 2-й взаимно-недоверяющий клиент.)
 - Auto-remediation, fleet-wide remote execution, сложный updater.
 - Survival/labels как центр до прохождения гейтов §7.
 
@@ -92,6 +92,7 @@ disk-fill — это детерминированная арифметика (п
 - [ ] **Signed config/schema** (лёгкая подпись, не PKI).
 - [ ] **Transport hardening (`transport.py`):** джиттер на реконнект (убить thundering herd при массовом восстановлении сервера); idempotency-key в конверте → серверный дедуп (сейчас retry-после-коммита = дубли); cap размера payload.
 - [ ] **Server input limits:** лимит тела запроса, per-device rate-limit (DoS через синхронный rescore под глобальным локом).
+- [ ] **Числовые коды-ярлыки org/dept + онбординг (расширение W1.1 `site_code`, БЕЗ изоляции):** инженер вводит `org_code`+`dept_code` (числа) при установке — интерактивно или аргументами `install-service.ps1` (массовый раскат GPO/SCCM); сервер держит справочник `organizations`/`departments` (число→имя, **только сервер** — клиент имён не знает), дашборд показывает имена. Цель: скорость раската + ноль опечаток в названиях. Контракт additive (`Envelope.org_code/dept_code`, как `site_code`, без бампа версии). Edge: `0`/пусто → «без подразделения» (NULL), `0`/`''` зарезервированы. Глобальный `ingest_token` (merged `b49a738`) = достаточная анти-спуфинг граница под моделью «внешний злоумышленник». **Изоляция данных между org / per-org секреты / авторизация дашборда — НЕ здесь** (§1 анти-цели; строить только при реальном 2-м недоверяющем клиенте — additive-ярлыки сохраняют опцию по D8). Память: `identity-labels-not-tenancy`.
 
 ---
 
