@@ -1,10 +1,13 @@
 """SQLite storage for SRP (MVP).
 
-One file DB, zero-config. Latest-wins for slow-changing data (inventory,
-historical, scores); append+cap for time series (heartbeats, events).
+One file DB, zero-config. Latest-wins for slow-changing identity (inventory,
+devices); append+cap longitudinal history for everything time-varying
+(heartbeats, events, historical, scores). History is the P0 foundation for
+trend detection ("is it getting worse?") and future label loops -- overwriting
+latest-wins would erase the very signal early-warning depends on (W0.1).
 
-All queries are parameterized. Table names in prune helpers are module
-constants, never user input.
+All queries are parameterized. Table names in schema/prune/migration helpers are
+module constants, never user input.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from typing import Any, Optional
 _db_path: Optional[Path] = None
 _retain_hb = 500
 _retain_ev = 1000
+_retain_hist = 2000  # historical readings kept per device (W0.1; downsample TBD)
+_retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample TBD)
 _lock = threading.Lock()
 
 _SCHEMA = """
@@ -40,10 +45,12 @@ CREATE TABLE IF NOT EXISTS inventory (
   payload   TEXT
 );
 CREATE TABLE IF NOT EXISTS historical (
-  device_id TEXT PRIMARY KEY,
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT,
   ts        TEXT,
   payload   TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_hist_device ON historical(device_id, id);
 CREATE TABLE IF NOT EXISTS heartbeats (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id TEXT,
@@ -63,7 +70,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_ev_device ON events(device_id, id);
 CREATE TABLE IF NOT EXISTS scores (
-  device_id     TEXT PRIMARY KEY,
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id     TEXT,
   ts            TEXT,
   performance   REAL,
   reliability   REAL,
@@ -71,6 +79,7 @@ CREATE TABLE IF NOT EXISTS scores (
   risk_exposure REAL,
   risk          TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_scores_device ON scores(device_id, id);
 CREATE TABLE IF NOT EXISTS source_last_good (
   device_id TEXT,
   source    TEXT,
@@ -102,13 +111,22 @@ CREATE TABLE IF NOT EXISTS device_source_trust (
 """
 
 
-def init_db(db_path: Path, retain_heartbeats: int = 500, retain_events: int = 1000) -> None:
-    global _db_path, _retain_hb, _retain_ev
+def init_db(
+    db_path: Path,
+    retain_heartbeats: int = 500,
+    retain_events: int = 1000,
+    retain_historical: int = 2000,
+    retain_scores: int = 5000,
+) -> None:
+    global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores
     _db_path = Path(db_path)
     _retain_hb = retain_heartbeats
     _retain_ev = retain_events
+    _retain_hist = retain_historical
+    _retain_scores = retain_scores
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
+        _migrate_legacy_latest_wins(conn)
         conn.executescript(_SCHEMA)
 
 
@@ -119,6 +137,71 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+# --------------------------------------------------------------------------- #
+# Schema migration (pre-W0.1 latest-wins -> append-only)
+# --------------------------------------------------------------------------- #
+_APPEND_ONLY_TABLES = ("historical", "scores")
+
+# Legacy historical/scores used PRIMARY KEY(device_id) (<=1 row per device), so
+# copying every row into the new id-keyed shape is lossless.
+_REBUILD: dict[str, str] = {
+    "historical": """
+        DROP TABLE IF EXISTS historical__new;
+        BEGIN;
+        CREATE TABLE historical__new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT, ts TEXT, payload TEXT);
+        INSERT INTO historical__new (device_id, ts, payload)
+          SELECT device_id, ts, payload FROM historical;
+        DROP TABLE historical;
+        ALTER TABLE historical__new RENAME TO historical;
+        COMMIT;
+    """,
+    "scores": """
+        DROP TABLE IF EXISTS scores__new;
+        BEGIN;
+        CREATE TABLE scores__new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT, ts TEXT,
+          performance REAL, reliability REAL, wear REAL, risk_exposure REAL, risk TEXT);
+        INSERT INTO scores__new
+          (device_id, ts, performance, reliability, wear, risk_exposure, risk)
+          SELECT device_id, ts, performance, reliability, wear, risk_exposure, risk FROM scores;
+        DROP TABLE scores;
+        ALTER TABLE scores__new RENAME TO scores;
+        COMMIT;
+    """,
+}
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
+def _has_id_column(conn: sqlite3.Connection, table: str) -> bool:
+    # PRAGMA cannot be parameterized; enforce the constant-table invariant so the
+    # f-string can never interpolate caller-controlled input.
+    if table not in _APPEND_ONLY_TABLES:
+        raise ValueError(f"unknown table for migration check: {table!r}")
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == "id" for r in rows)
+
+
+def _migrate_legacy_latest_wins(conn: sqlite3.Connection) -> None:
+    """Rebuild pre-W0.1 historical/scores (PRIMARY KEY device_id, no `id`) into
+    the append-only id-keyed shape, preserving rows. No-op on fresh DBs (tables
+    absent -> created by the schema) and on already-migrated DBs."""
+    for table in _APPEND_ONLY_TABLES:
+        if not _table_exists(conn, table):
+            continue
+        if _has_id_column(conn, table):
+            continue
+        conn.executescript(_REBUILD[table])
 
 
 # --------------------------------------------------------------------------- #
@@ -204,11 +287,13 @@ def store_inventory(device_id: str, ts: str, payload: dict[str, Any]) -> None:
 def store_historical(device_id: str, ts: str, payload: dict[str, Any]) -> None:
     with _lock, _connect() as conn:
         conn.execute(
-            """
-            INSERT INTO historical (device_id, ts, payload) VALUES (?,?,?)
-            ON CONFLICT(device_id) DO UPDATE SET ts=excluded.ts, payload=excluded.payload
-            """,
+            "INSERT INTO historical (device_id, ts, payload) VALUES (?,?,?)",
             (device_id, ts, json.dumps(payload)),
+        )
+        conn.execute(
+            """DELETE FROM historical WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_hist),
         )
 
 
@@ -259,10 +344,6 @@ def store_scores(device_id: str, ts: str, scores: dict[str, Any]) -> None:
             INSERT INTO scores
               (device_id, ts, performance, reliability, wear, risk_exposure, risk)
             VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(device_id) DO UPDATE SET
-              ts=excluded.ts, performance=excluded.performance,
-              reliability=excluded.reliability, wear=excluded.wear,
-              risk_exposure=excluded.risk_exposure, risk=excluded.risk
             """,
             (
                 device_id,
@@ -274,6 +355,11 @@ def store_scores(device_id: str, ts: str, scores: dict[str, Any]) -> None:
                 json.dumps(scores.get("risk", {})),
             ),
         )
+        conn.execute(
+            """DELETE FROM scores WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_scores),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -283,6 +369,17 @@ def _load(conn: sqlite3.Connection, table: str, device_id: str) -> Optional[dict
     row = conn.execute(
         # B608: {table} is a fixed module literal, never user input.
         f"SELECT ts, payload FROM {table} WHERE device_id=?",  # nosec B608
+        (device_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"ts": row["ts"], **json.loads(row["payload"])}
+
+
+def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dict]:
+    """Newest historical reading for a device (append-only -> order by id desc)."""
+    row = conn.execute(
+        "SELECT ts, payload FROM historical WHERE device_id=? ORDER BY id DESC LIMIT 1",
         (device_id,),
     ).fetchone()
     if row is None:
@@ -367,7 +464,9 @@ def get_devices() -> list[dict[str, Any]]:
                    a.note AS ack_note, a.acked_at AS ack_at
             FROM devices d
             LEFT JOIN scores s ON s.device_id = d.device_id
+              AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
             LEFT JOIN historical h ON h.device_id = d.device_id
+              AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
             LEFT JOIN acknowledgements a ON a.device_id = d.device_id
             ORDER BY COALESCE(s.risk_exposure, 0) DESC, d.last_seen DESC
             """
@@ -419,7 +518,7 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         if d is None:
             return None
         inventory = _load(conn, "inventory", device_id)
-        historical = _load(conn, "historical", device_id)
+        historical = _latest_historical(conn, device_id)
         hb_row = conn.execute(
             "SELECT ts, payload FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT 1",
             (device_id,),
@@ -430,7 +529,9 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
                FROM events WHERE device_id=? ORDER BY id DESC LIMIT 50""",
             (device_id,),
         ).fetchall()
-        s = conn.execute("SELECT * FROM scores WHERE device_id=?", (device_id,)).fetchone()
+        s = conn.execute(
+            "SELECT * FROM scores WHERE device_id=? ORDER BY id DESC LIMIT 1", (device_id,)
+        ).fetchone()
 
     scores = None
     if s is not None:
@@ -469,7 +570,38 @@ def get_inventory(device_id: str) -> Optional[dict]:
 
 def get_historical(device_id: str) -> Optional[dict]:
     with _connect() as conn:
-        return _load(conn, "historical", device_id)
+        return _latest_historical(conn, device_id)
+
+
+def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
+    """Historical readings for a device, newest-first (append-only time series)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ts, payload FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?",
+            (device_id, limit),
+        ).fetchall()
+    return [{"ts": r["ts"], **json.loads(r["payload"])} for r in rows]
+
+
+def get_score_series(device_id: str, limit: int = 100) -> list[dict]:
+    """Computed scores for a device, newest-first (append-only time series)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, performance, reliability, wear, risk_exposure, risk
+               FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?""",
+            (device_id, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "performance": r["performance"],
+            "reliability": r["reliability"],
+            "wear": r["wear"],
+            "risk_exposure": r["risk_exposure"],
+            "risk": json.loads(r["risk"]) if r["risk"] else {},
+        }
+        for r in rows
+    ]
 
 
 def get_recent_heartbeats(device_id: str, limit: int = 20) -> list[dict]:
