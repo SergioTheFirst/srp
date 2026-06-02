@@ -10,7 +10,7 @@ _Canonical briefing. Survives compaction. Facts only; mark `UNCONFIRMED` if unsu
 ## RE-PLAN (2026-06-01) — strategy-driven, follow to end
 - **Finding:** ledger jumped to P1 deployability (W1.x) after W0.3, but P0 §2 items W0.1/W0.2/W0.4/W0.5 remain OPEN (verified in code: `db.py` historical+scores still PK(device_id) overwrite; `pipeline.py` trusts `env.ts`; `scores.py` starts at 100 with no coverage gate). Strategy §8 mandates ALL P0 before Analytics.
 - **Decision:** close P0 in dependency order; remaining P1 polish (signed config, transport jitter/idempotency, rate-limit) deferred behind P0 (§3 = "without ceremony", non-blocking).
-- **Order this run:** (1) W0.1 append-only historical+scores [linchpin: trends+labels] → (2) W0.2 server `received_at`+clock-drift → (3) W0.5 confidence-gated scoring → (4) W0.4 CONTRACT_VERSION compat. Each: branch → TDD → gate green → subagent review → `merge --no-ff` → `push origin main` → ledger update. Push if tokens run low.
+- **Order this run:** (1) ✅ W0.1 append-only historical+scores [DONE — merge `a6f3de2`] → (2) **W0.2 (NEXT)** server `received_at`+clock-drift → (3) W0.5 confidence-gated scoring → (4) W0.4 CONTRACT_VERSION compat. Each: branch → TDD → gate green → subagent review → `merge --no-ff` → `push origin main` → ledger update. Push if tokens run low.
 
 ## Constraints/Assumptions
 - System class: **high-trust degradation detection platform**, NOT "AI predicts failures". Prime directive: under uncertainty → UNKNOWN, never guess.
@@ -36,6 +36,7 @@ _Canonical briefing. Survives compaction. Facts only; mark `UNCONFIRMED` if unsu
 ## State
 
 ### Done
+- **W0.1 append-only longitudinal history MERGED to `main` (`a6f3de2`):** `historical`+`scores` latest-wins → append-only (`id` AUTOINCREMENT + `(device_id,id)` idx); `store_*` = INSERT + per-device retention prune (`_retain_hist=2000`/`_retain_scores=5000`); `get_historical`/`get_device` latest-by-id; `get_devices` fleet JOIN → `MAX(id)` per device (no row-multiplication); new `get_historical_series`/`get_score_series` (newest-first+limit); **atomic+idempotent in-place migration** of pre-W0.1 DBs (BEGIN/COMMIT rebuild + `DROP IF EXISTS …__new` shadow; lossless ≤1-row/device). 11 tests (`test_db_append_only.py`). Gate green (cov 91.18%, smoke OK); security-reviewed APPROVE-WITH-FIXES → HIGH (migration crash-window) **empirically DISPROVEN** (tx DDL rolls back DROP — verified by abort test), MEDIUM constant-table guard added (`_has_id_column`), MEDIUM "test fails" = FP (test calls `upsert_device`). Accepted-minor: retention = count-cap per device (downsample policy deferred, cctodo W0.1). **NEXT P0 = W0.2.**
 - **W0.3 telemetry-trust Plans 1 + 2 + 3 (3a–3e) merged to `main` + pushed** (`main` @ `d13cc72`):
   - **Plan 1** (`server/trust/`, merge `73a2be2`): pure trust core (state/weight, collector⊥semantic, materiality, Tiered domains).
   - **Plan 2** (merge `0e1d3d0`): `SourceHealth`+`Envelope.source_health`; agent `run_ps`→`PsResult`; collectors emit per-source `collector_status`; stdlib-pure.
@@ -45,6 +46,7 @@ _Canonical briefing. Survives compaction. Facts only; mark `UNCONFIRMED` if unsu
 - Docs on main: `cctodo.md`, `telemetry-trust-contract.md`, `telemetry-trust-plan.md`. Memory: `system-class-high-trust`, `telemetry-trust-rules`, `working-style-governors`. `.codegraph/` gitignored.
 
 ### Now
+- **CURRENT (2026-06-03): back on P0 per RE-PLAN — W0.1 append-only ✅ MERGED `a6f3de2`; NEXT = W0.2 server `received_at`+clock-drift. The P1/W1 notes below are prior context, not the active thread.**
 - W0.3 COMPLETE. Phase W1: **W1.0 `.claudeignore` ✅** (`b2ffd29`); **W1.1 site/org identity ✅** (`440d447`); **W1.2 cert-expiry ✅ merged** (`cb9555a`: cert metadata in `historical.certificates`, `days_until`, dashboard highlight; security-reviewed APPROVE).
 - **W1.3 live dashboard** on `feat/live-dashboard`: **3a backend ✅** (`c78eaab`: enriched `GET /api/v1/devices` [device_trust, unknown_domains, regressed_count, stale+last_seen_age_sec, cert_min_days/cert_expiring, ack] + `acknowledgements` table + `POST /devices/{id}/ack`; gate 92%).
 - **W1.3b live dashboard ✅** (`a19fd33`: `_fleet_body.html` partial + `/fleet/fragment`; `fleet.html` shell polls/swaps ~12s; KPI-filter cards, site grouping, search, per-device alert badges, ack-from-list; gate 91%). In **security+quality review** of `feat/live-dashboard` → reviewed APPROVE (4 minor fixes applied: immutable context, ack-note cap, fmt_age guard, live subtitle) and **merged to `main` @ `d77e934`**.
