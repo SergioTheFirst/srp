@@ -31,6 +31,35 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def parse_version(value: Optional[str]) -> Optional[tuple[int, int, int]]:
+    """Parse a strict MAJOR.MINOR.PATCH string into a tuple; None if malformed."""
+    if not value or not isinstance(value, str):
+        return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    return (nums[0], nums[1], nums[2])
+
+
+def is_contract_compatible(agent_version: Optional[str]) -> bool:
+    """True when agent_version shares the server CONTRACT_VERSION's MAJOR (W0.4).
+
+    The contract is additive (optional fields + extra='allow'), so any same-MAJOR
+    agent's envelope parses. A different or unreadable MAJOR is flagged
+    incompatible -- but the caller MUST still keep the telemetry (UNKNOWN over
+    false confidence), never drop it on a version mismatch.
+    """
+    agent = parse_version(agent_version)
+    server = parse_version(CONTRACT_VERSION)
+    if agent is None or server is None:
+        return False
+    return agent[0] == server[0]
+
+
 class _Base(BaseModel):
     # Forward-compatible: a newer agent may add fields an older server ignores.
     model_config = ConfigDict(extra="allow")
