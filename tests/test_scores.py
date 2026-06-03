@@ -47,7 +47,7 @@ def test_degrading_machine_scores_drop():
     s = _scores(degrading)
     assert s["performance"] < 70
     assert s["reliability"] < 40
-    assert s["wear"] < 10        # 82% SSD wear + battery wear + old hardware
+    assert s["wear"] < 10  # 82% SSD wear + battery wear + old hardware
     assert s["risk_exposure"] > 30
 
 
@@ -66,14 +66,15 @@ def test_low_free_space_drives_risk_exposure():
 
 
 # --------------------------------------------------------------------------- #
-# Missing-signal neutrality
+# Raw pre-gating layer (W0.5 Score100 owns the system verdict; see test_score100)
 # --------------------------------------------------------------------------- #
-def test_all_none_inputs_are_neutral_not_zero():
-    """No telemetry at all => the optimistic baseline, never a false alarm."""
+def test_raw_all_none_is_pregating_baseline_not_the_verdict():
+    """compute_day1_scores is the RAW heuristic: with no telemetry it returns the
+    optimistic baseline. That is NOT the system's answer -- W0.5 wraps it in a
+    confidence-gated Score100 that degrades all-None inputs to UNKNOWN/low
+    confidence (see tests/test_score100.py)."""
     s = compute_day1_scores(None, None, None)
-    assert s["performance"] == 100.0
-    assert s["reliability"] == 100.0
-    assert s["wear"] == 100.0
+    assert s["performance"] == 100.0  # raw layer only; never surfaced as healthy
     assert s["risk_exposure"] == 0.0
 
 

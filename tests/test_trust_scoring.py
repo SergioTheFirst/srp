@@ -76,8 +76,10 @@ def test_device_untrusted_when_identity_fails(client):
     assert dev["scores"]["risk_exposure"] is None
 
 
-def test_no_source_health_leaves_scores_ungated(client):
-    """Backward compat: an old agent (no source_health) gets ungated scores."""
+def test_no_source_health_low_confidence_score100(client):
+    """Backward compat (W0.5): an old agent (no source_health) keeps its ungated
+    legacy numbers, but its Score100 is flagged low-confidence -- never silently
+    healthy."""
     env = {
         "device_id": "dev-old",
         "agent_version": "0.1.0",
@@ -86,5 +88,13 @@ def test_no_source_health_leaves_scores_ungated(client):
     }
     client.post("/api/v1/ingest", json=env)
     dev = client.get("/api/v1/devices/dev-old").json()
-    assert "device_trust" not in dev["scores"]["risk"]
+    sc = dev["scores"]
+    # legacy risk gating untouched (no per-domain trust to apply)
+    assert "device_trust" not in sc["risk"]
     assert "trust" not in _classes(dev)["storage"]
+    # but the Score100 envelope is present and low/unknown confidence with a reason
+    rel = sc["risk"]["score100"]["reliability"]
+    assert rel["confidence"] in ("low", "unknown")
+    assert "source_health missing" in rel["missing_evidence"]
+    # legacy numeric still present for the dashboard
+    assert sc["reliability"] is not None
