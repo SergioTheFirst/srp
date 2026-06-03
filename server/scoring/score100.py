@@ -108,6 +108,10 @@ def _domain_state(domains: dict[str, Any], name: str) -> Optional[str]:
 
 _UNTRUSTED_REASON = "device identity untrusted (contract §7)"
 
+# >=2 blind optional risk domains -> low confidence: a single optional blind spot
+# only mildly understates risk, two or more is material (contract §13).
+_RISK_LOW_CONF_OPTIONAL_UNKNOWN = 2
+
 
 def _gate_axis(
     *,
@@ -205,7 +209,7 @@ def _gate_axis(
             reason="required domain unknown",
         )
 
-    if is_risk and len(optional_unknown) >= 2:
+    if is_risk and len(optional_unknown) >= _RISK_LOW_CONF_OPTIONAL_UNKNOWN:
         confidence: ScoreConfidence = "low"
     elif optional_unknown:
         confidence = "medium"
@@ -267,9 +271,20 @@ def compute_observability_score(
         if isinstance(d, dict) and d.get("state") != "not_applicable"
     }
     total = len(applicable)
+    if total == 0:
+        # No applicable domains -> no coverage ratio to compute. UNKNOWN over a
+        # fabricated "0 = bad" reading.
+        return make_score100(
+            None,
+            direction,
+            "unknown",
+            "unknown",
+            missing_evidence=["no applicable domains to assess coverage"],
+            reason="no applicable domains",
+        )
     unknown = [n for n, d in applicable.items() if d.get("state") == "unknown"]
     trusted = total - len(unknown)
-    value = (trusted / total * 100.0) if total else 0.0
+    value = trusted / total * 100.0
 
     factors: list[Factor] = [
         {"label": f"domain coverage {trusted}/{total}", "delta": round(value, 1)}
@@ -285,12 +300,23 @@ def compute_observability_score(
     if clock_drift:
         value -= 10.0
         factors.append({"label": "clock drift", "delta": -10.0})
-    if device_trust == "untrusted":
+    untrusted = device_trust == "untrusted"
+    if untrusted:
+        # Observability PENALISES untrusted identity (clamp to "bad") rather than
+        # withholding like the health axes: its job is to SURFACE that this device's
+        # telemetry can't be trusted -- a None would hide that. But we are not
+        # confident in anything from an untrusted device, so confidence drops to low.
         value = min(value, 10.0)
         missing.append("identity trust failed")
 
     value = max(0.0, min(100.0, value))
-    confidence: ScoreConfidence = "medium" if unknown else ("high" if total else "low")
+    confidence: ScoreConfidence
+    if untrusted:
+        confidence = "low"
+    elif unknown:
+        confidence = "medium"
+    else:
+        confidence = "high"
     return make_score100(
         round(value, 1),
         direction,
@@ -299,7 +325,7 @@ def compute_observability_score(
         factors=factors,
         missing_evidence=missing,
         source_lineage={n: {"state": d.get("state")} for n, d in domains.items()},
-        reason="",
+        reason="identity untrusted -> telemetry quality cannot be assured" if untrusted else "",
     )
 
 
