@@ -172,6 +172,33 @@ def test_observability_reflects_coverage():
     assert any("regressed" in m for m in degraded.missing_evidence)
 
 
+@pytest.mark.unit
+def test_observability_untrusted_is_bad_not_withheld_low_confidence():
+    """Untrusted identity: observability is PENALISED to a bad value (it must
+    surface that the telemetry can't be trusted, not hide it as None) but at low
+    confidence -- we are not confident about anything from an untrusted device."""
+    s = compute_observability_score(
+        _trust(),  # all domains trusted, but the identity is not
+        {"has_source_health": True, "device_trust": "untrusted", "clock_drift": False},
+    )
+    assert s.value is not None and s.value <= 10.0
+    assert s.band == "bad"
+    assert s.confidence == "low"
+    assert "identity trust failed" in s.missing_evidence
+
+
+@pytest.mark.unit
+def test_observability_no_applicable_domains_is_unknown():
+    """Zero applicable domains -> no coverage ratio -> UNKNOWN, not a 0/bad reading."""
+    all_na = dict.fromkeys(_ALL_DOMAINS, "not_applicable")
+    s = compute_observability_score(
+        _trust(all_na), {"has_source_health": True, "device_trust": "ok", "clock_drift": False}
+    )
+    assert s.value is None
+    assert s.band == "unknown"
+    assert s.confidence == "unknown"
+
+
 # --------------------------------------------------------------------------- #
 # 7. legacy numeric fields survive end-to-end + Score100 map is exposed
 # --------------------------------------------------------------------------- #
