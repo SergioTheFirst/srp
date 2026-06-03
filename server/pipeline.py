@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from shared.schema import Envelope, parse_payload
+from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
 from server.scoring import compute_day1_scores, compute_risk
@@ -276,6 +276,11 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
         "msg_type": env.msg_type,
         "scores_updated": scores is not None,
         "scores": scores,
+        # W0.4 capability negotiation: tell the agent our contract version and
+        # whether we consider it compatible. A mismatch is flagged, never a reason
+        # to drop telemetry (the ingest above already stored it).
+        "server_contract_version": CONTRACT_VERSION,
+        "contract_compatible": is_contract_compatible(env.agent_version),
     }
 
 
