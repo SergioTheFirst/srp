@@ -13,7 +13,13 @@ from typing import Any, Optional
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
-from server.scoring import compute_day1_scores, compute_risk
+from server.scoring import (
+    compute_day1_score100,
+    compute_day1_scores,
+    compute_risk,
+    legacy_value,
+    score_to_dict,
+)
 from server.trust import (
     DOMAIN_SOURCES,
     GATE_PASS,
@@ -62,6 +68,8 @@ _COLLECTOR_FAIL = (
     CollectorStatus.BLOCKED,
     CollectorStatus.ABSENT,
 )
+
+_CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) is a clock-drift signal
 
 
 # --------------------------------------------------------------------------- #
@@ -328,8 +336,6 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     day1 = compute_day1_scores(inv, hist, hb)
     risk = compute_risk(inv, hist, hb)
-    perf, rel = day1["performance"], day1["reliability"]
-    wear, risk_exp = day1["wear"], day1["risk_exposure"]
     risk_block: dict[str, Any] = {
         "classes": risk["classes"],
         "top": risk["top"],
@@ -339,6 +345,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     # 3c: gate the explainable risk by the per-domain trust computed on ingest.
     trust = db.get_trust(device_id)
+    device_trust = "ok"
     if trust:
         domains = trust.get("domains", {})
         _annotate_class_trust(risk["classes"], domains)
@@ -346,20 +353,28 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         device_trust = _device_trust(trust)
         risk_block["device_trust"] = device_trust
         if device_trust == "untrusted":
-            # Contract §7: untrusted identity -> no reliable priors/cohort, so
-            # withhold the day-1 scores instead of showing meaningless numbers.
-            perf = rel = wear = risk_exp = None
             for c in risk["classes"]:
                 c["trust"] = "unknown"
         regressed = [s for s, v in trust.get("sources", {}).items() if v.get("regressed")]
         if regressed:
             risk_block["regressed_sources"] = sorted(regressed)
 
+    # W0.5: wrap the day-1 numbers in the confidence-gated Score100 envelope.
+    # Missing/untrusted telemetry must not read as healthy (contract: UNKNOWN over
+    # false confidence). Legacy numeric columns are derived from the envelope via
+    # legacy_value() so the current API/dashboard keep working; the full Score100
+    # map rides inside the risk blob (no DB schema churn).
+    clock_drift = bool(hb and abs(hb.get("clock_drift_sec") or 0.0) > _CLOCK_DRIFT_FLAG_SEC)
+    score100 = compute_day1_score100(
+        day1, inv, hist, hb, trust=trust, device_trust=device_trust, clock_drift=clock_drift
+    )
+    risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
+
     scores = {
-        "performance": perf,
-        "reliability": rel,
-        "wear": wear,
-        "risk_exposure": risk_exp,
+        "performance": legacy_value(score100["performance"]),
+        "reliability": legacy_value(score100["reliability"]),
+        "wear": legacy_value(score100["wear"]),
+        "risk_exposure": legacy_value(score100["risk_exposure"]),
         "risk": risk_block,
     }
     db.store_scores(device_id, _now_iso(), scores)
