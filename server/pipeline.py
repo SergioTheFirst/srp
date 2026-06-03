@@ -32,6 +32,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _clock_drift_sec(received_at_iso: str, reported_ts_iso: Optional[str]) -> Optional[float]:
+    """Signed seconds the server receipt leads the client-reported time (W0.2).
+
+    Positive => client clock behind / message late; negative => client clock ahead.
+    None when the client ts is unparseable.
+    """
+    recv = _parse_iso(received_at_iso)
+    reported = _parse_iso(reported_ts_iso)
+    if recv is None or reported is None:
+        return None
+    return (recv - reported).total_seconds()
+
+
 # Collector statuses meaning "the source did not deliver" (newly-blocked detection, 3e).
 _COLLECTOR_FAIL = (
     CollectorStatus.EMPTY,
@@ -179,6 +202,10 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     parse_payload(env.msg_type, env.payload)
 
     did, ts = env.device_id, env.ts
+    # W0.2: stamp server receipt + clock drift; never trust the client clock for
+    # staleness / trends / windows. ts is retained as the client-reported time.
+    received_at = _now_iso()
+    drift = _clock_drift_sec(received_at, ts)
     if env.msg_type == "inventory":
         inv = env.payload
         db.upsert_device(
@@ -191,23 +218,49 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             chassis=inv.get("chassis"),
             site_code=env.site_code,
             site_name=env.site_name,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
         )
         db.store_inventory(did, ts, inv)
     elif env.msg_type == "historical":
         db.touch_device(
-            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+            did,
+            ts,
+            env.agent_version,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
         )
-        db.store_historical(did, ts, env.payload)
+        db.store_historical(did, ts, env.payload, received_at=received_at, clock_drift_sec=drift)
     elif env.msg_type == "heartbeat":
         db.touch_device(
-            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+            did,
+            ts,
+            env.agent_version,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
         )
-        db.store_heartbeat(did, ts, env.payload)
+        db.store_heartbeat(did, ts, env.payload, received_at=received_at, clock_drift_sec=drift)
     elif env.msg_type == "events":
         db.touch_device(
-            did, ts, env.agent_version, site_code=env.site_code, site_name=env.site_name
+            did,
+            ts,
+            env.agent_version,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
         )
-        db.store_events(did, env.payload.get("events", []))
+        db.store_events(
+            did, env.payload.get("events", []), received_at=received_at, clock_drift_sec=drift
+        )
 
     if env.source_health:
         # Convert SourceHealth pydantic objects to plain dicts for evaluate_trust

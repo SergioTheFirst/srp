@@ -24,20 +24,28 @@ _retain_hb = 500
 _retain_ev = 1000
 _retain_hist = 2000  # historical readings kept per device (W0.1; downsample TBD)
 _retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample TBD)
+_CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 _lock = threading.Lock()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
-  device_id     TEXT PRIMARY KEY,
-  hostname      TEXT,
-  manufacturer  TEXT,
-  model         TEXT,
-  chassis       TEXT,
-  agent_version TEXT,
-  first_seen    TEXT,
-  last_seen     TEXT,
-  site_code     TEXT,
-  site_name     TEXT
+  device_id       TEXT PRIMARY KEY,
+  hostname        TEXT,
+  manufacturer    TEXT,
+  model           TEXT,
+  chassis         TEXT,
+  agent_version   TEXT,
+  first_seen      TEXT,
+  last_seen       TEXT,
+  site_code       TEXT,
+  site_name       TEXT,
+  last_reported_ts TEXT,
+  clock_drift_sec REAL
 );
 CREATE TABLE IF NOT EXISTS inventory (
   device_id TEXT PRIMARY KEY,
@@ -45,28 +53,34 @@ CREATE TABLE IF NOT EXISTS inventory (
   payload   TEXT
 );
 CREATE TABLE IF NOT EXISTS historical (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT,
-  ts        TEXT,
-  payload   TEXT
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  payload      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
 );
 CREATE INDEX IF NOT EXISTS idx_hist_device ON historical(device_id, id);
 CREATE TABLE IF NOT EXISTS heartbeats (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT,
-  ts        TEXT,
-  payload   TEXT
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  payload      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
 );
 CREATE INDEX IF NOT EXISTS idx_hb_device ON heartbeats(device_id, id);
 CREATE TABLE IF NOT EXISTS events (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT,
-  ts        TEXT,
-  log       TEXT,
-  source    TEXT,
-  event_id  INTEGER,
-  level     TEXT,
-  message   TEXT
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  log          TEXT,
+  source       TEXT,
+  event_id     INTEGER,
+  level        TEXT,
+  message      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
 );
 CREATE INDEX IF NOT EXISTS idx_ev_device ON events(device_id, id);
 CREATE TABLE IF NOT EXISTS scores (
@@ -128,6 +142,7 @@ def init_db(
     with _connect() as conn:
         _migrate_legacy_latest_wins(conn)
         conn.executescript(_SCHEMA)
+        _migrate_add_columns(conn)
 
 
 def _connect() -> sqlite3.Connection:
@@ -204,6 +219,45 @@ def _migrate_legacy_latest_wins(conn: sqlite3.Connection) -> None:
         conn.executescript(_REBUILD[table])
 
 
+# Additive W0.2 columns. CREATE TABLE IF NOT EXISTS will not add columns to an
+# existing table, so pre-W0.2 DBs need an explicit ALTER. Table + column names
+# below are fixed module literals, never user input.
+_ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "historical": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "heartbeats": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "events": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "devices": (("last_reported_ts", "TEXT"), ("clock_drift_sec", "REAL")),
+}
+_BACKFILL: dict[str, str] = {
+    # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
+    # (devices: from last_seen) so staleness/windows keep a usable value.
+    "historical": "UPDATE historical SET received_at = ts WHERE received_at IS NULL",
+    "heartbeats": "UPDATE heartbeats SET received_at = ts WHERE received_at IS NULL",
+    "events": "UPDATE events SET received_at = ts WHERE received_at IS NULL",
+    "devices": "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL",
+}
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Add W0.2 received_at / clock-drift columns to pre-W0.2 tables, then backfill.
+
+    No-op on fresh DBs (the schema already creates the columns) and idempotent on
+    already-migrated DBs (present columns are skipped; backfill is WHERE ... IS NULL).
+    """
+    for table, cols in _ADD_COLUMNS.items():
+        if not _table_exists(conn, table):
+            continue
+        # PRAGMA/ALTER cannot be parameterized; *table*/*col* are fixed literals above.
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}  # nosec B608
+        added = False
+        for col, col_type in cols:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")  # nosec B608
+                added = True
+        if added:
+            conn.execute(_BACKFILL[table])
+
+
 # --------------------------------------------------------------------------- #
 # Writes
 # --------------------------------------------------------------------------- #
@@ -217,14 +271,20 @@ def upsert_device(
     chassis: Optional[str] = None,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    received_at: Optional[str] = None,
+    last_reported_ts: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
 ) -> None:
+    recv = received_at or _now_iso()  # server receipt = staleness anchor (W0.2)
+    reported = last_reported_ts or ts  # client self-reported time (compat)
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO devices
               (device_id, hostname, manufacturer, model, chassis,
-               agent_version, first_seen, last_seen, site_code, site_name)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+               agent_version, first_seen, last_seen, site_code, site_name,
+               last_reported_ts, clock_drift_sec)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               hostname     = COALESCE(excluded.hostname, devices.hostname),
               manufacturer = COALESCE(excluded.manufacturer, devices.manufacturer),
@@ -233,7 +293,9 @@ def upsert_device(
               agent_version= excluded.agent_version,
               last_seen    = excluded.last_seen,
               site_code    = COALESCE(excluded.site_code, devices.site_code),
-              site_name    = COALESCE(excluded.site_name, devices.site_name)
+              site_name    = COALESCE(excluded.site_name, devices.site_name),
+              last_reported_ts = excluded.last_reported_ts,
+              clock_drift_sec  = excluded.clock_drift_sec
             """,
             (
                 device_id,
@@ -242,10 +304,12 @@ def upsert_device(
                 model,
                 chassis,
                 agent_version,
-                ts,
-                ts,
+                recv,
+                recv,
                 site_code,
                 site_name,
+                reported,
+                clock_drift_sec,
             ),
         )
 
@@ -256,20 +320,32 @@ def touch_device(
     agent_version: str,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    received_at: Optional[str] = None,
+    last_reported_ts: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
 ) -> None:
-    """Ensure a device row exists and bump last_seen (for heartbeat/events)."""
+    """Ensure a device row exists and bump last_seen (for heartbeat/events).
+
+    last_seen is the server receipt time (W0.2): staleness must not depend on the
+    client clock. last_reported_ts retains the client's self-reported time.
+    """
+    recv = received_at or _now_iso()
+    reported = last_reported_ts or ts
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO devices
-              (device_id, agent_version, first_seen, last_seen, site_code, site_name)
-            VALUES (?,?,?,?,?,?)
+              (device_id, agent_version, first_seen, last_seen, site_code, site_name,
+               last_reported_ts, clock_drift_sec)
+            VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               last_seen = excluded.last_seen,
               site_code = COALESCE(excluded.site_code, devices.site_code),
-              site_name = COALESCE(excluded.site_name, devices.site_name)
+              site_name = COALESCE(excluded.site_name, devices.site_name),
+              last_reported_ts = excluded.last_reported_ts,
+              clock_drift_sec  = excluded.clock_drift_sec
             """,
-            (device_id, agent_version, ts, ts, site_code, site_name),
+            (device_id, agent_version, recv, recv, site_code, site_name, reported, clock_drift_sec),
         )
 
 
@@ -284,11 +360,19 @@ def store_inventory(device_id: str, ts: str, payload: dict[str, Any]) -> None:
         )
 
 
-def store_historical(device_id: str, ts: str, payload: dict[str, Any]) -> None:
+def store_historical(
+    device_id: str,
+    ts: str,
+    payload: dict[str, Any],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
+    recv = received_at or _now_iso()
     with _lock, _connect() as conn:
         conn.execute(
-            "INSERT INTO historical (device_id, ts, payload) VALUES (?,?,?)",
-            (device_id, ts, json.dumps(payload)),
+            "INSERT INTO historical (device_id, ts, payload, received_at, clock_drift_sec) "
+            "VALUES (?,?,?,?,?)",
+            (device_id, ts, json.dumps(payload), recv, clock_drift_sec),
         )
         conn.execute(
             """DELETE FROM historical WHERE device_id=? AND id NOT IN (
@@ -297,11 +381,19 @@ def store_historical(device_id: str, ts: str, payload: dict[str, Any]) -> None:
         )
 
 
-def store_heartbeat(device_id: str, ts: str, payload: dict[str, Any]) -> None:
+def store_heartbeat(
+    device_id: str,
+    ts: str,
+    payload: dict[str, Any],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
+    recv = received_at or _now_iso()
     with _lock, _connect() as conn:
         conn.execute(
-            "INSERT INTO heartbeats (device_id, ts, payload) VALUES (?,?,?)",
-            (device_id, ts, json.dumps(payload)),
+            "INSERT INTO heartbeats (device_id, ts, payload, received_at, clock_drift_sec) "
+            "VALUES (?,?,?,?,?)",
+            (device_id, ts, json.dumps(payload), recv, clock_drift_sec),
         )
         conn.execute(
             """DELETE FROM heartbeats WHERE device_id=? AND id NOT IN (
@@ -310,13 +402,21 @@ def store_heartbeat(device_id: str, ts: str, payload: dict[str, Any]) -> None:
         )
 
 
-def store_events(device_id: str, events: list[dict[str, Any]]) -> None:
+def store_events(
+    device_id: str,
+    events: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
     if not events:
         return
+    recv = received_at or _now_iso()  # batch receipt = window anchor (W0.2)
     with _lock, _connect() as conn:
         conn.executemany(
-            """INSERT INTO events (device_id, ts, log, source, event_id, level, message)
-               VALUES (?,?,?,?,?,?,?)""",
+            """INSERT INTO events
+                 (device_id, ts, log, source, event_id, level, message,
+                  received_at, clock_drift_sec)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             [
                 (
                     device_id,
@@ -326,6 +426,8 @@ def store_events(device_id: str, events: list[dict[str, Any]]) -> None:
                     e.get("event_id"),
                     e.get("level"),
                     (e.get("message") or "")[:500],
+                    recv,
+                    clock_drift_sec,
                 )
                 for e in events
             ],
@@ -458,7 +560,7 @@ def get_devices() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
-                   d.site_code, d.site_name,
+                   d.site_code, d.site_name, d.last_reported_ts, d.clock_drift_sec,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    h.payload AS hist_payload,
                    a.note AS ack_note, a.acked_at AS ack_at
@@ -486,6 +588,10 @@ def get_devices() -> list[dict[str, Any]]:
                 "last_seen": r["last_seen"],
                 "last_seen_age_sec": age,
                 "stale": age is not None and age > _STALE_AFTER_SEC,
+                "last_reported_ts": r["last_reported_ts"],
+                "clock_drift_sec": r["clock_drift_sec"],
+                "clock_drift": r["clock_drift_sec"] is not None
+                and abs(r["clock_drift_sec"]) > _CLOCK_DRIFT_FLAG_SEC,
                 "site_code": r["site_code"],
                 "site_name": r["site_name"],
                 "performance": r["performance"],
@@ -554,6 +660,10 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "agent_version": d["agent_version"],
         "first_seen": d["first_seen"],
         "last_seen": d["last_seen"],
+        "last_reported_ts": d["last_reported_ts"],
+        "clock_drift_sec": d["clock_drift_sec"],
+        "clock_drift": d["clock_drift_sec"] is not None
+        and abs(d["clock_drift_sec"]) > _CLOCK_DRIFT_FLAG_SEC,
         "inventory": inventory,
         "historical": historical,
         "latest_heartbeat": latest_hb,
@@ -577,10 +687,19 @@ def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
     """Historical readings for a device, newest-first (append-only time series)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT ts, payload FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?",
+            """SELECT ts, received_at, clock_drift_sec, payload
+               FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?""",
             (device_id, limit),
         ).fetchall()
-    return [{"ts": r["ts"], **json.loads(r["payload"])} for r in rows]
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "clock_drift_sec": r["clock_drift_sec"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
 
 
 def get_score_series(device_id: str, limit: int = 100) -> list[dict]:
@@ -607,10 +726,19 @@ def get_score_series(device_id: str, limit: int = 100) -> list[dict]:
 def get_recent_heartbeats(device_id: str, limit: int = 20) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT ts, payload FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT ?",
+            """SELECT ts, received_at, clock_drift_sec, payload
+               FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT ?""",
             (device_id, limit),
         ).fetchall()
-    return [{"ts": r["ts"], **json.loads(r["payload"])} for r in rows]
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "clock_drift_sec": r["clock_drift_sec"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
 
 
 def count_recent_events(device_id: str, event_ids: list[int]) -> int:
@@ -622,6 +750,25 @@ def count_recent_events(device_id: str, event_ids: list[int]) -> int:
             # B608: placeholders are only "?" marks; all values are parameterized.
             f"SELECT COUNT(*) AS n FROM events WHERE device_id=? AND event_id IN ({placeholders})",  # nosec B608
             (device_id, *event_ids),
+        ).fetchone()
+    return int(row["n"])
+
+
+def count_events_since(device_id: str, event_ids: list[int], since_iso: str) -> int:
+    """Count matching events the server *received* at/after since_iso (W0.2).
+
+    Burst/window detection must anchor on server receipt, not the client event
+    timestamp, which depends on the machine's (possibly wrong) clock.
+    """
+    if not event_ids:
+        return 0
+    placeholders = ",".join("?" for _ in event_ids)
+    with _connect() as conn:
+        row = conn.execute(
+            # B608: placeholders are only "?" marks; all values are parameterized.
+            f"""SELECT COUNT(*) AS n FROM events
+                WHERE device_id=? AND received_at >= ? AND event_id IN ({placeholders})""",  # nosec B608
+            (device_id, since_iso, *event_ids),
         ).fetchone()
     return int(row["n"])
 
