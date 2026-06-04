@@ -13,6 +13,7 @@ from typing import Any, Optional
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
+from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
     compute_day1_score100,
     compute_day1_scores,
@@ -32,6 +33,10 @@ from server.trust import (
     resolve_domain_trust,
     validate_source,
 )
+
+# W4.1: how much append-only history to feed the trend engine. Generous enough
+# for a real slope, capped so one noisy device cannot make a query unbounded.
+_TREND_HISTORY_LIMIT = 200
 
 
 def _now_iso() -> str:
@@ -369,6 +374,17 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         day1, inv, hist, hb, trust=trust, device_trust=device_trust, clock_drift=clock_drift
     )
     risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
+
+    # W4.1: deterministic trajectory (slopes + ETA) over the append-only series.
+    # Computed here (single source of truth) so the stored blob, dashboard and the
+    # /diagnostics endpoint all read one consistent result. Same gating as W0.5:
+    # untrusted identity withholds; insufficient history -> UNKNOWN (no fake ETA).
+    hist_series = db.get_historical_series(device_id, limit=_TREND_HISTORY_LIMIT)
+    hb_series = db.get_recent_heartbeats(device_id, limit=_TREND_HISTORY_LIMIT)
+    trends = compute_trends(hist_series, hb_series)
+    trajectory = trajectory_risk_score(trends, device_trust=device_trust)
+    risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
+    risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
 
     scores = {
         "performance": legacy_value(score100["performance"]),
