@@ -43,6 +43,40 @@
   </div>
 </div>
 
+{% set traj = (s.risk.score100 or {}).get("trajectory_risk") %}
+{% if traj %}
+<h2>Траектория (раннее предупреждение)</h2>
+<p class="small">
+  {% if traj.value is none %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ traj.reason or "недостаточно истории для прогноза" }}</span>
+  {% else %}
+    <span class="chip {{ risk_color(traj.value) }}">риск траектории {{ "%.0f"|format(traj.value) }}</span>
+    <span class="muted">уверенность: {{ traj.confidence }} · выше = ближе к пределу</span>
+  {% endif %}
+</p>
+{% set tr = s.risk.trajectory or {} %}
+{% set trend_labels = [
+    ("storage_wear", "Износ SSD"), ("battery_wear", "Износ батареи"),
+    ("disk_fill", "Заполнение диска"), ("boot_time", "Время загрузки"),
+    ("throttle", "Троттлинг CPU")] %}
+<table>
+  <thead><tr><th>Метрика</th><th>Тренд</th><th>Текущее</th><th>Прогноз</th></tr></thead>
+  <tbody>
+  {% for key, lab in trend_labels %}
+    {% set t = tr.get(key) %}
+    {% if t %}
+    <tr>
+      <td class="small">{{ lab }}</td>
+      <td><span class="chip {{ {'worsening':'bad','improving':'good','flat':'na','insufficient':'na'}.get(t.direction,'na') }}">{{ {'worsening':'ухудшается','improving':'улучшается','flat':'стабильно','insufficient':'мало данных'}.get(t.direction, t.direction) }}</span></td>
+      <td class="small mono">{{ "%.1f"|format(t.current) if t.current is not none else "—" }}</td>
+      <td class="small mono">{% if t.eta_days is not none %}~{{ "%.0f"|format(t.eta_days) }} дн{% if t.target_date %} ({{ t.target_date }}){% endif %}{% else %}—{% endif %}</td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">

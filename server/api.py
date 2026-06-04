@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
 from server import db
+from server.analytics.diagnostics import compute_diagnostics
 from server.pipeline import ingest_envelope
 
 router = APIRouter(prefix="/api/v1")
@@ -42,6 +43,15 @@ def get_device(device_id: str) -> dict:
     if device is None:
         raise HTTPException(status_code=404, detail="device not found")
     return device
+
+
+@router.get("/diagnostics/{device_id}")
+def diagnostics(device_id: str) -> dict:
+    """W4.1 trajectory: deterministic slopes + ETA + the trajectory_risk axis."""
+    result = compute_diagnostics(device_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    return result
 
 
 class AckBody(BaseModel):

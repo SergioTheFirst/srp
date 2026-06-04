@@ -52,7 +52,8 @@ def _machine_guid() -> str | None:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as k:
             val, _ = winreg.QueryValueEx(k, "MachineGuid")
             return str(val).strip() or None
-    except OSError:
+    except (OSError, ImportError):
+        # ImportError: winreg is absent off Windows (dev boxes) -> fall back to uuid.
         return None
 
 
