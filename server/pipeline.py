@@ -14,6 +14,7 @@ from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, pa
 
 from server import db
 from server.analytics.battery import compute_battery_risk
+from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
@@ -408,6 +409,16 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # safety clearance). Surfaced alongside storage in the blob and /diagnostics.
     battery_risk = compute_battery_risk(hist, device_trust=device_trust)
     risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
+
+    # W4.2: deterministic disk-fill / servicing-collapse engine (current-state).
+    # Free-space risk grades on the *median* recent level so a Windows-Update cleanup
+    # rebound (one transient dip) does not alarm while a persistently-full drive does;
+    # WindowsUpdateClient failures confirm/amplify (or, on a healthy disk, flag a real
+    # "not patching" risk). Same gating (untrusted -> withheld; no data -> UNKNOWN).
+    # The depletion *slope/ETA* lives in the trajectory engine above, not here.
+    events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
+    disk_fill_risk = compute_disk_fill_risk(hb_series, events, device_trust=device_trust)
+    risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
 
     scores = {
         "performance": legacy_value(score100["performance"]),

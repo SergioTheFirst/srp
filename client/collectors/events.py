@@ -4,7 +4,9 @@ Unlike ``historical`` (which only *counts* failure events over 30 days), this
 collector ships the individual records from the last 24h so the server can show
 *what* actually happened, not just how often. The whitelist is deliberately
 narrow -- power loss, dirty shutdown, bugcheck, corrected-hardware (WHEA), disk
-and NTFS errors, app crashes -- to keep the payload small and the signal high.
+and NTFS errors, app crashes, and Windows Update install/download failures (the
+downstream symptom of a disk-fill / servicing collapse, W4.2) -- to keep the
+payload small and the signal high.
 
 Locale note: ``LevelDisplayName`` is localized (a Russian box returns
 "Ошибка", not "Error"), so we map the *numeric* ``$e.Level`` to a stable English
@@ -55,6 +57,7 @@ $queries = @(
   @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=$start},
   @{LogName='System'; ProviderName='disk'; Id=7,11,51,52,153; StartTime=$start},
   @{LogName='System'; ProviderName='Ntfs'; Id=55; StartTime=$start},
+  @{LogName='System'; ProviderName='Microsoft-Windows-WindowsUpdateClient'; Id=20,25,31; StartTime=$start},
   @{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$start}
 )
 

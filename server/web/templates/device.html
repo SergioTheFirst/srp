@@ -120,6 +120,27 @@
 {% endif %}
 {% endif %}
 
+{% set fill = (s.risk.score100 or {}).get("disk_fill_risk") %}
+{% if fill %}
+<h2>Заполнение диска / обслуживание Windows</h2>
+<p class="small">
+  {% if fill.value is none %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ fill.reason or "нет данных о свободном месте" }}</span>
+  {% else %}
+    <span class="chip {{ risk_color(fill.value) }}">риск заполнения {{ "%.0f"|format(fill.value) }}</span>
+    <span class="muted">уверенность: {{ fill.confidence }} · выше = диск ближе к заполнению</span>
+  {% endif %}
+</p>
+{% if fill.factors %}
+<ul class="small">
+  {% for f in fill.factors %}<li>{{ f.label }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% if fill.value is not none and fill.missing_evidence %}
+<p class="small muted">⚠ не видно: {{ fill.missing_evidence | join("; ") }}</p>
+{% endif %}
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">
