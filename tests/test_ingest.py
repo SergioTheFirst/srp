@@ -107,6 +107,24 @@ def test_diagnostics_exposes_storage_risk(client):
     assert diag["storage_risk"]["value"] >= 60
 
 
+def test_diagnostics_exposes_battery_risk(client):
+    """W4.2: the battery engine runs in the pipeline and its verdict is surfaced
+    through the diagnostics endpoint (a worn battery reads as high battery risk)."""
+    payload = {
+        "battery": {
+            "present": True,
+            "design_capacity_mwh": 60000,
+            "full_charge_capacity_mwh": 27000,
+            "wear_pct": 55.0,
+            "cycle_count": 1100,
+        }
+    }
+    client.post("/api/v1/ingest", json=envelope("bat-dev", "historical", payload))
+    diag = client.get("/api/v1/diagnostics/bat-dev").json()
+    assert diag["battery_risk"] is not None
+    assert diag["battery_risk"]["value"] >= 40
+
+
 def test_ingest_accepts_unknown_payload_field(client):
     """Forward compatibility survives the HTTP boundary, not just the model."""
     payload = healthy("heartbeat")

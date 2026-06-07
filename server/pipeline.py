@@ -13,6 +13,7 @@ from typing import Any, Optional
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
+from server.analytics.battery import compute_battery_risk
 from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
@@ -398,6 +399,15 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # UNKNOWN); surfaced alongside trajectory in the score blob and /diagnostics.
     storage_risk = compute_storage_risk(hist, hb, device_trust=device_trust)
     risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
+
+    # W4.2: deterministic battery-health engine (capacity fade leads; cycles only
+    # grade). Current-state verdict over the latest reading -- the wear *trend*/ETA
+    # lives in the trajectory engine above. Same gating (untrusted -> withheld; no
+    # battery -> not applicable; present-but-no-metric -> UNKNOWN); confidence caps
+    # at medium because WMI cannot see swelling (a clean capacity reading is not a
+    # safety clearance). Surfaced alongside storage in the blob and /diagnostics.
+    battery_risk = compute_battery_risk(hist, device_trust=device_trust)
+    risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
 
     scores = {
         "performance": legacy_value(score100["performance"]),

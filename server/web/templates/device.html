@@ -95,6 +95,31 @@
 {% endif %}
 {% endif %}
 
+{% set bat = (s.risk.score100 or {}).get("battery_risk") %}
+{% if bat %}
+<h2>Здоровье батареи</h2>
+<p class="small">
+  {% if bat.value is none %}
+    {% if bat.source_lineage.battery_present == false %}
+    <span class="chip na">—</span> <span class="muted">нет батареи (десктоп)</span>
+    {% else %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ bat.reason or "нет данных о батарее" }}</span>
+    {% endif %}
+  {% else %}
+    <span class="chip {{ risk_color(bat.value) }}">износ батареи {{ "%.0f"|format(bat.value) }}</span>
+    <span class="muted">уверенность: {{ bat.confidence }} · выше = сильнее износ</span>
+  {% endif %}
+</p>
+{% if bat.factors %}
+<ul class="small">
+  {% for f in bat.factors %}<li>{{ f.label }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% if bat.value is not none and bat.missing_evidence %}
+<p class="small muted">⚠ не видно: {{ bat.missing_evidence | join("; ") }}</p>
+{% endif %}
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">
