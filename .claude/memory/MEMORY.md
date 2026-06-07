@@ -14,3 +14,4 @@
 - [Служба агента = Планировщик заданий](agent-service-task-scheduler.md) — LocalSystem через schtasks, не nssm/sc (pywin32 запрещён); конфиг без BOM
 - [Коды org/dept = ярлыки, не тенантность](identity-labels-not-tenancy.md) — изоляция/RBAC паркуются до 2-го недоверяющего клиента; глобального ingest_token достаточно
 - [Батарея: вздутие ≠ возраст](battery-swelling-not-age.md) — battery_risk судит только об износе ёмкости; вздутие невидимо → уверенность ≤ medium, ёмкость ≠ безопасность
+- [Заполнение диска: медиана = защита от rebound](disk-fill-median-rebound-guard.md) — disk_fill_risk судит по медиане свободного места за 14 дней; разовый спад очистки WU не сдвигает медиану → нет ложной тревоги
