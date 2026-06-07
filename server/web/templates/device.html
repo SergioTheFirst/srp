@@ -77,6 +77,24 @@
 </table>
 {% endif %}
 
+{% set stor = (s.risk.score100 or {}).get("storage_risk") %}
+{% if stor %}
+<h2>Здоровье диска (SMART)</h2>
+<p class="small">
+  {% if stor.value is none %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ stor.reason or "нет SMART-данных" }}</span>
+  {% else %}
+    <span class="chip {{ risk_color(stor.value) }}">риск диска {{ "%.0f"|format(stor.value) }}</span>
+    <span class="muted">уверенность: {{ stor.confidence }} · выше = ближе к отказу</span>
+  {% endif %}
+</p>
+{% if stor.factors %}
+<ul class="small">
+  {% for f in stor.factors %}<li>{{ f.label }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">

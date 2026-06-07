@@ -13,6 +13,7 @@ from typing import Any, Optional
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
+from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
     compute_day1_score100,
@@ -390,6 +391,13 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     trajectory = trajectory_risk_score(trends, device_trust=device_trust)
     risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
     risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
+
+    # W4.2: deterministic storage-health engine (SMART-led; latency only confirms).
+    # Current-state verdict over the latest reading -- the wear *trend*/ETA lives in
+    # the trajectory engine above. Same gating (untrusted -> withheld, no SMART ->
+    # UNKNOWN); surfaced alongside trajectory in the score blob and /diagnostics.
+    storage_risk = compute_storage_risk(hist, hb, device_trust=device_trust)
+    risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
 
     scores = {
         "performance": legacy_value(score100["performance"]),

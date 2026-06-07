@@ -22,5 +22,6 @@ def compute_diagnostics(device_id: str) -> Optional[dict[str, Any]]:
     return {
         "device_id": device_id,
         "trajectory_risk": score100.get("trajectory_risk"),
+        "storage_risk": score100.get("storage_risk"),
         "trends": risk.get("trajectory") or {},
     }

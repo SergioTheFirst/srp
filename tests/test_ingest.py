@@ -95,6 +95,18 @@ def test_ingest_creates_device_from_heartbeat_alone(client):
     assert any(d["device_id"] == "hb-only" for d in devices)
 
 
+def test_diagnostics_exposes_storage_risk(client):
+    """W4.2: the storage engine runs in the pipeline and its verdict is surfaced
+    through the diagnostics endpoint (a failing drive reads as high storage risk)."""
+    payload = {
+        "storage": [{"disk": "PhysicalDisk0", "media_type": "HDD", "reallocated_sectors": 200}]
+    }
+    client.post("/api/v1/ingest", json=envelope("stor-dev", "historical", payload))
+    diag = client.get("/api/v1/diagnostics/stor-dev").json()
+    assert diag["storage_risk"] is not None
+    assert diag["storage_risk"]["value"] >= 60
+
+
 def test_ingest_accepts_unknown_payload_field(client):
     """Forward compatibility survives the HTTP boundary, not just the model."""
     payload = healthy("heartbeat")
