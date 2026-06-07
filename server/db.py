@@ -741,6 +741,30 @@ def get_recent_heartbeats(device_id: str, limit: int = 20) -> list[dict]:
     ]
 
 
+def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
+    """Recent event rows (newest-first) for analytics that match on provider+id.
+
+    Returns lightweight rows (no message body) so the disk-fill / servicing engine
+    can filter WindowsUpdateClient failures by source rather than a bare numeric id.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, source, event_id, level
+               FROM events WHERE device_id=? ORDER BY id DESC LIMIT ?""",
+            (device_id, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "source": r["source"],
+            "event_id": r["event_id"],
+            "level": r["level"],
+        }
+        for r in rows
+    ]
+
+
 def count_recent_events(device_id: str, event_ids: list[int]) -> int:
     if not event_ids:
         return 0

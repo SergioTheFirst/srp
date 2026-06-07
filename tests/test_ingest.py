@@ -125,6 +125,19 @@ def test_diagnostics_exposes_battery_risk(client):
     assert diag["battery_risk"]["value"] >= 40
 
 
+def test_diagnostics_exposes_disk_fill_risk(client):
+    """W4.2: the disk-fill engine runs in the pipeline and its verdict is surfaced
+    through the diagnostics endpoint. A system drive that sits persistently full
+    (several low-free-space heartbeats) reads as high disk-fill risk."""
+    low = healthy("heartbeat")
+    low["free_space_pct"] = 6.0
+    for _ in range(4):  # a persistent low level, not a one-off cleanup dip
+        client.post("/api/v1/ingest", json=envelope("fill-dev", "heartbeat", low))
+    diag = client.get("/api/v1/diagnostics/fill-dev").json()
+    assert diag["disk_fill_risk"] is not None
+    assert diag["disk_fill_risk"]["value"] >= 40
+
+
 def test_ingest_accepts_unknown_payload_field(client):
     """Forward compatibility survives the HTTP boundary, not just the model."""
     payload = healthy("heartbeat")
