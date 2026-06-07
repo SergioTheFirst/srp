@@ -8,6 +8,7 @@ agent does over the wire.
 from __future__ import annotations
 
 import pytest
+from server import pipeline
 from tests.conftest import (
     DEGRADING_DEVICE,
     HEALTHY_DEVICE,
@@ -60,6 +61,32 @@ def test_events_alone_are_stored_without_scoring(client):
     dev = client.get("/api/v1/devices/events-only").json()
     assert dev["scores"] is None
     assert len(dev["events"]) == 2
+
+
+def test_events_on_scored_device_do_not_rescore(client, monkeypatch):
+    """W4.0: events never feed scoring (recompute reads only inv/hist/hb), so an
+    events message must not trigger a rescore -- even on a device that already has
+    scores. We store the events and skip the (now O(n^2) trend) recompute."""
+    # Give the device real scores first.
+    client.post(
+        "/api/v1/ingest", json=envelope("scored-evt", "historical", degrading("historical"))
+    )
+
+    real = pipeline.recompute_scores
+    calls = {"n": 0}
+
+    def _spy(device_id: str):
+        calls["n"] += 1
+        return real(device_id)
+
+    monkeypatch.setattr(pipeline, "recompute_scores", _spy)
+
+    resp = client.post("/api/v1/ingest", json=envelope("scored-evt", "events", degrading("events")))
+    assert resp.status_code == 200, resp.text
+    assert calls["n"] == 0  # events must not rescore
+    assert resp.json()["scores_updated"] is False
+    # the scores computed from the earlier historical message are still served.
+    assert client.get("/api/v1/devices/scored-evt").json()["scores"] is not None
 
 
 def test_ingest_creates_device_from_heartbeat_alone(client):

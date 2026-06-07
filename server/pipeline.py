@@ -283,7 +283,12 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
         }
         evaluate_trust(did, env.payload, raw_health, ts)
 
-    scores = recompute_scores(did)
+    # W4.0: events never feed scoring -- recompute_scores reads only the latest
+    # inventory / historical / heartbeat, never the events table. Rescoring on an
+    # events message is pure waste (and now drags in the O(n^2) W4.1 trend pass),
+    # so we store the events above and skip the recompute. Message types that do
+    # change scores still rescore synchronously, so fresh scores land on ingest.
+    scores = None if env.msg_type == "events" else recompute_scores(did)
     return {
         "device_id": did,
         "msg_type": env.msg_type,
