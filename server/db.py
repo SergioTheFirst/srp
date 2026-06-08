@@ -798,6 +798,97 @@ def count_events_since(device_id: str, event_ids: list[int], since_iso: str) -> 
 
 
 # --------------------------------------------------------------------------- #
+# W4.2 fleet-anomaly helpers
+# --------------------------------------------------------------------------- #
+def get_fleet_cohort_stats(
+    model: Optional[str],
+    site_code: Optional[str],
+) -> dict[str, Any]:
+    """Fleet-level aggregates for the model cohort and the site.
+
+    Returns a dict with:
+      cohort_size          — devices sharing the same model that have historical data
+      cohort_bsod_pct      — fraction with bugchecks_30d >= 1
+      cohort_kp41_pct      — fraction with kernel_power_41_30d >= 2
+      cohort_rsi_low_pct   — fraction with reliability_stability_index < 5.0
+      site_size            — devices sharing the same site_code that have historical data
+      site_kp41_pct        — fraction at site with kernel_power_41_30d >= 2
+
+    All fractions are 0.0 when no devices with historical data exist in the group.
+    Uses json_extract (SQLite 3.38+) to read fields from the historical payload blob.
+    """
+    with _connect() as conn:
+        # Cohort stats: devices with the same model.
+        if model:
+            cohort_row = conn.execute(
+                # B608: table and column names are literals; only model is a parameter.
+                """
+                SELECT
+                    COUNT(*) AS cohort_size,
+                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.bugchecks_30d') AS REAL) >= 1
+                             THEN 1.0 ELSE 0.0 END) AS bsod_pct,
+                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                             THEN 1.0 ELSE 0.0 END) AS kp41_pct,
+                    AVG(CASE
+                        WHEN json_extract(h.payload,'$.reliability_stability_index')
+                             IS NOT NULL
+                         AND CAST(json_extract(
+                               h.payload,'$.reliability_stability_index'
+                             ) AS REAL) < 5.0
+                        THEN 1.0 ELSE 0.0 END) AS rsi_low_pct
+                FROM devices d
+                JOIN (SELECT device_id, MAX(id) AS lid FROM historical GROUP BY device_id) lh
+                  ON lh.device_id = d.device_id
+                JOIN historical h ON h.id = lh.lid
+                WHERE d.model = ?
+                """,  # nosec B608
+                (model,),
+            ).fetchone()
+        else:
+            cohort_row = None
+
+        # Site stats: devices with the same site_code.
+        if site_code:
+            site_row = conn.execute(
+                # B608: same pattern — only site_code is a parameter.
+                """
+                SELECT
+                    COUNT(*) AS site_size,
+                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                             THEN 1.0 ELSE 0.0 END) AS kp41_pct
+                FROM devices d
+                JOIN (SELECT device_id, MAX(id) AS lid FROM historical GROUP BY device_id) lh
+                  ON lh.device_id = d.device_id
+                JOIN historical h ON h.id = lh.lid
+                WHERE d.site_code = ?
+                """,  # nosec B608
+                (site_code,),
+            ).fetchone()
+        else:
+            site_row = None
+
+    return {
+        "cohort_size": int(cohort_row["cohort_size"]) if cohort_row else 0,
+        "cohort_bsod_pct": float(cohort_row["bsod_pct"] or 0.0) if cohort_row else 0.0,
+        "cohort_kp41_pct": float(cohort_row["kp41_pct"] or 0.0) if cohort_row else 0.0,
+        "cohort_rsi_low_pct": float(cohort_row["rsi_low_pct"] or 0.0) if cohort_row else 0.0,
+        "site_size": int(site_row["site_size"]) if site_row else 0,
+        "site_kp41_pct": float(site_row["kp41_pct"] or 0.0) if site_row else 0.0,
+    }
+
+
+def get_device_model_site(device_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (model, site_code) from the devices table for fleet-cohort keying."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT model, site_code FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
+    if row is None:
+        return None, None
+    return row["model"], row["site_code"]
+
+
+# --------------------------------------------------------------------------- #
 # Telemetry-trust helpers (Plan 3)
 # --------------------------------------------------------------------------- #
 def set_last_good(device_id: str, source: str, reading: dict[str, Any], ts: str) -> None:

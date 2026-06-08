@@ -26,5 +26,6 @@ def compute_diagnostics(device_id: str) -> Optional[dict[str, Any]]:
         "battery_risk": score100.get("battery_risk"),
         "disk_fill_risk": score100.get("disk_fill_risk"),
         "os_degradation_risk": score100.get("os_degradation_risk"),
+        "fleet_anomaly_risk": score100.get("fleet_anomaly_risk"),
         "trends": risk.get("trajectory") or {},
     }

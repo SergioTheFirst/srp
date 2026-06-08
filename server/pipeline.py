@@ -15,6 +15,7 @@ from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, pa
 from server import db
 from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
+from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
 from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
@@ -427,6 +428,16 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # no crash counts -> UNKNOWN). Boot-time *slope* lives in the trajectory engine.
     os_degradation_risk = compute_os_degradation_risk(hist, device_trust=device_trust)
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
+
+    # W4.2: fleet-anomaly engine (final domain engine). Detects coordinated fleet events
+    # (bad patch/driver rollout = elevated cohort BSOD rate; site-wide power cluster =
+    # elevated site KP41 rate) that would otherwise generate false individual hardware
+    # alerts. Cohort key = model; site key = site_code. Single device → UNKNOWN (nothing
+    # to compare against). Same gating: untrusted → withheld.
+    _model, _site = db.get_device_model_site(device_id)
+    cohort_stats = db.get_fleet_cohort_stats(_model, _site)
+    fleet_anomaly_risk = compute_fleet_anomaly_risk(cohort_stats, device_trust=device_trust)
+    risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)
 
     scores = {
         "performance": legacy_value(score100["performance"]),
