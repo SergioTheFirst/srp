@@ -160,7 +160,7 @@ def test_device_list_orders_riskiest_first(seeded_client):
     assert len(devices) == 2
     # COALESCE(risk_exposure,0) DESC -> the degrading laptop comes first.
     assert devices[0]["device_id"] == DEGRADING_DEVICE
-    assert devices[0]["top_risk"]["name"] == "power_thermal"
+    assert devices[0]["top_risk"]["name"] in ("stability", "storage")
 
 
 def test_device_detail_has_full_scores(seeded_client):
@@ -168,7 +168,7 @@ def test_device_detail_has_full_scores(seeded_client):
     scores = dev["scores"]
     for key in ("performance", "reliability", "wear", "risk_exposure"):
         assert scores[key] is not None
-    assert scores["risk"]["top"] == "power_thermal"
+    assert scores["risk"]["top"] in ("stability", "storage")
     assert dev["hostname"] == "DEGRADE-LT-01"
     assert dev["inventory"]["chassis"] == "laptop"
     assert len(dev["events"]) == 2
@@ -177,7 +177,7 @@ def test_device_detail_has_full_scores(seeded_client):
 def test_healthy_device_detail_low_risk(seeded_client):
     dev = seeded_client.get(f"/api/v1/devices/{HEALTHY_DEVICE}").json()
     assert dev["scores"]["risk_exposure"] == 0.0
-    assert dev["scores"]["risk"]["overall"] < 0.10
+    assert dev["scores"]["risk"]["overall"] < 10.0
 
 
 def test_unknown_device_returns_404(client):

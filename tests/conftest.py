@@ -4,7 +4,7 @@ Two reference machines drive most tests:
 
 * HEALTHY  -- a clean desktop: every score should sit at/near 100 and risk low.
 * DEGRADING -- the smoke-test laptop showing many stress signals at once, so
-  scores drop and the Bayesian risk lights up (top class: power_thermal).
+  scores drop and the Bayesian risk lights up (top class: stability or storage).
 
 Payload accessors return deep copies so a test can mutate freely without
 leaking state into the next test.
@@ -44,8 +44,16 @@ _HEALTHY: dict[str, dict[str, Any]] = {
         "cpu_logical": 12,
         "total_ram_gb": 16.0,
         "memory_modules": [{"capacity_gb": 16.0, "speed_mhz": 3200, "manufacturer": "Samsung"}],
-        "disks": [{"model": "Samsung SSD 980", "media_type": "SSD", "size_gb": 512.0,
-                   "serial_hash": "feedface00001111", "interface": "NVMe", "bus_type": "NVMe"}],
+        "disks": [
+            {
+                "model": "Samsung SSD 980",
+                "media_type": "SSD",
+                "size_gb": 512.0,
+                "serial_hash": "feedface00001111",
+                "interface": "NVMe",
+                "bus_type": "NVMe",
+            }
+        ],
         "driver_problem_count": 0,
         "pending_reboot": False,
     },
@@ -57,17 +65,33 @@ _HEALTHY: dict[str, dict[str, Any]] = {
         "app_crashes_30d": 0,
         "whea_errors_30d": 0,
         "avg_boot_ms": 21000,
-        "storage": [{"disk": "Samsung SSD 980", "media_type": "SSD", "wear_pct": 0.0,
-                     "power_on_hours": 5200, "read_errors_total": 0, "write_errors_total": 0,
-                     "temperature_c": 38}],
+        "storage": [
+            {
+                "disk": "Samsung SSD 980",
+                "media_type": "SSD",
+                "wear_pct": 0.0,
+                "power_on_hours": 5200,
+                "read_errors_total": 0,
+                "write_errors_total": 0,
+                "temperature_c": 38,
+            }
+        ],
         "battery": None,
         "observation_days": 30,
     },
     "heartbeat": {
-        "cpu_pct": 8.0, "cpu_perf_pct": 100.0, "mem_avail_mb": 9000.0,
-        "committed_pct": 35.0, "pagefile_pct": 9.0, "disk_read_sec": 0.0,
-        "disk_write_sec": 0.0, "disk_queue": 0.0, "free_space_pct": 61.0,
-        "handle_count_total": 40000, "nic_errors": 0, "user_present": True,
+        "cpu_pct": 8.0,
+        "cpu_perf_pct": 100.0,
+        "mem_avail_mb": 9000.0,
+        "committed_pct": 35.0,
+        "pagefile_pct": 9.0,
+        "disk_read_sec": 0.0,
+        "disk_write_sec": 0.0,
+        "disk_queue": 0.0,
+        "free_space_pct": 61.0,
+        "handle_count_total": 40000,
+        "nic_errors": 0,
+        "user_present": True,
         "uptime_hours": 12.0,
     },
     "events": {"window_hours": 24.0, "events": []},
@@ -89,8 +113,16 @@ _DEGRADING: dict[str, dict[str, Any]] = {
         "cpu_logical": 8,
         "total_ram_gb": 16.0,
         "memory_modules": [{"capacity_gb": 16.0, "speed_mhz": 2400, "manufacturer": "Micron"}],
-        "disks": [{"model": "SK hynix SSD", "media_type": "SSD", "size_gb": 256.0,
-                   "serial_hash": "deadbeefcafe0001", "interface": "NVMe", "bus_type": "NVMe"}],
+        "disks": [
+            {
+                "model": "SK hynix SSD",
+                "media_type": "SSD",
+                "size_gb": 256.0,
+                "serial_hash": "deadbeefcafe0001",
+                "interface": "NVMe",
+                "bus_type": "NVMe",
+            }
+        ],
         "driver_problem_count": 1,
         "pending_reboot": True,
     },
@@ -102,27 +134,60 @@ _DEGRADING: dict[str, dict[str, Any]] = {
         "app_crashes_30d": 9,
         "whea_errors_30d": 3,
         "avg_boot_ms": 65000,
-        "storage": [{"disk": "SK hynix SSD", "media_type": "SSD", "wear_pct": 82.0,
-                     "power_on_hours": 41000, "read_errors_total": 0, "write_errors_total": 0,
-                     "temperature_c": 51}],
-        "battery": {"present": True, "design_capacity_mwh": 60000,
-                    "full_charge_capacity_mwh": 39000, "wear_pct": 35.0, "cycle_count": 820},
+        "storage": [
+            {
+                "disk": "SK hynix SSD",
+                "media_type": "SSD",
+                "wear_pct": 82.0,
+                "power_on_hours": 41000,
+                "read_errors_total": 0,
+                "write_errors_total": 0,
+                "temperature_c": 51,
+            }
+        ],
+        "battery": {
+            "present": True,
+            "design_capacity_mwh": 60000,
+            "full_charge_capacity_mwh": 39000,
+            "wear_pct": 35.0,
+            "cycle_count": 820,
+        },
         "observation_days": 30,
     },
     "heartbeat": {
-        "cpu_pct": 22.0, "cpu_perf_pct": 78.0, "mem_avail_mb": 900.0,
-        "committed_pct": 92.0, "pagefile_pct": 41.0, "disk_read_sec": 0.0,
-        "disk_write_sec": 0.0, "disk_queue": 1.0, "free_space_pct": 6.0,
-        "handle_count_total": 120000, "nic_errors": 0, "user_present": True,
+        "cpu_pct": 22.0,
+        "cpu_perf_pct": 78.0,
+        "mem_avail_mb": 900.0,
+        "committed_pct": 92.0,
+        "pagefile_pct": 41.0,
+        "disk_read_sec": 0.0,
+        "disk_write_sec": 0.0,
+        "disk_queue": 1.0,
+        "free_space_pct": 6.0,
+        "handle_count_total": 120000,
+        "nic_errors": 0,
+        "user_present": True,
         "uptime_hours": 410.0,
     },
     "events": {
         "window_hours": 24.0,
         "events": [
-            {"ts": "2026-05-28T10:56:23Z", "log": "System", "source": "Microsoft-Windows-WHEA-Logger",
-             "event_id": 17, "level": "Warning", "message": "A corrected hardware error has occurred."},
-            {"ts": "2026-05-28T04:53:09Z", "log": "System", "source": "EventLog",
-             "event_id": 6008, "level": "Error", "message": "The previous system shutdown was unexpected."},
+            {
+                "ts": "2026-05-28T10:56:23Z",
+                "log": "System",
+                "source": "Microsoft-Windows-WHEA-Logger",
+                "event_id": 17,
+                "level": "Warning",
+                "message": "A corrected hardware error has occurred.",
+            },
+            {
+                "ts": "2026-05-28T04:53:09Z",
+                "log": "System",
+                "source": "EventLog",
+                "event_id": 6008,
+                "level": "Error",
+                "message": "The previous system shutdown was unexpected.",
+            },
         ],
     },
 }
