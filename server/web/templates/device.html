@@ -141,6 +141,27 @@
 {% endif %}
 {% endif %}
 
+{% set osdeg = (s.risk.score100 or {}).get("os_degradation_risk") %}
+{% if osdeg %}
+<h2>Стабильность ОС</h2>
+<p class="small">
+  {% if osdeg.value is none %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ osdeg.reason or "нет данных о стабильности ОС" }}</span>
+  {% else %}
+    <span class="chip {{ risk_color(osdeg.value) }}">деградация ОС {{ "%.0f"|format(osdeg.value) }}</span>
+    <span class="muted">уверенность: {{ osdeg.confidence }} · выше = больше признаков деградации</span>
+  {% endif %}
+</p>
+{% if osdeg.factors %}
+<ul class="small">
+  {% for f in osdeg.factors %}<li>{{ f.label }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% if osdeg.value is not none and osdeg.missing_evidence %}
+<p class="small muted">⚠ не видно: {{ osdeg.missing_evidence | join("; ") }}</p>
+{% endif %}
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">
