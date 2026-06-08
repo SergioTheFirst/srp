@@ -3,194 +3,412 @@
 {% block subtitle %}{{ d.model or "" }}{% if d.chassis %} · {{ d.chassis }}{% endif %}{% endblock %}
 
 {% set s = d.scores %}
-{% block body %}
-<p class="small"><a href="/">← весь флот</a></p>
 
-<h1 style="margin:0">{{ d.hostname or d.device_id }}</h1>
-<p class="muted small mono">{{ d.device_id }} · агент {{ d.agent_version or "?" }} · крайний контакт {{ d.last_seen or "—" }}</p>
+{% block extra_head %}
+<style>
+/* ── Source coverage widget ────────────────────────────────────────────── */
+.coverage-widget {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 13px 16px; margin: 14px 0 0;
+}
+.coverage-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; gap: 12px;
+}
+.coverage-title {
+  font: 600 10px/1 var(--mono); letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted);
+}
+.coverage-counts { display: flex; gap: 14px; font: 11px/1 var(--mono); flex-wrap: wrap; }
+.cov-good { color: var(--good); }
+.cov-warn { color: var(--warn); }
+.cov-na   { color: var(--muted); }
+.coverage-bar-wrap { margin-bottom: 10px; }
+.coverage-bar { height: 5px; background: var(--line); border-radius: 3px; display: flex; overflow: hidden; }
+.cb-seg { height: 100%; transition: width .3s; }
+.cb-good { background: var(--good); }
+.cb-warn { background: var(--warn); }
+.cb-na   { background: var(--na); }
+.coverage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Axis cards (score100 axes) ────────────────────────────────────────── */
+.axis-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--na);
+  border-radius: 5px; padding: 13px 16px; margin-bottom: 8px;
+}
+.axis-card.good { border-left-color: var(--good); }
+.axis-card.warn { border-left-color: var(--warn); }
+.axis-card.high { border-left-color: var(--high); }
+.axis-card.bad  { border-left-color: var(--bad); }
+.axis-card.na   { border-left-color: var(--na); }
+.axis-head {
+  display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 14px;
+}
+.axis-name   { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.axis-reason { font-size: 12px; color: var(--muted); }
+.axis-val    { font: 700 26px/1 var(--mono); }
+.axis-val.good { color: var(--good); }
+.axis-val.warn { color: var(--warn); }
+.axis-val.high { color: var(--high); }
+.axis-val.bad  { color: var(--bad); }
+.axis-val.na   { color: var(--muted); }
+.axis-conf { font: 600 9px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
+.axis-factors { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.axis-factor-item {
+  font-size: 11px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 3px 8px;
+}
+.axis-blind { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* ── Trajectory rows ───────────────────────────────────────────────────── */
+.traj-table { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.traj-row {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--na);
+  border-radius: 4px; padding: 9px 13px;
+  display: grid;
+  grid-template-columns: 185px 1fr 150px;
+  align-items: center; gap: 14px;
+}
+.traj-row.bad  { border-left-color: var(--bad); }
+.traj-row.warn { border-left-color: var(--warn); }
+.traj-row.good { border-left-color: var(--good); }
+.traj-row.na   { border-left-color: var(--na); }
+.traj-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.traj-val  { font: 12px/1 var(--mono); color: var(--muted); }
+.traj-bar  { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.traj-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.traj-fill.bad  { background: var(--bad); }
+.traj-fill.warn { background: var(--warn); }
+.traj-fill.good { background: var(--good); }
+.traj-fill.na   { background: var(--na); }
+.traj-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.traj-eta { font: 700 12px/1 var(--mono); color: var(--text); }
+.traj-eta.eta-imminent { color: var(--bad); animation: blink-eta 1.5s ease-in-out infinite; }
+.traj-eta.eta-soon { color: var(--warn); }
+@keyframes blink-eta {
+  0%,100% { opacity: 1; } 50% { opacity: .45; }
+}
+.table-wrap { overflow-x: auto; }
+</style>
+{% endblock %}
+
+{% block body %}
+<p class="small" style="margin-bottom:8px">
+  <a href="/" class="muted" style="font-family:var(--mono)">← флот</a>
+</p>
+
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">
+  <h1 style="font:700 22px/1.2 var(--mono);margin:0">{{ d.hostname or d.device_id }}</h1>
+  {% if d.chassis %}<span class="pill">{{ d.chassis }}</span>{% endif %}
+</div>
+<div class="small muted mono" style="margin-bottom:20px">
+  {{ d.device_id }}
+  {% if d.manufacturer or d.model %} · {{ d.manufacturer or "" }} {{ d.model or "" }}{% endif %}
+  · агент {{ d.agent_version or "?" }}
+  · контакт {{ fmt_age(d.last_seen_age_sec) }} назад
+</div>
 
 {% if not s %}
-  <p class="muted">Скоры ещё не рассчитаны — устройство известно, но телеметрии недостаточно.</p>
+  <div class="muted" style="padding:24px 0">
+    Скоры ещё не рассчитаны — устройство известно, телеметрии недостаточно.
+  </div>
 {% else %}
 
+{# Alert banners #}
 {% if s.risk.device_trust == "untrusted" %}
-<p class="chip bad" style="display:block; padding:10px 14px; margin:14px 0">⚠ Идентичность устройства недостоверна — оценки могут быть ненадёжны (untrusted).</p>
+<div class="alert-banner alert-bad">⚠ Идентичность недостоверна — оценки могут быть ненадёжны (untrusted)</div>
 {% endif %}
 {% if s.risk.regressed_sources %}
-<p class="chip warn" style="display:block; padding:10px 14px; margin:14px 0">⚠ Источники пропали (были доступны, перестали отвечать): {{ s.risk.regressed_sources|join(", ") }}</p>
+<div class="alert-banner alert-warn">⚠ Источники пропали: {{ s.risk.regressed_sources|join(", ") }}</div>
 {% endif %}
 
-<h2>Day-1 скоры</h2>
-<div class="scoregrid">
-  {% set cards = [
-      ("Производительность", s.performance, health_color(s.performance), "сейчас"),
-      ("Надёжность", s.reliability, health_color(s.reliability), "история 30д"),
-      ("Остаток ресурса", s.wear, health_color(s.wear), "износ железа"),
-  ] %}
-  {% for lab, val, col, hint in cards %}
-  <div class="scorecard">
-    <div class="lab">{{ lab }}</div>
-    <div class="val {{ col }}">{{ "%.0f"|format(val) if val is not none else "—" }}</div>
-    <div class="bar {{ col }}"><i style="width: {{ val if val is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:8px">{{ hint }}</div>
+{# ── Day-1 score cards ─────────────────────────────────────────────────── #}
+{% set c1 = health_color(s.performance) %}
+{% set c2 = health_color(s.reliability) %}
+{% set c3 = health_color(s.wear) %}
+{% set c4 = risk_color(s.risk_exposure) %}
+<div class="scoregrid" style="margin-top:16px">
+  <div class="scorecard {{ c1 }}">
+    <div class="lab">Производительность</div>
+    <div class="val {{ c1 }}">{{ "%.0f"|format(s.performance) if s.performance is not none else "—" }}</div>
+    <div class="bar"><i style="width:{{ s.performance if s.performance is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:6px">сейчас</div>
   </div>
-  {% endfor %}
-  <div class="scorecard">
+  <div class="scorecard {{ c2 }}">
+    <div class="lab">Надёжность</div>
+    <div class="val {{ c2 }}">{{ "%.0f"|format(s.reliability) if s.reliability is not none else "—" }}</div>
+    <div class="bar"><i style="width:{{ s.reliability if s.reliability is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:6px">история 30д</div>
+  </div>
+  <div class="scorecard {{ c3 }}">
+    <div class="lab">Остаток ресурса</div>
+    <div class="val {{ c3 }}">{{ "%.0f"|format(s.wear) if s.wear is not none else "—" }}</div>
+    <div class="bar"><i style="width:{{ s.wear if s.wear is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:6px">железо</div>
+  </div>
+  <div class="scorecard {{ c4 }}">
     <div class="lab">Риск-экспозиция</div>
-    <div class="val {{ risk_color(s.risk_exposure) }}">{{ "%.0f"|format(s.risk_exposure) if s.risk_exposure is not none else "—" }}</div>
-    <div class="bar {{ risk_color(s.risk_exposure) }}"><i style="width: {{ s.risk_exposure if s.risk_exposure is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:8px">выше = хуже</div>
+    <div class="val {{ c4 }}">{{ "%.0f"|format(s.risk_exposure) if s.risk_exposure is not none else "—" }}</div>
+    <div class="bar"><i style="width:{{ s.risk_exposure if s.risk_exposure is not none else 0 }}%"></i></div>
+    <div class="lab" style="margin-top:6px">выше = хуже</div>
   </div>
 </div>
 
-{% set traj = (s.risk.score100 or {}).get("trajectory_risk") %}
-{% if traj %}
-<h2>Траектория (раннее предупреждение)</h2>
-<p class="small">
-  {% if traj.value is none %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ traj.reason or "недостаточно истории для прогноза" }}</span>
-  {% else %}
-    <span class="chip {{ risk_color(traj.value) }}">риск траектории {{ "%.0f"|format(traj.value) }}</span>
-    <span class="muted">уверенность: {{ traj.confidence }} · выше = ближе к пределу</span>
+{# ── Source coverage widget ────────────────────────────────────────────── #}
+{% if s.risk.domains %}
+{% set ns = namespace(trusted=0, unknown=0, na=0, total=0) %}
+{% for name, dom in s.risk.domains.items() %}
+  {% set ns.total = ns.total + 1 %}
+  {% if dom.state == "trusted" %}{% set ns.trusted = ns.trusted + 1 %}
+  {% elif dom.state == "unknown" %}{% set ns.unknown = ns.unknown + 1 %}
+  {% else %}{% set ns.na = ns.na + 1 %}{% endif %}
+{% endfor %}
+<div class="coverage-widget">
+  <div class="coverage-head">
+    <span class="coverage-title">Покрытие источников</span>
+    <div class="coverage-counts">
+      <span class="cov-good">✓ {{ ns.trusted }} trusted</span>
+      {% if ns.unknown %}<span class="cov-warn">? {{ ns.unknown }} unknown</span>{% endif %}
+      {% if ns.na %}<span class="cov-na">— {{ ns.na }} n/a</span>{% endif %}
+    </div>
+  </div>
+  {% if ns.total %}
+  <div class="coverage-bar-wrap">
+    <div class="coverage-bar">
+      <div class="cb-seg cb-good" style="width:{{ (ns.trusted / ns.total * 100)|round(1) }}%"></div>
+      <div class="cb-seg cb-warn" style="width:{{ (ns.unknown / ns.total * 100)|round(1) }}%"></div>
+      <div class="cb-seg cb-na"   style="width:{{ (ns.na    / ns.total * 100)|round(1) }}%"></div>
+    </div>
+  </div>
   {% endif %}
-</p>
-{% set tr = s.risk.trajectory or {} %}
-{% set trend_labels = [
-    ("storage_wear", "Износ SSD"), ("battery_wear", "Износ батареи"),
-    ("disk_fill", "Заполнение диска"), ("boot_time", "Время загрузки"),
-    ("throttle", "Троттлинг CPU")] %}
-<table>
-  <thead><tr><th>Метрика</th><th>Тренд</th><th>Текущее</th><th>Прогноз</th></tr></thead>
-  <tbody>
-  {% for key, lab in trend_labels %}
-    {% set t = tr.get(key) %}
-    {% if t %}
-    <tr>
-      <td class="small">{{ lab }}</td>
-      <td><span class="chip {{ {'worsening':'bad','improving':'good','flat':'na','insufficient':'na'}.get(t.direction,'na') }}">{{ {'worsening':'ухудшается','improving':'улучшается','flat':'стабильно','insufficient':'мало данных'}.get(t.direction, t.direction) }}</span></td>
-      <td class="small mono">{{ "%.1f"|format(t.current) if t.current is not none else "—" }}</td>
-      <td class="small mono">{% if t.eta_days is not none %}~{{ "%.0f"|format(t.eta_days) }} дн{% if t.target_date %} ({{ t.target_date }}){% endif %}{% else %}—{% endif %}</td>
-    </tr>
-    {% endif %}
-  {% endfor %}
-  </tbody>
-</table>
+  <div class="coverage-chips">
+    {% for name, dom in s.risk.domains.items() %}
+    <span class="chip {{ {'trusted':'good','unknown':'warn','not_applicable':'na'}.get(dom.state,'na') }}" style="font-size:10px">{{ name }}</span>
+    {% endfor %}
+  </div>
+</div>
 {% endif %}
 
+{# ════════════════════════════════════════════════════════════════════════
+   ПРОГНОЗ — траектории и ресурс
+   ════════════════════════════════════════════════════════════════════════ #}
+<div class="section-label predictive" style="margin-top:28px">Прогноз — траектории и ресурс</div>
+
+{% set traj_ax = (s.risk.score100 or {}).get("trajectory_risk") %}
+{% if traj_ax %}
+<div class="axis-card {{ 'na' if traj_ax.value is none else risk_color(traj_ax.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Риск траектории</div>
+      <div class="axis-reason">{{ traj_ax.reason or "совокупный риск выхода за пределы" }}</div>
+    </div>
+    {% if traj_ax.value is none %}
+      <span class="chip na">UNKNOWN</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(traj_ax.value) }}">{{ "%.0f"|format(traj_ax.value) }}</div>
+      <div class="axis-conf">{{ traj_ax.confidence or "?" }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# Trajectory table with visual bars #}
+{% set tr = s.risk.trajectory or {} %}
+{% set dir_chip  = {"worsening":"bad","improving":"good","flat":"na","insufficient":"na"} %}
+{% set dir_label = {"worsening":"↑ ухудш.","improving":"↓ улучш.","flat":"→ стаб.","insufficient":"мало"} %}
+{# (key, label, scale, higher_worse) #}
+{% set tmeta = [
+  ("storage_wear", "Износ SSD",          100,    true),
+  ("battery_wear", "Износ батареи",       100,    true),
+  ("disk_fill",    "Заполнение диска",    100,    true),
+  ("boot_time",    "Время загрузки",      120000, true),
+  ("throttle",     "Троттлинг CPU",       100,    false)
+] %}
+<div class="traj-table">
+{% for key, lab, scale, higher_worse in tmeta %}
+  {% set t = tr.get(key) %}
+  {% if t %}
+  {% set dkey = t.direction or "na" %}
+  {% if t.current is not none %}
+    {% if higher_worse %}
+      {% set raw_pct = (t.current / scale) * 100 %}
+    {% else %}
+      {% set raw_pct = ((scale - t.current) / scale) * 100 %}
+    {% endif %}
+    {% set pct_fill = (100 if raw_pct > 100 else (0 if raw_pct < 0 else raw_pct)) %}
+  {% else %}
+    {% set pct_fill = 0 %}
+  {% endif %}
+  <div class="traj-row {{ dir_chip.get(dkey, 'na') }}">
+    <div>
+      <div class="traj-name">{{ lab }}</div>
+      <div class="traj-val">
+        {% if t.current is not none %}
+          {% if key in ("storage_wear","battery_wear","disk_fill") %}{{ "%.1f"|format(t.current) }}%
+          {% elif key == "boot_time" %}{{ "%.0f"|format(t.current / 1000) }}с
+          {% else %}{{ "%.0f"|format(t.current) }}%{% endif %}
+        {% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="traj-bar">
+      <div class="traj-fill {{ dir_chip.get(dkey,'na') }}" style="width:{{ pct_fill|round(1) }}%"></div>
+    </div>
+    <div class="traj-right">
+      <span class="chip {{ dir_chip.get(dkey,'na') }}" style="font-size:10px">{{ dir_label.get(dkey, dkey) }}</span>
+      {% if t.eta_days is not none %}
+      <div class="traj-eta {% if t.eta_days < 30 %}eta-imminent{% elif t.eta_days < 90 %}eta-soon{% endif %}">
+        ~{{ "%.0f"|format(t.eta_days) }}д{% if t.target_date %} · {{ t.target_date[:10] }}{% endif %}
+      </div>
+      {% else %}
+      <div class="traj-eta" style="color:var(--muted)">—</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+</div>
+{% endif %}
+
+{# Storage risk #}
 {% set stor = (s.risk.score100 or {}).get("storage_risk") %}
 {% if stor %}
-<h2>Здоровье диска (SMART)</h2>
-<p class="small">
-  {% if stor.value is none %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ stor.reason or "нет SMART-данных" }}</span>
-  {% else %}
-    <span class="chip {{ risk_color(stor.value) }}">риск диска {{ "%.0f"|format(stor.value) }}</span>
-    <span class="muted">уверенность: {{ stor.confidence }} · выше = ближе к отказу</span>
-  {% endif %}
-</p>
-{% if stor.factors %}
-<ul class="small">
-  {% for f in stor.factors %}<li>{{ f.label }}</li>{% endfor %}
-</ul>
-{% endif %}
+<div class="axis-card {{ 'na' if stor.value is none else risk_color(stor.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Здоровье диска (SMART)</div>
+      <div class="axis-reason">{{ stor.reason or "" }}</div>
+    </div>
+    {% if stor.value is none %}<span class="chip na">UNKNOWN</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(stor.value) }}">{{ "%.0f"|format(stor.value) }}</div>
+      <div class="axis-conf">{{ stor.confidence or "?" }}</div>
+    </div>{% endif %}
+  </div>
+  {% if stor.factors %}<div class="axis-factors">{% for f in stor.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+</div>
 {% endif %}
 
+{# Battery risk #}
 {% set bat = (s.risk.score100 or {}).get("battery_risk") %}
 {% if bat %}
-<h2>Здоровье батареи</h2>
-<p class="small">
-  {% if bat.value is none %}
-    {% if bat.source_lineage.battery_present == false %}
-    <span class="chip na">—</span> <span class="muted">нет батареи (десктоп)</span>
+{% set bat_no_battery = (bat.value is none and bat.source_lineage is defined and bat.source_lineage and bat.source_lineage.battery_present == false) %}
+<div class="axis-card {{ 'na' if bat.value is none else risk_color(bat.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Здоровье батареи</div>
+      <div class="axis-reason">
+        {% if bat_no_battery %}нет батареи (десктоп)
+        {% elif bat.value is none %}{{ bat.reason or "нет данных о батарее" }}
+        {% else %}{{ bat.reason or "" }}{% endif %}
+      </div>
+    </div>
+    {% if bat.value is none %}
+      <span class="chip na">{{ "—" if bat_no_battery else "UNKNOWN" }}</span>
     {% else %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ bat.reason or "нет данных о батарее" }}</span>
-    {% endif %}
-  {% else %}
-    <span class="chip {{ risk_color(bat.value) }}">износ батареи {{ "%.0f"|format(bat.value) }}</span>
-    <span class="muted">уверенность: {{ bat.confidence }} · выше = сильнее износ</span>
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(bat.value) }}">{{ "%.0f"|format(bat.value) }}</div>
+      <div class="axis-conf">{{ bat.confidence or "?" }}</div>
+    </div>{% endif %}
+  </div>
+  {% if bat.factors %}<div class="axis-factors">{% for f in bat.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+  {% if bat.value is not none and bat.missing_evidence %}
+  <div class="axis-blind">⚠ не видно: {{ bat.missing_evidence | join("; ") }}</div>
   {% endif %}
-</p>
-{% if bat.factors %}
-<ul class="small">
-  {% for f in bat.factors %}<li>{{ f.label }}</li>{% endfor %}
-</ul>
-{% endif %}
-{% if bat.value is not none and bat.missing_evidence %}
-<p class="small muted">⚠ не видно: {{ bat.missing_evidence | join("; ") }}</p>
-{% endif %}
+</div>
 {% endif %}
 
-{% set fill = (s.risk.score100 or {}).get("disk_fill_risk") %}
-{% if fill %}
-<h2>Заполнение диска / обслуживание Windows</h2>
-<p class="small">
-  {% if fill.value is none %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ fill.reason or "нет данных о свободном месте" }}</span>
-  {% else %}
-    <span class="chip {{ risk_color(fill.value) }}">риск заполнения {{ "%.0f"|format(fill.value) }}</span>
-    <span class="muted">уверенность: {{ fill.confidence }} · выше = диск ближе к заполнению</span>
-  {% endif %}
-</p>
-{% if fill.factors %}
-<ul class="small">
-  {% for f in fill.factors %}<li>{{ f.label }}</li>{% endfor %}
-</ul>
-{% endif %}
-{% if fill.value is not none and fill.missing_evidence %}
-<p class="small muted">⚠ не видно: {{ fill.missing_evidence | join("; ") }}</p>
-{% endif %}
-{% endif %}
+{# ════════════════════════════════════════════════════════════════════════
+   ТЕКУЩЕЕ СОСТОЯНИЕ — текущие сигналы
+   ════════════════════════════════════════════════════════════════════════ #}
+<div class="section-label incident">Текущее состояние</div>
 
+{# OS degradation #}
 {% set osdeg = (s.risk.score100 or {}).get("os_degradation_risk") %}
 {% if osdeg %}
-<h2>Стабильность ОС</h2>
-<p class="small">
-  {% if osdeg.value is none %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ osdeg.reason or "нет данных о стабильности ОС" }}</span>
-  {% else %}
-    <span class="chip {{ risk_color(osdeg.value) }}">деградация ОС {{ "%.0f"|format(osdeg.value) }}</span>
-    <span class="muted">уверенность: {{ osdeg.confidence }} · выше = больше признаков деградации</span>
+<div class="axis-card {{ 'na' if osdeg.value is none else risk_color(osdeg.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Стабильность ОС</div>
+      <div class="axis-reason">{{ osdeg.reason or "" }}</div>
+    </div>
+    {% if osdeg.value is none %}<span class="chip na">UNKNOWN</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(osdeg.value) }}">{{ "%.0f"|format(osdeg.value) }}</div>
+      <div class="axis-conf">{{ osdeg.confidence or "?" }}</div>
+    </div>{% endif %}
+  </div>
+  {% if osdeg.factors %}<div class="axis-factors">{% for f in osdeg.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+  {% if osdeg.value is not none and osdeg.missing_evidence %}
+  <div class="axis-blind">⚠ не видно: {{ osdeg.missing_evidence | join("; ") }}</div>
   {% endif %}
-</p>
-{% if osdeg.factors %}
-<ul class="small">
-  {% for f in osdeg.factors %}<li>{{ f.label }}</li>{% endfor %}
-</ul>
-{% endif %}
-{% if osdeg.value is not none and osdeg.missing_evidence %}
-<p class="small muted">⚠ не видно: {{ osdeg.missing_evidence | join("; ") }}</p>
-{% endif %}
+</div>
 {% endif %}
 
-{% set fleet = (s.risk.score100 or {}).get("fleet_anomaly_risk") %}
-{% if fleet %}
-<h2>Аномалии флота</h2>
-<p class="small">
-  {% if fleet.value is none %}
-    <span class="chip na">UNKNOWN</span> <span class="muted">{{ fleet.reason or "недостаточно устройств с той же моделью для сравнения" }}</span>
-  {% else %}
-    <span class="chip {{ risk_color(fleet.value) }}">флот-аномалия {{ "%.0f"|format(fleet.value) }}</span>
-    <span class="muted">уверенность: {{ fleet.confidence }} · выше = больше признаков fleet-события (патч/электрика)</span>
+{# Disk fill #}
+{% set fill = (s.risk.score100 or {}).get("disk_fill_risk") %}
+{% if fill %}
+<div class="axis-card {{ 'na' if fill.value is none else risk_color(fill.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Заполнение диска / обслуживание Windows</div>
+      <div class="axis-reason">{{ fill.reason or "" }}</div>
+    </div>
+    {% if fill.value is none %}<span class="chip na">UNKNOWN</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(fill.value) }}">{{ "%.0f"|format(fill.value) }}</div>
+      <div class="axis-conf">{{ fill.confidence or "?" }}</div>
+    </div>{% endif %}
+  </div>
+  {% if fill.factors %}<div class="axis-factors">{% for f in fill.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+  {% if fill.value is not none and fill.missing_evidence %}
+  <div class="axis-blind">⚠ не видно: {{ fill.missing_evidence | join("; ") }}</div>
   {% endif %}
-</p>
-{% if fleet.factors %}<ul class="small">{% for f in fleet.factors %}<li>{{ f.label }}</li>{% endfor %}</ul>{% endif %}
-{% if fleet.value is not none and fleet.missing_evidence %}
-<p class="small muted">⚠ не видно: {{ fleet.missing_evidence | join("; ") }}</p>
-{% endif %}
+</div>
 {% endif %}
 
-<h2>Риск по классам отказа</h2>
+{# Fleet anomaly #}
+{% set fleet_ax = (s.risk.score100 or {}).get("fleet_anomaly_risk") %}
+{% if fleet_ax %}
+<div class="axis-card {{ 'na' if fleet_ax.value is none else risk_color(fleet_ax.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Аномалии флота</div>
+      <div class="axis-reason">{{ fleet_ax.reason or "" }}</div>
+    </div>
+    {% if fleet_ax.value is none %}<span class="chip na">UNKNOWN</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(fleet_ax.value) }}">{{ "%.0f"|format(fleet_ax.value) }}</div>
+      <div class="axis-conf">{{ fleet_ax.confidence or "?" }}</div>
+    </div>{% endif %}
+  </div>
+  {% if fleet_ax.factors %}<div class="axis-factors">{% for f in fleet_ax.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+</div>
+{% endif %}
+
+{# ── Failure classes (Bayesian) ────────────────────────────────────────── #}
+<div class="section-label" style="margin-top:24px">Классы отказа (Bayesian)</div>
 {% for c in s.risk.classes %}
 <div class="riskrow">
   <div class="head">
     <span class="name">{{ c.label }}</span>
     {% if c.trust == "unknown" %}
-    <span class="chip na" title="источник недостоверен — вероятность не показывается">UNKNOWN</span>
+    <span class="chip na">UNKNOWN</span>
     {% else %}
     <span class="chip {{ level_color(c.level) }}">{{ pct(c.probability) }}</span>
     {% endif %}
   </div>
-  <div class="riskbar {{ 'na' if c.trust == 'unknown' else level_color(c.level) }}"><i style="width: {{ 0 if c.trust == 'unknown' else (c.probability * 100)|round(1) }}%"></i></div>
+  <div class="riskbar {{ 'na' if c.trust == 'unknown' else level_color(c.level) }}">
+    <i style="width:{{ 0 if c.trust == 'unknown' else (c.probability * 100)|round(1) }}%"></i>
+  </div>
   <ul class="factors">
     {% for f in c.factors %}
     <li>
@@ -202,30 +420,19 @@
 </div>
 {% endfor %}
 
-{% if s.risk.domains %}
-<h2>Доверие телеметрии (покрытие источников)</h2>
-<div class="cards">
-  {% for name, d in s.risk.domains.items() %}
-  <div class="stat">
-    <div class="n" style="font-size:15px"><span class="chip {{ {'trusted':'good','unknown':'na','not_applicable':'na'}.get(d.state,'na') }}">{{ {'trusted':'OK','unknown':'UNKNOWN','not_applicable':'—'}.get(d.state, d.state) }}</span></div>
-    <div class="l">{{ name }}</div>
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
-
-<h2>Что повлияло на day-1 скоры</h2>
-{% set groups = [
-    ("Производительность", s.risk.day1_factors.performance),
-    ("Надёжность", s.risk.day1_factors.reliability),
-    ("Остаток ресурса", s.risk.day1_factors.wear),
-    ("Риск-экспозиция", s.risk.day1_factors.risk_exposure),
+{# ── Day-1 factor drilldowns ───────────────────────────────────────────── #}
+<div class="section-label" style="margin-top:8px">Диагностика — что повлияло на day-1 скоры</div>
+{% set d1groups = [
+    ("Производительность",  s.risk.day1_factors.performance),
+    ("Надёжность",          s.risk.day1_factors.reliability),
+    ("Остаток ресурса",     s.risk.day1_factors.wear),
+    ("Риск-экспозиция",     s.risk.day1_factors.risk_exposure),
 ] %}
-{% for title, items in groups %}
-<details {% if items %}open{% endif %}>
+{% for title, items in d1groups %}
+<details {% if items %}open{% endif %} style="margin-bottom:7px">
   <summary>{{ title }} — {{ items|length }} фактор(ов)</summary>
   {% if items %}
-  <ul class="factors">
+  <ul class="factors" style="margin-top:8px;padding-left:4px">
     {% for f in items %}
     <li>
       <span>{{ f.label }}</span>
@@ -234,95 +441,95 @@
     {% endfor %}
   </ul>
   {% else %}
-  <p class="muted small">Замечаний нет.</p>
+  <p class="muted small" style="padding:8px 0">Замечаний нет.</p>
   {% endif %}
 </details>
 {% endfor %}
-{% endif %}
+{% endif %}{# end if s #}
 
-<h2>Недавние события</h2>
+{# ── Events ────────────────────────────────────────────────────────────── #}
+<div class="section-label" style="margin-top:8px">Недавние события</div>
 {% if not d.events %}
   <p class="muted small">Событий не получено.</p>
 {% else %}
+<div class="table-wrap">
 <table>
   <thead>
-    <tr><th>Время</th><th>Журнал</th><th>Источник</th><th>ID</th><th>Уровень</th><th>Сообщение</th></tr>
+    <tr>
+      <th>Время</th><th>Журнал</th><th>Источник</th>
+      <th>ID</th><th>Уровень</th><th>Сообщение</th>
+    </tr>
   </thead>
   <tbody>
-    {% for e in d.events %}
-    <tr>
-      <td class="muted small mono">{{ e.ts or "—" }}</td>
-      <td class="small">{{ e.log or "—" }}</td>
-      <td class="small">{{ e.source or "—" }}</td>
-      <td class="mono small">{{ e.event_id if e.event_id is not none else "—" }}</td>
-      <td><span class="chip {{ {'Critical':'bad','Error':'bad','Warning':'warn','Information':'na'}.get(e.level, 'na') }}">{{ e.level or "—" }}</span></td>
-      <td class="small">{{ e.message or "" }}</td>
-    </tr>
-    {% endfor %}
+  {% for e in d.events %}
+  <tr>
+    <td class="muted small mono">{{ e.ts or "—" }}</td>
+    <td class="small">{{ e.log or "—" }}</td>
+    <td class="small">{{ e.source or "—" }}</td>
+    <td class="mono small">{{ e.event_id if e.event_id is not none else "—" }}</td>
+    <td><span class="chip {{ {'Critical':'bad','Error':'bad','Warning':'warn','Information':'na'}.get(e.level,'na') }}">{{ e.level or "—" }}</span></td>
+    <td class="small" style="max-width:360px">{{ e.message or "" }}</td>
+  </tr>
+  {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
-<h2>Сертификаты</h2>
+{# ── Certificates ──────────────────────────────────────────────────────── #}
+<div class="section-label">Сертификаты</div>
 {% set hist = d.historical %}
 {% if hist and hist.certificates %}
 <table>
-  <thead>
-    <tr><th>Субъект</th><th>Издатель</th><th>Истекает</th></tr>
-  </thead>
+  <thead><tr><th>Субъект</th><th>Издатель</th><th>Истекает</th></tr></thead>
   <tbody>
-    {% for cert in hist.certificates %}
-    {% set days = days_until(cert.not_after) %}
-    <tr>
-      <td class="small mono">{{ (cert.subject or "—")[:80] }}{% if cert.subject and cert.subject|length > 80 %}…{% endif %}</td>
-      <td class="small muted">{{ (cert.issuer or "—")[:60] }}{% if cert.issuer and cert.issuer|length > 60 %}…{% endif %}</td>
-      <td>
-        {% if days is none %}
-          <span class="chip na">—</span>
-        {% elif days < 0 %}
-          <span class="chip bad">истёк {{ days }} д</span>
-        {% elif days < 30 %}
-          <span class="chip bad">{{ days }} д</span>
-        {% elif days < 90 %}
-          <span class="chip warn">{{ days }} д</span>
-        {% else %}
-          <span class="chip good">{{ days }} д</span>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
+  {% for cert in hist.certificates %}
+  {% set days = days_until(cert.not_after) %}
+  <tr>
+    <td class="small mono">{{ (cert.subject or "—")[:80] }}{% if cert.subject and cert.subject|length > 80 %}…{% endif %}</td>
+    <td class="small muted">{{ (cert.issuer or "—")[:60] }}{% if cert.issuer and cert.issuer|length > 60 %}…{% endif %}</td>
+    <td>
+      {% if days is none %}<span class="chip na">—</span>
+      {% elif days < 0 %}<span class="chip bad">истёк {{ days }}д</span>
+      {% elif days < 30 %}<span class="chip bad">{{ days }}д</span>
+      {% elif days < 90 %}<span class="chip warn">{{ days }}д</span>
+      {% else %}<span class="chip good">{{ days }}д</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
   </tbody>
 </table>
 {% else %}
-<p class="muted small">Сертификаты не получены.</p>
+  <p class="muted small">Сертификаты не получены.</p>
 {% endif %}
 
-<h2>Инвентарь</h2>
+{# ── Inventory ─────────────────────────────────────────────────────────── #}
+<div class="section-label">Инвентарь</div>
 {% set inv = d.inventory %}
-{% set hb = d.latest_heartbeat %}
-<table>
+{% set hb  = d.latest_heartbeat %}
+<table style="max-width:700px">
   <tbody>
-    <tr><td class="muted">Производитель / модель</td><td>{{ d.manufacturer or "—" }} / {{ d.model or "—" }}</td></tr>
+    <tr><td class="muted small" style="width:180px">Производитель / модель</td><td>{{ d.manufacturer or "—" }} / {{ d.model or "—" }}</td></tr>
     {% if inv %}
-    <tr><td class="muted">ОС</td><td>{{ inv.os_caption or "—" }} {{ inv.os_version or "" }}</td></tr>
-    <tr><td class="muted">CPU</td><td>{{ inv.cpu_name or "—" }}</td></tr>
-    <tr><td class="muted">RAM</td><td>{{ inv.total_ram_gb }} ГБ{% if inv.total_ram_gb is none %}—{% endif %}</td></tr>
-    <tr><td class="muted">BIOS</td><td>{{ inv.bios_version or "—" }} ({{ inv.bios_release_date or "?" }})</td></tr>
-    <tr><td class="muted">Диски</td><td>
+    <tr><td class="muted small">ОС</td><td class="small">{{ inv.os_caption or "—" }} {{ inv.os_version or "" }}</td></tr>
+    <tr><td class="muted small">CPU</td><td class="small">{{ inv.cpu_name or "—" }}</td></tr>
+    <tr><td class="muted small">RAM</td><td class="small mono">{{ inv.total_ram_gb }} ГБ{% if inv.total_ram_gb is none %}—{% endif %}</td></tr>
+    <tr><td class="muted small">BIOS</td><td class="small mono">{{ inv.bios_version or "—" }} ({{ inv.bios_release_date or "?" }})</td></tr>
+    <tr><td class="muted small">Диски</td><td class="small">
       {% for disk in inv.disks or [] %}
-        <div class="small">{{ disk.model or "?" }} · {{ disk.media_type or "?" }} · {{ disk.size_gb }} ГБ</div>
+        <div>{{ disk.model or "?" }} · {{ disk.media_type or "?" }} · {{ disk.size_gb }} ГБ</div>
       {% else %}—{% endfor %}
     </td></tr>
     {% endif %}
     {% if hb %}
-    <tr><td class="muted">Сейчас (heartbeat)</td><td class="small">
+    <tr><td class="muted small">Heartbeat</td><td class="small">
       CPU {{ "%.0f"|format(hb.cpu_pct) if hb.cpu_pct is not none else "?" }}% ·
-      своб. RAM {{ hb.mem_avail_mb if hb.mem_avail_mb is not none else "?" }} МБ ·
-      своб. диск {{ "%.0f"|format(hb.free_space_pct) if hb.free_space_pct is not none else "?" }}% ·
+      RAM {{ hb.mem_avail_mb if hb.mem_avail_mb is not none else "?" }} МБ своб. ·
+      диск {{ "%.0f"|format(hb.free_space_pct) if hb.free_space_pct is not none else "?" }}% своб. ·
       аптайм {{ "%.0f"|format(hb.uptime_hours) if hb.uptime_hours is not none else "?" }} ч
     </td></tr>
     {% endif %}
-    <tr><td class="muted">Впервые / крайний контакт</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
+    <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
   </tbody>
 </table>
 {% endblock %}

@@ -490,6 +490,7 @@ def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dic
 
 
 _STALE_AFTER_SEC = 900  # no contact for >15 min -> "stale" (agent silent / box off)
+STALE_AFTER_SEC = _STALE_AFTER_SEC  # public alias for dashboard
 _CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
 
 
@@ -506,6 +507,11 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
 def _age_seconds(iso: Optional[str]) -> Optional[int]:
     dt = _parse_iso(iso)
     return None if dt is None else int((datetime.now(timezone.utc) - dt).total_seconds())
+
+
+def age_seconds(iso: Optional[str]) -> Optional[int]:
+    """Public wrapper for dashboard / routes."""
+    return _age_seconds(iso)
 
 
 def _days_until(iso: Optional[str]) -> Optional[int]:
@@ -579,6 +585,7 @@ def get_devices() -> list[dict[str, Any]]:
         device_trust, unknown_domains, regressed_count = _risk_alerts(risk)
         cert_min_days, cert_expiring = _cert_summary(r["hist_payload"])
         age = _age_seconds(r["last_seen"])
+        worsening_count, trajectory_risk = _trajectory_summary(risk)
         out.append(
             {
                 "device_id": r["device_id"],
@@ -604,6 +611,8 @@ def get_devices() -> list[dict[str, Any]]:
                 "regressed_count": regressed_count,
                 "cert_min_days": cert_min_days,
                 "cert_expiring": cert_expiring,
+                "worsening_count": worsening_count,
+                "trajectory_risk": trajectory_risk,
                 "ack": {"note": r["ack_note"], "acked_at": r["ack_at"]} if r["ack_at"] else None,
             }
         )
@@ -616,6 +625,18 @@ def _top_risk(risk: dict[str, Any]) -> Optional[dict[str, Any]]:
         return None
     top = max(classes, key=lambda c: c.get("probability", 0))
     return {"name": top.get("name"), "probability": top.get("probability")}
+
+
+def _trajectory_summary(risk: dict[str, Any]) -> tuple[int, Optional[float]]:
+    """(count of worsening trajectory axes, trajectory_risk score 0-100 | None)."""
+    trajectory = risk.get("trajectory") or {}
+    worsening = sum(
+        1 for v in trajectory.values() if isinstance(v, dict) and v.get("direction") == "worsening"
+    )
+    score100 = risk.get("score100") if isinstance(risk, dict) else None
+    traj = (score100 or {}).get("trajectory_risk") if isinstance(score100, dict) else None
+    traj_risk: Optional[float] = traj.get("value") if isinstance(traj, dict) else None
+    return worsening, traj_risk
 
 
 def get_device(device_id: str) -> Optional[dict[str, Any]]:

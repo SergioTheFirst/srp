@@ -38,7 +38,7 @@ def test_device_page_marks_unknown_domain(client):
     resp = client.get("/device/dx")
     assert resp.status_code == 200
     assert "UNKNOWN" in resp.text
-    assert "Доверие телеметрии" in resp.text
+    assert "Покрытие источников" in resp.text
 
 
 def test_device_page_shows_untrusted_banner(client):

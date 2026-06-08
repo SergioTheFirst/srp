@@ -1,129 +1,267 @@
 {% extends "base.html" %}
 {% block title %}Флот · SRP{% endblock %}
-{% block subtitle %}мониторинг в реальном времени{% endblock %}
+{% block subtitle %}живой мониторинг{% endblock %}
+
+{% block extra_head %}
+<style>
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.search {
+  flex: 1; min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 8px 13px;
+  font: 13px/1.4 inherit;
+  transition: border-color .15s;
+}
+.search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.1); }
+.search::placeholder { color: var(--muted); }
+.live-indicator { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--good); animation: pulse-dot 2.5s infinite;
+}
+.dot.stale { background: var(--warn); animation: none; }
+@keyframes pulse-dot {
+  0%   { box-shadow: 0 0 0 0 rgba(16,217,122,.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(16,217,122,0); }
+  100% { box-shadow: 0 0 0 0 rgba(16,217,122,0); }
+}
+
+/* ── KPI strip ─────────────────────────────────────────────────────────── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px; margin-bottom: 24px;
+}
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 4px; padding: 11px 14px;
+  cursor: pointer; transition: all .12s ease;
+}
+.kpi:hover { background: var(--panel-2); border-left-color: var(--muted); }
+.kpi.active { border-left-color: var(--accent); background: var(--accent-dim); }
+.kpi[data-filter="at_risk"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kpi[data-filter="worsening"].active,
+.kpi[data-filter="stale"].active { border-left-color: var(--warn); background: var(--warn-dim); }
+.kpi[data-filter="unknown"].active,
+.kpi[data-filter="regressed"].active { border-left-color: var(--high); background: var(--high-dim); }
+.kpi[data-filter="expiring"].active,
+.kpi[data-filter="untrusted"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kn { font: 700 22px/1 var(--mono); margin-bottom: 4px; }
+.kn.bad  { color: var(--bad); }
+.kn.warn { color: var(--warn); }
+.kn.high { color: var(--high); }
+.kn.na   { color: var(--muted); }
+.kn.good { color: var(--good); }
+.kl { font: 600 9px/1.2 var(--mono); letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Site groups ───────────────────────────────────────────────────────── */
+.site { margin-bottom: 28px; }
+.site-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 2px; border-bottom: 1px solid var(--line-2); margin-bottom: 0;
+}
+.site-name { font: 600 11px/1 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Sortable headers ──────────────────────────────────────────────────── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+.sort-icon { margin-left: 3px; opacity: .35; font-style: normal; font-size: 9px; }
+th.sortable.asc .sort-icon::after  { content: "↑"; opacity: 1; }
+th.sortable.desc .sort-icon::after { content: "↓"; opacity: 1; }
+th.sortable:not(.asc):not(.desc) .sort-icon::after { content: "↕"; }
+th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
+
+/* ── Device rows ───────────────────────────────────────────────────────── */
+.devrow { transition: background .1s; }
+.devrow.stale-row { opacity: .55; filter: saturate(.6); }
+.devrow.escalated { animation: escalate-flash 2.5s ease-in-out 3; }
+@keyframes escalate-flash {
+  0%,100% { background: transparent; }
+  40%     { background: rgba(244,63,94,.1); }
+}
+
+/* ── Alerts / badges ───────────────────────────────────────────────────── */
+.alerts { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge {
+  font: 600 10px/1 var(--mono); padding: 3px 7px;
+  border-radius: 3px; border: 1px solid transparent;
+  white-space: nowrap; letter-spacing: .3px;
+}
+.badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.3); }
+.badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.3); }
+.badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.3); }
+.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.3); }
+.badge.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(51,78,104,.4); }
+
+/* ── Trend cell ────────────────────────────────────────────────────────── */
+.trend-cell { width: 52px; }
+.trend-up   { color: var(--bad);  font: 700 13px/1 var(--mono); }
+.trend-flat { color: var(--na);   font: 400 13px/1 var(--mono); }
+.trend-none { color: var(--line-2);font: 400 13px/1 var(--mono); }
+
+/* ── Ack button ────────────────────────────────────────────────────────── */
+.ackbtn {
+  font: 600 10px/1 inherit; padding: 5px 10px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.ackbtn:hover { border-color: var(--accent); color: var(--accent); }
+.ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
+</style>
+{% endblock %}
 
 {% block body %}
 <div class="toolbar">
-  <input id="q" class="search" type="search" placeholder="поиск: имя устройства, объект, id…" autocomplete="off" spellcheck="false">
-  <div class="live"><span class="dot" id="livedot"></span><span id="liveinfo" class="muted small">обновлено только что</span></div>
+  <input id="q" class="search" type="search"
+         placeholder="поиск: имя, объект, id…"
+         autocomplete="off" spellcheck="false">
+  <div class="live-indicator">
+    <span class="dot" id="livedot"></span>
+    <span id="liveinfo" class="muted small">обновлено только что</span>
+  </div>
 </div>
-
-<p class="muted small" style="margin:-6px 0 16px">Карточки сверху — фильтры (клик). Кнопка «квит.» — квитировать устройство с заметкой.</p>
 
 <div id="fleet">{% include "_fleet_body.html" %}</div>
 
-<style>
-  .toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
-  .search { flex: 1; min-width: 240px; background: var(--panel); border: 1px solid var(--line);
-            color: var(--text); border-radius: 8px; padding: 9px 12px; font: 14px/1.4 inherit; }
-  .search:focus { outline: none; border-color: var(--accent); }
-  .live { display: flex; align-items: center; gap: 8px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good);
-         animation: pulse 2.2s infinite; }
-  @keyframes pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,.5); }
-    70%  { box-shadow: 0 0 0 7px rgba(63,185,80,0); }
-    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
-  }
-  .kpis { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
-  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-         padding: 12px 16px; min-width: 104px; cursor: pointer;
-         transition: border-color .12s ease, transform .12s ease; }
-  .kpi:hover { transform: translateY(-1px); }
-  .kpi.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-  .kpi .kn { font: 700 24px/1 var(--mono); }
-  .kpi .kn.good { color: var(--good); } .kpi .kn.warn { color: var(--warn); }
-  .kpi .kn.high { color: var(--high); } .kpi .kn.bad { color: var(--bad); }
-  .kpi .kn.na { color: var(--na); }
-  .kpi .kl { color: var(--muted); font-size: 11px; text-transform: uppercase;
-             letter-spacing: .6px; margin-top: 4px; }
-  .site { margin-bottom: 22px; }
-  .site-head { display: flex; align-items: baseline; gap: 12px; padding: 6px 2px;
-               border-bottom: 1px solid var(--line); margin-bottom: 2px; }
-  .site-name { font-weight: 650; letter-spacing: .3px; }
-  .alerts { display: flex; flex-wrap: wrap; gap: 5px; }
-  .badge { font: 600 11px/1 var(--mono); padding: 3px 7px; border-radius: 5px;
-           border: 1px solid transparent; white-space: nowrap; }
-  .badge.good { color: var(--good); background: rgba(63,185,80,.10); border-color: rgba(63,185,80,.30); }
-  .badge.warn { color: var(--warn); background: rgba(210,153,34,.10); border-color: rgba(210,153,34,.30); }
-  .badge.high { color: var(--high); background: rgba(219,109,40,.12); border-color: rgba(219,109,40,.35); }
-  .badge.bad  { color: var(--bad);  background: rgba(248,81,73,.12);  border-color: rgba(248,81,73,.35); }
-  .badge.na   { color: var(--na);   background: rgba(110,118,129,.12); border-color: rgba(110,118,129,.30); }
-  .ackbtn { font: 600 11px/1 inherit; padding: 5px 9px; border-radius: 6px; cursor: pointer;
-            background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
-  .ackbtn:hover { border-color: var(--accent); color: var(--text); }
-  .ackbtn.acked { color: var(--good); border-color: rgba(63,185,80,.4); }
-</style>
-
 <script>
 (function () {
-  "use strict";
-  var POLL_MS = 12000;
-  var fleet = document.getElementById("fleet");
-  var q = document.getElementById("q");
-  var liveinfo = document.getElementById("liveinfo");
-  var activeFilter = null;
-  var lastUpdate = Date.now();
+"use strict";
+var POLL_MS = 12000;
+var fleet = document.getElementById("fleet");
+var q = document.getElementById("q");
+var liveinfo = document.getElementById("liveinfo");
+var livedot  = document.getElementById("livedot");
+var activeFilter = null;
+var lastUpdate = Date.now();
+var prevRisk = {};  // device_id → risk_exposure snapshot
 
-  function applyFilter() {
-    var query = (q.value || "").trim().toLowerCase();
-    fleet.querySelectorAll(".site").forEach(function (site) {
-      var visible = 0;
-      site.querySelectorAll(".devrow").forEach(function (row) {
-        var text = row.getAttribute("data-text") || "";
-        var flags = (row.getAttribute("data-flags") || "").split(" ");
-        var okText = !query || text.indexOf(query) !== -1;
-        var okFlag = !activeFilter || activeFilter === "all" || flags.indexOf(activeFilter) !== -1;
-        var show = okText && okFlag;
-        row.style.display = show ? "" : "none";
-        if (show) visible++;
-      });
-      site.style.display = visible ? "" : "none";
-    });
-    fleet.querySelectorAll(".kpi").forEach(function (k) {
-      k.classList.toggle("active", k.getAttribute("data-filter") === activeFilter);
-    });
-  }
-
-  function refresh() {
-    fetch("/fleet/fragment").then(function (r) {
-      return r.ok ? r.text() : null;
-    }).then(function (html) {
-      if (html === null) return;
-      fleet.innerHTML = html;
-      lastUpdate = Date.now();
-      applyFilter();
-    }).catch(function () { /* keep last good view on transient error */ });
-  }
-
-  fleet.addEventListener("click", function (e) {
-    var kpi = e.target.closest(".kpi[data-filter]");
-    if (kpi) {
-      var f = kpi.getAttribute("data-filter");
-      activeFilter = (f === "all" || activeFilter === f) ? null : f;
-      applyFilter();
-      return;
-    }
-    var ack = e.target.closest(".ackbtn");
-    if (ack) {
-      e.preventDefault();
-      var id = ack.getAttribute("data-id");
-      var note = window.prompt("Квитирование — заметка (необязательно):", "");
-      if (note === null) return;
-      fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: note })
-      }).then(refresh).catch(function () {});
+// ── Persistence of previous risk levels (newly-escalated detection) ──────
+function loadPrevRisk() {
+  try { var s = localStorage.getItem("srp_risk"); if (s) prevRisk = JSON.parse(s); }
+  catch (e) { prevRisk = {}; }
+}
+function savePrevRisk(cur) {
+  try { localStorage.setItem("srp_risk", JSON.stringify(cur)); } catch (e) {}
+}
+function markEscalated() {
+  var cur = {};
+  fleet.querySelectorAll(".devrow[data-id]").forEach(function (row) {
+    var id   = row.getAttribute("data-id");
+    var risk = parseFloat(row.getAttribute("data-risk") || "0");
+    cur[id] = risk;
+    if (prevRisk[id] !== undefined && prevRisk[id] < 50 && risk >= 50) {
+      row.classList.add("escalated");
     }
   });
+  savePrevRisk(cur);
+}
 
-  q.addEventListener("input", applyFilter);
-  setInterval(refresh, POLL_MS);
-  setInterval(function () {
-    var s = Math.round((Date.now() - lastUpdate) / 1000);
-    liveinfo.textContent = "обновлено " + (s < 2 ? "только что" : s + "с назад");
-  }, 1000);
+// ── Filter ────────────────────────────────────────────────────────────────
+function applyFilter() {
+  var query = (q.value || "").trim().toLowerCase();
+  fleet.querySelectorAll(".site").forEach(function (site) {
+    var visible = 0;
+    site.querySelectorAll(".devrow").forEach(function (row) {
+      var text  = row.getAttribute("data-text") || "";
+      var flags = (row.getAttribute("data-flags") || "").split(" ");
+      var okText = !query || text.indexOf(query) !== -1;
+      var okFlag = !activeFilter || activeFilter === "all" || flags.indexOf(activeFilter) !== -1;
+      var show = okText && okFlag;
+      row.style.display = show ? "" : "none";
+      if (show) visible++;
+    });
+    site.style.display = visible ? "" : "none";
+  });
+  fleet.querySelectorAll(".kpi[data-filter]").forEach(function (k) {
+    k.classList.toggle("active", k.getAttribute("data-filter") === activeFilter);
+  });
+}
+
+// ── Column sort ───────────────────────────────────────────────────────────
+function makeSortable() {
+  fleet.querySelectorAll("th.sortable").forEach(function (th) {
+    th.addEventListener("click", function () {
+      var table = th.closest("table");
+      var col   = parseInt(th.getAttribute("data-col"), 10);
+      var goAsc = th.classList.contains("asc") ? false :
+                  th.classList.contains("desc") ? null : true;
+      table.querySelectorAll("th.sortable").forEach(function (t) {
+        t.classList.remove("asc", "desc");
+      });
+      if (goAsc === null) return;
+      th.classList.add(goAsc ? "asc" : "desc");
+      var tbody = table.querySelector("tbody");
+      var rows  = Array.from(tbody.querySelectorAll("tr.devrow"));
+      rows.sort(function (a, b) {
+        var tds = function (r) { return r.querySelectorAll("td"); };
+        var av  = parseFloat(tds(a)[col].getAttribute("data-val") || "0") || 0;
+        var bv  = parseFloat(tds(b)[col].getAttribute("data-val") || "0") || 0;
+        return goAsc ? av - bv : bv - av;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────
+function refresh() {
+  fetch("/fleet/fragment").then(function (r) {
+    return r.ok ? r.text() : null;
+  }).then(function (html) {
+    if (html === null) return;
+    fleet.innerHTML = html;
+    lastUpdate = Date.now();
+    applyFilter();
+    markEscalated();
+    makeSortable();
+  }).catch(function () {});
+}
+
+// ── KPI click + ack (delegated) ───────────────────────────────────────────
+fleet.addEventListener("click", function (e) {
+  var kpi = e.target.closest(".kpi[data-filter]");
+  if (kpi) {
+    var f = kpi.getAttribute("data-filter");
+    activeFilter = (f === "all" || activeFilter === f) ? null : f;
+    applyFilter();
+    return;
+  }
+  var ack = e.target.closest(".ackbtn");
+  if (ack) {
+    e.preventDefault();
+    var id   = ack.getAttribute("data-id");
+    var note = window.prompt("Квитирование — заметка (необязательно):", "");
+    if (note === null) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: note })
+    }).then(refresh).catch(function () {});
+  }
+});
+
+q.addEventListener("input", applyFilter);
+setInterval(refresh, POLL_MS);
+setInterval(function () {
+  var s = Math.round((Date.now() - lastUpdate) / 1000);
+  if (s > 20) livedot.classList.add("stale"); else livedot.classList.remove("stale");
+  liveinfo.textContent = s < 2 ? "обновлено только что" : "обновлено " + s + "с назад";
+}, 1000);
+
+// Init
+loadPrevRisk();
+markEscalated();
+makeSortable();
 })();
 </script>
 {% endblock %}

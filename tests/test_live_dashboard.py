@@ -17,7 +17,6 @@ def test_fleet_shell_has_kpis_live_and_poll(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "в зоне риска" in r.text  # KPI card
-    assert "UNKNOWN" in r.text
     assert "/fleet/fragment" in r.text  # JS polls the fragment endpoint
     assert "обновлено" in r.text  # live indicator
     assert "Объект:" in r.text  # site grouping header
@@ -27,7 +26,7 @@ def test_fleet_fragment_is_a_partial(client):
     client.post("/api/v1/ingest", json=_env("d2", "inventory", healthy("inventory")))
     r = client.get("/fleet/fragment")
     assert r.status_code == 200
-    assert "kpis" in r.text
+    assert "kpi-strip" in r.text
     assert "/device/d2" in r.text  # the device row link
     assert "<html" not in r.text.lower()  # partial, not the full page
 

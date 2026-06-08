@@ -97,6 +97,8 @@ def _device_flags(d: dict) -> list[str]:
     flags = []
     if (d.get("risk_exposure") or 0) >= 50:
         flags.append("at_risk")
+    if d.get("worsening_count"):
+        flags.append("worsening")
     if d.get("unknown_domains"):
         flags.append("unknown")
     if d.get("regressed_count"):
@@ -114,6 +116,7 @@ def _fleet_summary(devices: list) -> dict:
     return {
         "total": len(devices),
         "at_risk": sum(1 for d in devices if (d.get("risk_exposure") or 0) >= 50),
+        "worsening": sum(1 for d in devices if d.get("worsening_count")),
         "unknown": sum(1 for d in devices if d.get("unknown_domains")),
         "regressed": sum(1 for d in devices if d.get("regressed_count")),
         "stale": sum(1 for d in devices if d.get("stale")),
@@ -161,4 +164,10 @@ def device(request: Request, device_id: str):
     d = db.get_device(device_id)
     if d is None:
         raise HTTPException(status_code=404, detail="device not found")
+    age = db.age_seconds(d.get("last_seen"))
+    d = {
+        **d,
+        "last_seen_age_sec": age,
+        "stale": age is not None and age > db.STALE_AFTER_SEC,
+    }
     return _TEMPLATES.TemplateResponse(request, "device.html", {"d": d})
