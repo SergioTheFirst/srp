@@ -110,11 +110,11 @@ def _storage(inv, hist, hb, age) -> dict[str, Any]:
     if io_err > 0:
         f.append({"label": f"Накопленные ошибки I/O: {io_err}", "weight": 2.6})
     if max_poh > 40000:
-        f.append({"label": f"Наработка диска {max_poh/1000:.0f}k ч", "weight": 0.8})
+        f.append({"label": f"Наработка диска {max_poh / 1000:.0f}k ч", "weight": 0.8})
 
     lat = _num(hb, "disk_read_sec")
     if lat is not None and lat > 0.03:
-        f.append({"label": f"Высокая задержка чтения ({lat*1000:.0f} мс)", "weight": 0.9})
+        f.append({"label": f"Высокая задержка чтения ({lat * 1000:.0f} мс)", "weight": 0.9})
     return _finish("storage", _BASE_PRIOR["storage"], f)
 
 
@@ -144,10 +144,17 @@ def _power_thermal(hist, hb) -> dict[str, Any]:
     f: list[Factor] = []
     kp = _num(hist, "kernel_power_41_30d")
     if kp:
-        f.append({"label": f"{int(kp)}x внезапное отключение (Kernel-Power 41)", "weight": min(kp * 0.6, 2.5)})
+        f.append(
+            {
+                "label": f"{int(kp)}x внезапное отключение (Kernel-Power 41)",
+                "weight": min(kp * 0.6, 2.5),
+            }
+        )
     whea = _num(hist, "whea_errors_30d")
     if whea:
-        f.append({"label": f"{int(whea)}x аппаратная ошибка WHEA", "weight": 2.2 if whea > 10 else 1.5})
+        f.append(
+            {"label": f"{int(whea)}x аппаратная ошибка WHEA", "weight": 2.2 if whea > 10 else 1.5}
+        )
     perf = _num(hb, "cpu_perf_pct")
     if perf is not None:
         if perf < 85:
@@ -193,7 +200,9 @@ def _stability(inv, hist) -> dict[str, Any]:
         f.append({"label": "Ожидается перезагрузка (обновления зависли)", "weight": 0.4})
     dpc = _num(inv, "driver_problem_count")
     if dpc:
-        f.append({"label": f"{int(dpc)} устройство(а) с ошибкой драйвера", "weight": min(dpc * 0.6, 1.8)})
+        f.append(
+            {"label": f"{int(dpc)} устройство(а) с ошибкой драйвера", "weight": min(dpc * 0.6, 1.8)}
+        )
     return _finish("stability", _BASE_PRIOR["stability"], f)
 
 

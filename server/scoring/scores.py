@@ -104,18 +104,18 @@ def _performance(hb: Optional[dict], hist: Optional[dict]) -> tuple[float, list[
         lat = _num(hb, key)
         if lat is not None:
             if lat > 0.05:
-                hit(f"High disk {label} latency ({lat*1000:.0f} ms)", -15)
+                hit(f"High disk {label} latency ({lat * 1000:.0f} ms)", -15)
             elif lat > 0.020:
-                hit(f"Elevated disk {label} latency ({lat*1000:.0f} ms)", -8)
+                hit(f"Elevated disk {label} latency ({lat * 1000:.0f} ms)", -8)
 
     boot = _num(hist, "avg_boot_ms")
     if boot is not None:
         if boot > 90000:
-            hit(f"Very slow boot ({boot/1000:.0f}s)", -15)
+            hit(f"Very slow boot ({boot / 1000:.0f}s)", -15)
         elif boot > 60000:
-            hit(f"Slow boot ({boot/1000:.0f}s)", -10)
+            hit(f"Slow boot ({boot / 1000:.0f}s)", -10)
         elif boot > 40000:
-            hit(f"Boot above target ({boot/1000:.0f}s)", -5)
+            hit(f"Boot above target ({boot / 1000:.0f}s)", -5)
 
     return _clamp(val), factors
 
@@ -190,9 +190,9 @@ def _wear(inv: Optional[dict], hist: Optional[dict]) -> tuple[float, list[Factor
         )
     if max_poh is not None:
         if max_poh > 40000:
-            hit(f"Drive power-on {max_poh/1000:.0f}k h", -15)
+            hit(f"Drive power-on {max_poh / 1000:.0f}k h", -15)
         elif max_poh > 25000:
-            hit(f"Drive power-on {max_poh/1000:.0f}k h", -8)
+            hit(f"Drive power-on {max_poh / 1000:.0f}k h", -8)
 
     bat = (hist or {}).get("battery")
     if bat and bat.get("present") and bat.get("wear_pct") is not None:

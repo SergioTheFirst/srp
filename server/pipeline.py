@@ -15,6 +15,7 @@ from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, pa
 from server import db
 from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
+from server.analytics.os_degradation import compute_os_degradation_risk
 from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
@@ -419,6 +420,13 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
     disk_fill_risk = compute_disk_fill_risk(hb_series, events, device_trust=device_trust)
     risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
+
+    # W4.2: heuristic OS-degradation engine (RSI-led; crash counts confirm; boot-rot
+    # independent). Current-state verdict on OS stability. Pending-reboot state is not
+    # collected (noted as blind spot). Same gating (untrusted -> withheld; no RSI and
+    # no crash counts -> UNKNOWN). Boot-time *slope* lives in the trajectory engine.
+    os_degradation_risk = compute_os_degradation_risk(hist, device_trust=device_trust)
+    risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
 
     scores = {
         "performance": legacy_value(score100["performance"]),
