@@ -162,6 +162,23 @@
 {% endif %}
 {% endif %}
 
+{% set fleet = (s.risk.score100 or {}).get("fleet_anomaly_risk") %}
+{% if fleet %}
+<h2>Аномалии флота</h2>
+<p class="small">
+  {% if fleet.value is none %}
+    <span class="chip na">UNKNOWN</span> <span class="muted">{{ fleet.reason or "недостаточно устройств с той же моделью для сравнения" }}</span>
+  {% else %}
+    <span class="chip {{ risk_color(fleet.value) }}">флот-аномалия {{ "%.0f"|format(fleet.value) }}</span>
+    <span class="muted">уверенность: {{ fleet.confidence }} · выше = больше признаков fleet-события (патч/электрика)</span>
+  {% endif %}
+</p>
+{% if fleet.factors %}<ul class="small">{% for f in fleet.factors %}<li>{{ f.label }}</li>{% endfor %}</ul>{% endif %}
+{% if fleet.value is not none and fleet.missing_evidence %}
+<p class="small muted">⚠ не видно: {{ fleet.missing_evidence | join("; ") }}</p>
+{% endif %}
+{% endif %}
+
 <h2>Риск по классам отказа</h2>
 {% for c in s.risk.classes %}
 <div class="riskrow">
