@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Пайплайн · SRP{% endblock %}
+{% block subtitle %}здоровье сервера{% endblock %}
+
+{% block extra_head %}
+<style>
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px; margin-bottom: 28px;
+}
+.metric-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 5px; padding: 16px 18px;
+}
+.metric-card.good { border-left-color: var(--good); }
+.metric-card.warn { border-left-color: var(--warn); }
+.metric-card.bad  { border-left-color: var(--bad); }
+.metric-card.na   { border-left-color: var(--na); }
+.mc-label {
+  font: 600 9px/1 var(--mono); letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+}
+.mc-rows { display: flex; flex-direction: column; gap: 7px; }
+.mc-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; font-size: 13px;
+}
+.mc-key { color: var(--muted); font-size: 12px; }
+.mc-val { font: 700 15px/1 var(--mono); }
+.mc-val.good { color: var(--good); }
+.mc-val.warn { color: var(--warn); }
+.mc-val.bad  { color: var(--bad); }
+.mc-val.na   { color: var(--muted); }
+.mc-val.accent { color: var(--accent); }
+.db-table { max-width: 480px; }
+.refresh-note { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+</style>
+<meta http-equiv="refresh" content="15">
+{% endblock %}
+
+{% block body %}
+{% set fleet = m.fleet %}
+{% set ingest = m.ingest %}
+{% set src = m.source_health %}
+{% set scores = m.scores %}
+{% set rows = m.table_rows %}
+
+<p class="refresh-note mono">
+  снимок {{ m.ts[:19] }}Z · авто-обновление 15с
+</p>
+
+{# ── Fleet ──────────────────────────────────────────────────────────────── #}
+<div class="section-label">Флот</div>
+<div class="metrics-grid">
+  <div class="metric-card {{ 'warn' if fleet.stale else 'good' }}">
+    <div class="mc-label">Устройства</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">всего</span>
+        <span class="mc-val accent">{{ fleet.total }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">не на связи (>15м)</span>
+        <span class="mc-val {{ 'warn' if fleet.stale else 'good' }}">{{ fleet.stale }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">в зоне риска (≥50)</span>
+        <span class="mc-val {{ 'bad' if fleet.at_risk else 'good' }}">{{ fleet.at_risk }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">со скорами</span>
+        <span class="mc-val {{ 'warn' if fleet.scored < fleet.total else 'good' }}">{{ fleet.scored }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Scores freshness ──────────────────────────────────────────────────── #}
+  {% set age = scores.newest_age_sec %}
+  {% set age_color = 'bad' if age is none or age > 3600 else ('warn' if age > 900 else 'good') %}
+  <div class="metric-card {{ age_color }}">
+    <div class="mc-label">Скоры</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">последний скор</span>
+        <span class="mc-val {{ age_color }}">
+          {%- if age is none %}—
+          {%- elif age < 90 %}{{ age }}с назад
+          {%- elif age < 5400 %}{{ (age // 60) }}м назад
+          {%- else %}{{ (age // 3600) }}ч назад{% endif -%}
+        </span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">ts</span>
+        <span class="mc-val na" style="font-size:11px">{{ (scores.newest_ts or "—")[:19] }}</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Ingest rate ─────────────────────────────────────────────────────────── #}
+<div class="section-label">Ingest (heartbeats)</div>
+<div class="metrics-grid">
+  <div class="metric-card {{ 'good' if ingest.heartbeats_5m > 0 else 'na' }}">
+    <div class="mc-label">Активность</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">heartbeats за 5м</span>
+        <span class="mc-val {{ 'accent' if ingest.heartbeats_5m > 0 else 'na' }}">{{ ingest.heartbeats_5m }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">heartbeats за 1ч</span>
+        <span class="mc-val {{ 'accent' if ingest.heartbeats_1h > 0 else 'na' }}">{{ ingest.heartbeats_1h }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">historical за 5м</span>
+        <span class="mc-val {{ 'accent' if ingest.historical_5m > 0 else 'na' }}">{{ ingest.historical_5m }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">historical за 1ч</span>
+        <span class="mc-val {{ 'accent' if ingest.historical_1h > 0 else 'na' }}">{{ ingest.historical_1h }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Source health ─────────────────────────────────────────────────────── #}
+  {% set total_src = src.gate_pass + src.gate_fail + src.not_applicable %}
+  {% set src_color = 'bad' if src.gate_fail > src.gate_pass else ('warn' if src.gate_fail > 0 else 'good') %}
+  <div class="metric-card {{ src_color if total_src > 0 else 'na' }}">
+    <div class="mc-label">Здоровье источников (все устройства)</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">gate pass (ok/degraded)</span>
+        <span class="mc-val good">{{ src.gate_pass }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">gate fail (blocked/stale/suspect)</span>
+        <span class="mc-val {{ 'bad' if src.gate_fail > 0 else 'good' }}">{{ src.gate_fail }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">not applicable</span>
+        <span class="mc-val na">{{ src.not_applicable }}</span>
+      </div>
+      {% if total_src > 0 %}
+      <div class="mc-row">
+        <span class="mc-key">покрытие pass</span>
+        <span class="mc-val {{ 'good' if src.gate_pass / total_src >= 0.8 else 'warn' }}">
+          {{ "%.0f"|format(src.gate_pass / total_src * 100) }}%
+        </span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── DB sizes ────────────────────────────────────────────────────────────── #}
+<div class="section-label">Размер БД</div>
+<table class="db-table">
+  <thead>
+    <tr><th>Таблица</th><th>Строк</th></tr>
+  </thead>
+  <tbody>
+  {% for tbl, n in rows.items() %}
+  <tr>
+    <td class="mono small">{{ tbl }}</td>
+    <td class="mono">
+      <span class="{{ 'warn' if n > 50000 else 'good' if n > 0 else 'na' }}">
+        {{ "{:,}".format(n).replace(",", " ") }}
+      </span>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

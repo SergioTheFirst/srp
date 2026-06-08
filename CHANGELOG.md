@@ -42,6 +42,8 @@
 
 ### Added
 
+- **§6 Pipeline health**: эндпоинт `GET /api/v1/metrics` (JSON) и страница `/pipeline` (HTML, авто-обновление 15с) — флот-счётчики, скорость ingest (heartbeats/historical за 5м и 1ч), здоровье источников (gate pass/fail/n-a), свежесть последнего скора, размеры таблиц БД. Навигационная ссылка «пайплайн» добавлена в шапку. 16 новых интеграционных тестов, покрытие 93.5%.
+
 - **§5 Дашборд — полный рефакторинг** (high-contrast cyber terminal UI):
   - Новый дизайн с токенами (navy-black bg, electric cyan accent, neon статусы, JetBrains Mono).
   - KPI-полоса: 8 фильтруемых карточек включая новый «тренд ↑» (`worsening_count`).

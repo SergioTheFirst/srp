@@ -1021,3 +1021,90 @@ def get_source_trusts(device_id: str) -> dict[str, dict]:
         }
         for r in rows
     }
+
+
+_METRIC_TABLES = ("devices", "heartbeats", "historical", "events", "scores")
+# Table names are module constants (never user-supplied) — SQL injection not possible.
+_GATE_FAIL_STATES = frozenset({"unavailable", "stale", "suspect"})
+_GATE_PASS_STATES = frozenset({"ok", "degraded"})
+
+
+def get_pipeline_metrics() -> dict[str, Any]:
+    """Single-pass pipeline health stats for /api/v1/metrics and /pipeline page."""
+    with _connect() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM devices WHERE last_seen < datetime('now', ?)",
+            (f"-{_STALE_AFTER_SEC} seconds",),
+        ).fetchone()[0]
+
+        score_row = conn.execute("SELECT COUNT(DISTINCT device_id), MAX(ts) FROM scores").fetchone()
+        scored: int = score_row[0]
+        newest_score_ts: Optional[str] = score_row[1]
+
+        at_risk = conn.execute(
+            """
+            SELECT COUNT(*) FROM scores s
+            JOIN (
+              SELECT device_id, MAX(id) AS max_id FROM scores GROUP BY device_id
+            ) m ON s.device_id = m.device_id AND s.id = m.max_id
+            WHERE s.risk_exposure >= 50
+            """
+        ).fetchone()[0]
+
+        # Ingest activity via server-stamped received_at (W0.2)
+        hb_5m = conn.execute(
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= datetime('now', '-5 minutes')"
+        ).fetchone()[0]
+        hb_1h = conn.execute(
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= datetime('now', '-1 hour')"
+        ).fetchone()[0]
+        hist_5m = conn.execute(
+            "SELECT COUNT(*) FROM historical WHERE received_at >= datetime('now', '-5 minutes')"
+        ).fetchone()[0]
+        hist_1h = conn.execute(
+            "SELECT COUNT(*) FROM historical WHERE received_at >= datetime('now', '-1 hour')"
+        ).fetchone()[0]
+
+        # Source health breakdown from per-(device, source) trust table
+        src_rows = conn.execute(
+            "SELECT state, COUNT(*) FROM device_source_trust GROUP BY state"
+        ).fetchall()
+
+        # Lightweight row counts for storage awareness
+        table_rows: dict[str, int] = {}
+        for tbl in _METRIC_TABLES:
+            table_rows[tbl] = conn.execute(
+                f"SELECT COUNT(*) FROM {tbl}"  # nosec B608 — constant table name
+            ).fetchone()[0]
+
+    src_by_state: dict[str, int] = {r[0]: r[1] for r in src_rows}
+    gate_pass = sum(src_by_state.get(s, 0) for s in _GATE_PASS_STATES)
+    gate_fail = sum(src_by_state.get(s, 0) for s in _GATE_FAIL_STATES)
+    not_applicable = src_by_state.get("not_applicable", 0)
+
+    return {
+        "ts": _now_iso(),
+        "fleet": {
+            "total": total,
+            "stale": stale,
+            "at_risk": at_risk,
+            "scored": scored,
+        },
+        "ingest": {
+            "heartbeats_5m": hb_5m,
+            "heartbeats_1h": hb_1h,
+            "historical_5m": hist_5m,
+            "historical_1h": hist_1h,
+        },
+        "source_health": {
+            "gate_pass": gate_pass,
+            "gate_fail": gate_fail,
+            "not_applicable": not_applicable,
+        },
+        "scores": {
+            "newest_age_sec": _age_seconds(newest_score_ts),
+            "newest_ts": newest_score_ts,
+        },
+        "table_rows": table_rows,
+    }

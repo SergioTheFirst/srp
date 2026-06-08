@@ -159,6 +159,12 @@ def fleet_fragment(request: Request):
     )
 
 
+@router.get("/pipeline", response_class=HTMLResponse)
+def pipeline_health(request: Request):
+    """§6 pipeline health page — ingest rate, source health, DB sizes."""
+    return _TEMPLATES.TemplateResponse(request, "pipeline.html", {"m": db.get_pipeline_metrics()})
+
+
 @router.get("/device/{device_id}", response_class=HTMLResponse)
 def device(request: Request, device_id: str):
     d = db.get_device(device_id)

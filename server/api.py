@@ -65,3 +65,9 @@ def ack_device(device_id: str, body: AckBody) -> dict:
         raise HTTPException(status_code=404, detail="device not found")
     db.set_ack(device_id, body.note, utcnow_iso())
     return {"status": "ok"}
+
+
+@router.get("/metrics")
+def metrics() -> dict:
+    """Pipeline health snapshot: fleet counts, ingest rate, source health, DB sizes."""
+    return db.get_pipeline_metrics()
