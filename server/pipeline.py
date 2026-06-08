@@ -350,29 +350,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         return None
 
     day1 = compute_day1_scores(inv, hist, hb)
-    risk = compute_risk(inv, hist, hb)
-    risk_block: dict[str, Any] = {
-        "classes": risk["classes"],
-        "top": risk["top"],
-        "overall": risk["overall"],
-        "day1_factors": day1["factors"],
-    }
 
     # 3c: gate the explainable risk by the per-domain trust computed on ingest.
     trust = db.get_trust(device_id)
     device_trust = "ok"
     if trust:
-        domains = trust.get("domains", {})
-        _annotate_class_trust(risk["classes"], domains)
-        risk_block["domains"] = domains
         device_trust = _device_trust(trust)
-        risk_block["device_trust"] = device_trust
-        if device_trust == "untrusted":
-            for c in risk["classes"]:
-                c["trust"] = "unknown"
-        regressed = [s for s, v in trust.get("sources", {}).items() if v.get("regressed")]
-        if regressed:
-            risk_block["regressed_sources"] = sorted(regressed)
 
     # W0.5: wrap the day-1 numbers in the confidence-gated Score100 envelope.
     # Missing/untrusted telemetry must not read as healthy (contract: UNKNOWN over
@@ -383,7 +366,6 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     score100 = compute_day1_score100(
         day1, inv, hist, hb, trust=trust, device_trust=device_trust, clock_drift=clock_drift
     )
-    risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
 
     # W4.1: deterministic trajectory (slopes + ETA) over the append-only series.
     # Computed here (single source of truth) so the stored blob, dashboard and the
@@ -393,51 +375,60 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     hb_series = db.get_recent_heartbeats(device_id, limit=_TREND_HISTORY_LIMIT)
     trends = compute_trends(hist_series, hb_series)
     trajectory = trajectory_risk_score(trends, device_trust=device_trust)
-    risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
-    risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
 
-    # W4.2: deterministic storage-health engine (SMART-led; latency only confirms).
-    # Current-state verdict over the latest reading -- the wear *trend*/ETA lives in
-    # the trajectory engine above. Same gating (untrusted -> withheld, no SMART ->
-    # UNKNOWN); surfaced alongside trajectory in the score blob and /diagnostics.
+    # W4.2: domain engines — computed before the Bayesian prioritizer so their
+    # outputs can serve as primary inputs (D5 thin prioritizer design, W4.3).
     storage_risk = compute_storage_risk(hist, hb, device_trust=device_trust)
-    risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
-
-    # W4.2: deterministic battery-health engine (capacity fade leads; cycles only
-    # grade). Current-state verdict over the latest reading -- the wear *trend*/ETA
-    # lives in the trajectory engine above. Same gating (untrusted -> withheld; no
-    # battery -> not applicable; present-but-no-metric -> UNKNOWN); confidence caps
-    # at medium because WMI cannot see swelling (a clean capacity reading is not a
-    # safety clearance). Surfaced alongside storage in the blob and /diagnostics.
     battery_risk = compute_battery_risk(hist, device_trust=device_trust)
-    risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
-
-    # W4.2: deterministic disk-fill / servicing-collapse engine (current-state).
-    # Free-space risk grades on the *median* recent level so a Windows-Update cleanup
-    # rebound (one transient dip) does not alarm while a persistently-full drive does;
-    # WindowsUpdateClient failures confirm/amplify (or, on a healthy disk, flag a real
-    # "not patching" risk). Same gating (untrusted -> withheld; no data -> UNKNOWN).
-    # The depletion *slope/ETA* lives in the trajectory engine above, not here.
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
     disk_fill_risk = compute_disk_fill_risk(hb_series, events, device_trust=device_trust)
-    risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
-
-    # W4.2: heuristic OS-degradation engine (RSI-led; crash counts confirm; boot-rot
-    # independent). Current-state verdict on OS stability. Pending-reboot state is not
-    # collected (noted as blind spot). Same gating (untrusted -> withheld; no RSI and
-    # no crash counts -> UNKNOWN). Boot-time *slope* lives in the trajectory engine.
     os_degradation_risk = compute_os_degradation_risk(hist, device_trust=device_trust)
-    risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
-
-    # W4.2: fleet-anomaly engine (final domain engine). Detects coordinated fleet events
-    # (bad patch/driver rollout = elevated cohort BSOD rate; site-wide power cluster =
-    # elevated site KP41 rate) that would otherwise generate false individual hardware
-    # alerts. Cohort key = model; site key = site_code. Single device → UNKNOWN (nothing
-    # to compare against). Same gating: untrusted → withheld.
     _model, _site = db.get_device_model_site(device_id)
     cohort_stats = db.get_fleet_cohort_stats(_model, _site)
     fleet_anomaly_risk = compute_fleet_anomaly_risk(cohort_stats, device_trust=device_trust)
+
+    # W4.3: thin Bayesian prioritizer over domain engines (D5). domain_values feeds
+    # the W4.2 outputs (0..100) as supplementary log-odds factors into each class so
+    # the prioritizer reads from the domain layer rather than re-deriving telemetry.
+    # KP41 demoted to conditional enhancer; WHEA removed from power_thermal + memory
+    # (D6). overall now on 0..100 scale consistent with risk_exposure and W4.2 axes.
+    # Only keys consumed by _domain_lo() calls inside bayesian.py class functions.
+    # trajectory_risk and fleet_anomaly_risk are not yet wired into any Bayesian class.
+    domain_values: dict[str, Optional[float]] = {
+        "storage_risk": storage_risk.value,
+        "battery_risk": battery_risk.value,
+        "os_degradation_risk": os_degradation_risk.value,
+        "disk_fill_risk": disk_fill_risk.value,
+    }
+    risk = compute_risk(inv, hist, hb, domain_values=domain_values)
+
+    risk_block: dict[str, Any] = {
+        "classes": risk["classes"],
+        "top": risk["top"],
+        "overall": risk["overall"],
+        "day1_factors": day1["factors"],
+    }
+
+    if trust:
+        domains = trust.get("domains", {})
+        _annotate_class_trust(risk["classes"], domains)
+        risk_block["domains"] = domains
+        risk_block["device_trust"] = device_trust
+        if device_trust == "untrusted":
+            for c in risk["classes"]:
+                c["trust"] = "unknown"
+        regressed = [s for s, v in trust.get("sources", {}).items() if v.get("regressed")]
+        if regressed:
+            risk_block["regressed_sources"] = sorted(regressed)
+
+    risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
+    risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
+    risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
+    risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
+    risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
+    risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
     risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)
+    risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
 
     scores = {
         "performance": legacy_value(score100["performance"]),

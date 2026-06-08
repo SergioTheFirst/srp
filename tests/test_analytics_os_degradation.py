@@ -206,9 +206,8 @@ def test_app_crashes_do_not_inflate_score_when_other_signals_present():
 # --------------------------------------------------------------------------- #
 def test_very_slow_boot_adds_risk():
     # 3-minute boot is a strong degradation signal.
-    no_boot = compute_os_degradation_risk(_hist(avg_boot_ms=None))
     slow_boot = compute_os_degradation_risk(_hist(avg_boot_ms=180_000))
-    # slow boot should add meaningful risk vs no boot data (or vs fast boot).
+    # slow boot should add meaningful risk vs fast boot.
     fast_boot = compute_os_degradation_risk(_hist(avg_boot_ms=20_000))
     assert slow_boot.value > fast_boot.value
 
