@@ -216,6 +216,16 @@ def envelope(device_id: str, msg_type: str, payload: dict[str, Any]) -> dict[str
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _reset_ingest_guards() -> Iterator[None]:
+    """Reset in-memory ingest-guards state before every test (rate-limit + dedup)."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    yield
+    reset_guards()
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
     """A TestClient backed by a throwaway SQLite DB (fresh per test).

@@ -217,6 +217,12 @@ class Envelope(_Base):
     # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).
     site_code: Optional[str] = None
     site_name: Optional[str] = None
+    # P1 transport hardening: client-generated UUID4.hex for server-side dedup
+    # of retried envelopes.  Additive optional; old agents that omit it are never
+    # rejected -- the server just skips dedup for keyless envelopes.
+    # max_length=64: UUID4.hex is 32 chars; cap prevents oversized keys from
+    # inflating the in-memory dedup dict before the 50k-entry trim fires.
+    idempotency_key: Optional[str] = Field(default=None, max_length=64)
 
 
 _PAYLOAD_MODELS: dict[str, type[_Base]] = {

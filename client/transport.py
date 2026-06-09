@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -29,6 +31,9 @@ AGENT_VERSION = "0.1.0"
 _MAX_BUFFER_LINES = 5000  # oldest dropped past this -- bound disk use
 _SEND_ATTEMPTS = 2  # quick in-process retries before buffering
 _RETRY_BACKOFF_SEC = 1.0
+# Extra random jitter added to retry sleep to prevent thundering herd when many
+# agents reconnect simultaneously after a server outage.
+_RETRY_JITTER_SEC = 2.0
 
 
 class Transport:
@@ -110,6 +115,10 @@ class Transport:
             # existing value rather than overwriting a known site with NULL.
             "site_code": self._cfg.site_code or None,
             "site_name": self._cfg.site_name or None,
+            # P1: client-generated idempotency key lets the server dedup retried
+            # envelopes. UUID4 hex = 32 chars, stable for the lifetime of this
+            # envelope object (buffered replays reuse the same key).
+            "idempotency_key": uuid.uuid4().hex,
         }
 
     def _deliver(self, envelope: dict[str, Any]) -> bool:
@@ -119,7 +128,8 @@ class Transport:
             if outcome in ("ok", "drop"):
                 return True
             if attempt < _SEND_ATTEMPTS:
-                time.sleep(_RETRY_BACKOFF_SEC)
+                # Jitter prevents thundering herd when many agents reconnect at once.
+                time.sleep(_RETRY_BACKOFF_SEC + random.uniform(0.0, _RETRY_JITTER_SEC))  # nosec B311 -- timing jitter is not a security primitive
         return False
 
     def _attempt(self, envelope: dict[str, Any]) -> str:

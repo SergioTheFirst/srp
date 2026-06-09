@@ -10,6 +10,7 @@ from shared.schema import Envelope, utcnow_iso
 
 from server import db
 from server.analytics.diagnostics import compute_diagnostics
+from server.ingest_guards import check_idempotency, check_rate_limit
 from server.pipeline import ingest_envelope
 
 router = APIRouter(prefix="/api/v1")
@@ -26,6 +27,10 @@ def ingest(env: Envelope, request: Request) -> dict:
     provided = request.headers.get("x-srp-token") or ""
     if expected and not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid or missing ingest token")
+    if not check_rate_limit(env.device_id):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    if not check_idempotency(env.idempotency_key):
+        return {"device_id": env.device_id, "msg_type": env.msg_type, "duplicate": True}
     try:
         return ingest_envelope(env)
     except ValueError as exc:

@@ -42,6 +42,13 @@
 
 ### Added
 
+- **P1 transport hardening** — защита от thundering herd, дублей и flood:
+  - Агент добавляет `idempotency_key` (UUID4.hex) в каждый конверт; сервер возвращает `duplicate:true` на повторную доставку без повторной записи в БД.
+  - Retry-backoff в агенте теперь включает случайный jitter `uniform(0, 2)` с — предотвращает одновременный шторм reconnect от всего флота.
+  - Новый middleware `_IngestBodySizeMiddleware`: запросы на `/api/v1/ingest` с `Content-Length > 512 KB` отклоняются с HTTP 413.
+  - Per-device rate-limit на `/api/v1/ingest`: более 30 запросов в 60 с от одного устройства → HTTP 429 (защита от DoS под глобальным lock rescoring).
+  - 14 новых тестов (`test_transport_hardening.py`), autouse-фикстура сброса guard-состояния в `conftest.py`.
+
 - **§6 Pipeline health**: эндпоинт `GET /api/v1/metrics` (JSON) и страница `/pipeline` (HTML, авто-обновление 15с) — флот-счётчики, скорость ingest (heartbeats/historical за 5м и 1ч), здоровье источников (gate pass/fail/n-a), свежесть последнего скора, размеры таблиц БД. Навигационная ссылка «пайплайн» добавлена в шапку. 16 новых интеграционных тестов, покрытие 93.5%.
 
 - **§5 Дашборд — полный рефакторинг** (high-contrast cyber terminal UI):
