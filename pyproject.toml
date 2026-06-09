@@ -50,9 +50,9 @@ ignore_missing_imports = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
-# The stdlib-only agent (client/) and the tests are excluded for now; the value
-# of type checking concentrates on the contract + server scoring logic.
-files = ["shared", "server"]
+# Tests are excluded (fixtures/patching patterns add noise without value there).
+# client/ is stdlib-only but fully typed and clean; included so regressions are caught.
+files = ["shared", "server", "client"]
 
 [tool.pydantic-mypy]
 init_typed = true

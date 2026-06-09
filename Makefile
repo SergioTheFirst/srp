@@ -11,7 +11,7 @@ help:
 	@echo "install    install runtime + dev dependencies"
 	@echo "lint       ruff lint (style, imports, likely bugs)"
 	@echo "format     ruff auto-format + autofix"
-	@echo "typecheck  mypy (shared + server)"
+	@echo "typecheck  mypy (shared + server + client)"
 	@echo "security   bandit static security scan"
 	@echo "test       pytest (quick)"
 	@echo "coverage   pytest with coverage gate (server + shared, fail_under 80)"
