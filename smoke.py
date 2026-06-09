@@ -143,6 +143,30 @@ def main() -> int:
             ("historical", HISTORICAL),
             ("heartbeat", HEARTBEAT),
             ("events", EVENTS),
+            (
+                "print_jobs",
+                {
+                    "jobs": [
+                        {
+                            "job_id": 1,
+                            "ts": "2026-06-09T10:00:00Z",
+                            "printer": "HP LaserJet",
+                            "pages": 4,
+                            "size_bytes": 8000,
+                            "user_name": "smoke-user",
+                        },
+                        {
+                            "job_id": 2,
+                            "ts": "2026-06-09T10:05:00Z",
+                            "printer": "HP LaserJet",
+                            "pages": 2,
+                            "size_bytes": 4000,
+                            "user_name": "smoke-user",
+                        },
+                    ],
+                    "window_from": None,
+                },
+            ),
         ):
             resp = client.post("/api/v1/ingest", json=_env(msg_type, payload))
             print(f"ingest {msg_type:10} -> HTTP {resp.status_code}")
@@ -162,11 +186,23 @@ def main() -> int:
 
         fleet = client.get("/")
         detail = client.get(f"/device/{DEVICE}")
-        print(f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}")
+        print_page = client.get("/print")
+        print(
+            f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}, print HTTP {print_page.status_code}"
+        )
         if fleet.status_code != 200:
             failures.append("fleet page did not render")
         if detail.status_code != 200 or "SMOKE-LT-01" not in detail.text:
             failures.append("device detail page missing or hostname not rendered")
+        if print_page.status_code != 200:
+            failures.append("print analytics page did not render")
+
+        pa = client.get("/api/v1/fleet/print/analytics?days=30").json()
+        print(f"print analytics: {pa.get('total_pages')} pages, {pa.get('total_jobs')} jobs")
+        if pa.get("total_pages") != 6:
+            failures.append(f"print analytics total_pages expected 6, got {pa.get('total_pages')}")
+        if "prev_total_pages" not in pa:
+            failures.append("print analytics missing prev_total_pages field")
 
     if failures:
         print("\nSMOKE FAILED:")

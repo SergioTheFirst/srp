@@ -751,6 +751,7 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "latest_heartbeat": latest_hb,
         "events": [dict(r) for r in ev_rows],
         "scores": scores,
+        "department": d["department"],
         "ack": get_ack(device_id),
     }
 
@@ -1345,11 +1346,26 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
             " GROUP BY dept ORDER BY pages DESC",
             (),
         ).fetchall()
+        if days > 0:
+            prev_row = conn.execute(
+                f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+                f" FROM print_jobs"
+                f" WHERE ts >= datetime('now', '-{days * 2} days')"
+                f" AND ts < datetime('now', '-{days} days')",
+                (),
+            ).fetchone()
+            prev_pages = int(prev_row["pages"])
+            prev_jobs = int(prev_row["jobs"])
+        else:
+            prev_pages = 0
+            prev_jobs = 0
 
     return {
         "period_days": days,
         "total_pages": total_pages,
         "total_jobs": int(total_row["jobs"]),
+        "prev_total_pages": prev_pages,
+        "prev_total_jobs": prev_jobs,
         "daily": [
             {"date": r["date"], "pages": int(r["pages"]), "jobs": int(r["jobs"])}
             for r in daily_rows

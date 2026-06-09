@@ -268,3 +268,83 @@ def test_collector_safe_ts_rejects_injection() -> None:
 
     assert _safe_ts("'; DROP TABLE--") == ""
     assert _safe_ts("2026-06-09 10:00:00; rm -rf") == ""
+
+
+# ---------------------------------------------------------------------------
+# API: days=0 (all-time) queries
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_print_analytics_days_zero_returns_200(client: TestClient) -> None:
+    r = client.get("/api/v1/fleet/print/analytics?days=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert "total_pages" in body
+    assert "total_jobs" in body
+
+
+def test_fleet_print_export_days_zero(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-z1", [_job(pages=3)]))
+    r = client.get("/api/v1/fleet/print/export.csv?days=0")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers.get("content-type", "")
+
+
+def test_fleet_print_days_zero_includes_all_records(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-z2", [{**_job(pages=7), "job_id": 200}]))
+    body30 = client.get("/api/v1/fleet/print/analytics?days=30").json()
+    body0 = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    assert body0["total_pages"] >= body30["total_pages"]
+
+
+# ---------------------------------------------------------------------------
+# API: prev period fields in analytics
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_print_analytics_has_prev_period_fields(client: TestClient) -> None:
+    r = client.get("/api/v1/fleet/print/analytics?days=30")
+    assert r.status_code == 200
+    body = r.json()
+    assert "prev_total_pages" in body
+    assert "prev_total_jobs" in body
+    assert isinstance(body["prev_total_pages"], int)
+    assert isinstance(body["prev_total_jobs"], int)
+
+
+def test_fleet_print_analytics_prev_zero_for_days_zero(client: TestClient) -> None:
+    body = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    assert body["prev_total_pages"] == 0
+    assert body["prev_total_jobs"] == 0
+
+
+# ---------------------------------------------------------------------------
+# API: department on get_device
+# ---------------------------------------------------------------------------
+
+
+def test_device_has_department_field(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=envelope("dev-dept1", "inventory", {"hostname": "PC-D1"}))
+    body = client.get("/api/v1/devices/dev-dept1").json()
+    assert "department" in body
+    assert body["department"] is None
+
+
+def test_patch_meta_department_reflected_in_device(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=envelope("dev-dept2", "inventory", {"hostname": "PC-D2"}))
+    client.patch("/api/v1/devices/dev-dept2/meta", json={"department": "Finance"})
+    body = client.get("/api/v1/devices/dev-dept2").json()
+    assert body["department"] == "Finance"
+
+
+# ---------------------------------------------------------------------------
+# Analytics: departments list only contains Без отдела when no depts assigned
+# ---------------------------------------------------------------------------
+
+
+def test_departments_all_без_отдела_when_no_assignments(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-nodept", [_job(pages=5)]))
+    body = client.get("/api/v1/fleet/print/analytics?days=30").json()
+    depts = body.get("departments", [])
+    dept_names = {d["dept"] for d in depts}
+    assert dept_names <= {"Без отдела"}, f"unexpected dept names: {dept_names}"
