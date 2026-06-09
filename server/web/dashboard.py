@@ -182,5 +182,5 @@ def device(request: Request, device_id: str):
 @router.get("/print", response_class=HTMLResponse)
 def print_analytics(request: Request, days: int = 30):
     """Print analytics page — fleet-wide charts (Plotly.js)."""
-    days = min(max(days, 1), 365)
+    days = max(days, 0)
     return _TEMPLATES.TemplateResponse(request, "print.html", {"days": days})

@@ -86,7 +86,7 @@ def metrics() -> dict:
 # Print tracking endpoints
 # ---------------------------------------------------------------------------
 
-_DAYS_MIN = 1
+_DAYS_MIN = 0
 _DAYS_MAX = 365
 
 

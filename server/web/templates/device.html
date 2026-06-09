@@ -557,4 +557,58 @@
     .catch(function () {});
 })();
 </script>
+
+{# ── Department assignment ──────────────────────────────────────────────── #}
+<div class="section-label" style="margin-top:22px">Отдел</div>
+<div class="dept-row">
+  <input id="dept-input" class="dept-input" type="text"
+         placeholder="Не назначен"
+         value="{{ d.department or '' }}">
+  <button id="dept-save" class="btn-small">Сохранить</button>
+  <span id="dept-status" class="small muted"></span>
+</div>
+<style>
+.dept-row { display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap; }
+.dept-input {
+  background: var(--panel); border: 1px solid var(--line-2);
+  color: var(--text); border-radius: 4px; padding: 7px 11px;
+  font: 14px/1 var(--mono); width: 260px; max-width: 100%;
+  transition: border-color .15s;
+}
+.dept-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.1); }
+.btn-small {
+  font: 600 13px/1 var(--mono); padding: 7px 14px; border-radius: 3px;
+  cursor: pointer; background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.btn-small:hover { border-color: var(--accent); color: var(--accent); }
+.dept-ok  { color: var(--good); }
+.dept-err { color: var(--bad); }
+</style>
+<script>
+(function () {
+  var did = {{ d.device_id | tojson }};
+  var inp = document.getElementById("dept-input");
+  var btn = document.getElementById("dept-save");
+  var st  = document.getElementById("dept-status");
+  btn.addEventListener("click", function () {
+    var val = inp.value.trim() || null;
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/meta", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department: val }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        st.textContent = "✓ сохранено";
+        st.className = "small dept-ok";
+        setTimeout(function () { st.textContent = ""; st.className = "small muted"; }, 2500);
+      })
+      .catch(function () {
+        st.textContent = "ошибка";
+        st.className = "small dept-err";
+      });
+  });
+})();
+</script>
 {% endblock %}

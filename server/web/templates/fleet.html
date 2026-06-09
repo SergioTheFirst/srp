@@ -295,26 +295,82 @@ makeSortable();
 })();
 </script>
 
-{# ── Print teaser ───────────────────────────────────────────────────────── #}
-<div class="section-label" style="margin-top:30px">Печать (30 дней)</div>
-<div id="fleet-print-teaser" class="cards">
-  <div class="stat"><div class="n muted">…</div><div class="l">Страниц</div></div>
-  <div class="stat"><div class="n muted">…</div><div class="l">Заданий</div></div>
-  <div class="stat"><div class="n muted">…</div><div class="l">Принтеров</div></div>
-  <div class="stat" style="flex-grow:1;display:flex;align-items:flex-end">
-    <a href="/print" style="font:600 13px/1 var(--mono);color:var(--accent)">→ аналитика</a>
+{# ── Print overview ─────────────────────────────────────────────────────── #}
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:30px;margin-bottom:6px">
+  <span class="section-label" style="margin:0">Печать (30 дней)</span>
+  <a href="/print" style="font:600 12px/1 var(--mono);color:var(--accent);text-decoration:none">→ полная аналитика</a>
+</div>
+<div class="cards" id="fleet-print-kpi" style="margin-bottom:14px">
+  <div class="stat"><div class="n muted" id="fpt-pages">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted" id="fpt-jobs">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted" id="fpt-printers">…</div><div class="l">Принтеров</div></div>
+</div>
+<div class="charts-2col" id="fleet-print-tables" style="display:none">
+  <div class="chart-panel">
+    <div class="ch-title">Топ устройств по страницам</div>
+    <table class="ptable" id="fpt-devices-table">
+      <thead><tr><th>Устройство</th><th>Страниц</th><th>Заданий</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="chart-panel">
+    <div class="ch-title">Топ принтеров по страницам</div>
+    <table class="ptable" id="fpt-printers-table">
+      <thead><tr><th>Принтер</th><th>Страниц</th><th>Устройств</th></tr></thead>
+      <tbody></tbody>
+    </table>
   </div>
 </div>
+<style>
+.charts-2col { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+@media (max-width:860px) { .charts-2col { grid-template-columns:1fr; } }
+.chart-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 12px 14px;
+}
+.chart-panel .ch-title {
+  font: 600 11px/1 var(--mono); letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+}
+.ptable { width:100%; border-collapse:collapse; font-size:13px; }
+.ptable th { color:var(--muted); font:600 11px/1 var(--mono); letter-spacing:.8px; text-transform:uppercase; padding:4px 8px; border-bottom:1px solid var(--line-2); text-align:left; }
+.ptable td { padding:5px 8px; border-bottom:1px solid var(--line-2); color:var(--text); font-family:var(--mono); }
+.ptable tr:last-child td { border-bottom:none; }
+.ptable td:nth-child(2), .ptable td:nth-child(3) { text-align:right; color:var(--accent); }
+</style>
 <script>
 (function () {
   fetch("/api/v1/fleet/print?days=30")
     .then(function (r) { return r.json(); })
     .then(function (p) {
-      var ns = document.querySelectorAll("#fleet-print-teaser .stat .n");
-      ns[0].textContent = (p.total_pages || 0).toLocaleString("ru");
-      ns[1].textContent = (p.total_jobs  || 0).toLocaleString("ru");
-      ns[2].textContent = (p.printer_count || 0).toLocaleString("ru");
-      [ns[0],ns[1],ns[2]].forEach(function(n){ n.classList.remove("muted"); });
+      document.getElementById("fpt-pages").textContent    = (p.total_pages    || 0).toLocaleString("ru");
+      document.getElementById("fpt-jobs").textContent     = (p.total_jobs     || 0).toLocaleString("ru");
+      document.getElementById("fpt-printers").textContent = (p.printer_count  || 0).toLocaleString("ru");
+      ["fpt-pages","fpt-jobs","fpt-printers"].forEach(function(id){ document.getElementById(id).classList.remove("muted"); });
+
+      var devRows  = (p.devices  || []).slice(0, 5);
+      var prnRows  = (p.printers || []).slice(0, 5);
+      if (devRows.length > 0 || prnRows.length > 0) {
+        document.getElementById("fleet-print-tables").style.display = "";
+      }
+
+      var dTbody = document.querySelector("#fpt-devices-table tbody");
+      devRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + (r.hostname || r.device_id) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.jobs  || 0) + "</td>";
+        dTbody.appendChild(tr);
+      });
+
+      var pTbody = document.querySelector("#fpt-printers-table tbody");
+      prnRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td title=\"" + (r.name || "") + "\">" + (r.name || "(unknown)").substring(0,28) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.devices || 0) + "</td>";
+        pTbody.appendChild(tr);
+      });
     })
     .catch(function () {});
 })();
