@@ -6,5 +6,15 @@
   "heartbeat_interval_sec": 300,
   "events_interval_sec": 900,
   "http_timeout_sec": 15,
-  "buffer_path": "buffer.jsonl"
+  "buffer_path": "buffer.jsonl",
+  "site_code": "",
+  "site_name": "",
+  "org_code": "",
+  "dept_code": "",
+  "comment": "",
+  "ingest_token": "",
+  "offline_mode": false,
+  "config_password_hash": "",
+  "agent_version": "0.0.0",
+  "update_channel": "stable"
 }

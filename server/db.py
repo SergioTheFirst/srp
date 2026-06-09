@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS devices (
   last_seen       TEXT,
   site_code       TEXT,
   site_name       TEXT,
+  org_code        TEXT,
+  dept_code       TEXT,
+  comment         TEXT,
   last_reported_ts TEXT,
   clock_drift_sec REAL
 );
@@ -226,7 +229,13 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "historical": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
     "heartbeats": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
     "events": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
-    "devices": (("last_reported_ts", "TEXT"), ("clock_drift_sec", "REAL")),
+    "devices": (
+        ("last_reported_ts", "TEXT"),
+        ("clock_drift_sec", "REAL"),
+        ("org_code", "TEXT"),
+        ("dept_code", "TEXT"),
+        ("comment", "TEXT"),
+    ),
 }
 _BACKFILL: dict[str, str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
@@ -271,6 +280,9 @@ def upsert_device(
     chassis: Optional[str] = None,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    org_code: Optional[str] = None,
+    dept_code: Optional[str] = None,
+    comment: Optional[str] = None,
     received_at: Optional[str] = None,
     last_reported_ts: Optional[str] = None,
     clock_drift_sec: Optional[float] = None,
@@ -282,9 +294,10 @@ def upsert_device(
             """
             INSERT INTO devices
               (device_id, hostname, manufacturer, model, chassis,
-               agent_version, first_seen, last_seen, site_code, site_name,
+               agent_version, first_seen, last_seen,
+               site_code, site_name, org_code, dept_code, comment,
                last_reported_ts, clock_drift_sec)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               hostname     = COALESCE(excluded.hostname, devices.hostname),
               manufacturer = COALESCE(excluded.manufacturer, devices.manufacturer),
@@ -294,6 +307,9 @@ def upsert_device(
               last_seen    = excluded.last_seen,
               site_code    = COALESCE(excluded.site_code, devices.site_code),
               site_name    = COALESCE(excluded.site_name, devices.site_name),
+              org_code     = COALESCE(excluded.org_code, devices.org_code),
+              dept_code    = COALESCE(excluded.dept_code, devices.dept_code),
+              comment      = COALESCE(excluded.comment, devices.comment),
               last_reported_ts = excluded.last_reported_ts,
               clock_drift_sec  = excluded.clock_drift_sec
             """,
@@ -308,6 +324,9 @@ def upsert_device(
                 recv,
                 site_code,
                 site_name,
+                org_code,
+                dept_code,
+                comment,
                 reported,
                 clock_drift_sec,
             ),
@@ -320,6 +339,9 @@ def touch_device(
     agent_version: str,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    org_code: Optional[str] = None,
+    dept_code: Optional[str] = None,
+    comment: Optional[str] = None,
     received_at: Optional[str] = None,
     last_reported_ts: Optional[str] = None,
     clock_drift_sec: Optional[float] = None,
@@ -335,17 +357,33 @@ def touch_device(
         conn.execute(
             """
             INSERT INTO devices
-              (device_id, agent_version, first_seen, last_seen, site_code, site_name,
+              (device_id, agent_version, first_seen, last_seen,
+               site_code, site_name, org_code, dept_code, comment,
                last_reported_ts, clock_drift_sec)
-            VALUES (?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               last_seen = excluded.last_seen,
-              site_code = COALESCE(excluded.site_code, devices.site_code),
-              site_name = COALESCE(excluded.site_name, devices.site_name),
+              site_code  = COALESCE(excluded.site_code, devices.site_code),
+              site_name  = COALESCE(excluded.site_name, devices.site_name),
+              org_code   = COALESCE(excluded.org_code, devices.org_code),
+              dept_code  = COALESCE(excluded.dept_code, devices.dept_code),
+              comment    = COALESCE(excluded.comment, devices.comment),
               last_reported_ts = excluded.last_reported_ts,
               clock_drift_sec  = excluded.clock_drift_sec
             """,
-            (device_id, agent_version, recv, recv, site_code, site_name, reported, clock_drift_sec),
+            (
+                device_id,
+                agent_version,
+                recv,
+                recv,
+                site_code,
+                site_name,
+                org_code,
+                dept_code,
+                comment,
+                reported,
+                clock_drift_sec,
+            ),
         )
 
 
@@ -566,7 +604,8 @@ def get_devices() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
-                   d.site_code, d.site_name, d.last_reported_ts, d.clock_drift_sec,
+                   d.site_code, d.site_name, d.org_code, d.dept_code, d.comment,
+                   d.last_reported_ts, d.clock_drift_sec,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    h.payload AS hist_payload,
                    a.note AS ack_note, a.acked_at AS ack_at
@@ -601,6 +640,9 @@ def get_devices() -> list[dict[str, Any]]:
                 and abs(r["clock_drift_sec"]) > _CLOCK_DRIFT_FLAG_SEC,
                 "site_code": r["site_code"],
                 "site_name": r["site_name"],
+                "org_code": r["org_code"],
+                "dept_code": r["dept_code"],
+                "comment": r["comment"],
                 "performance": r["performance"],
                 "reliability": r["reliability"],
                 "wear": r["wear"],
@@ -678,6 +720,9 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "chassis": d["chassis"],
         "site_code": d["site_code"],
         "site_name": d["site_name"],
+        "org_code": d["org_code"],
+        "dept_code": d["dept_code"],
+        "comment": d["comment"],
         "agent_version": d["agent_version"],
         "first_seen": d["first_seen"],
         "last_seen": d["last_seen"],

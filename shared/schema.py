@@ -217,6 +217,10 @@ class Envelope(_Base):
     # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).
     site_code: Optional[str] = None
     site_name: Optional[str] = None
+    # Extended org identity (additive optional; COALESCE on server keeps existing values).
+    org_code: Optional[str] = None
+    dept_code: Optional[str] = None
+    comment: Optional[str] = None
     # P1 transport hardening: client-generated UUID4.hex for server-side dedup
     # of retried envelopes.  Additive optional; old agents that omit it are never
     # rejected -- the server just skips dedup for keyless envelopes.

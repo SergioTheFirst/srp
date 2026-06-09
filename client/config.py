@@ -6,16 +6,35 @@ operator sets ``server_url`` at install time (a LAN server is typical; a public
 address is a valid explicit choice). An unset URL is a hard error at startup --
 we never silently phone home to a hard-coded host. ``device_id`` is resolved
 once and persisted so a machine keeps a stable identity across agent restarts.
+
+Config protection
+-----------------
+Settings can be guarded with a password set at install time (``--setup`` mode).
+The password is stored as a PBKDF2-HMAC-SHA256 token in ``config_password_hash``;
+the plaintext is never written to disk. Reading the config never requires the
+password -- only writing/changing it does, so the agent itself always starts.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac as _hmac
 import json
+import secrets
+import sys
 import uuid
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Optional
 
-_CONFIG_PATH = Path(__file__).with_name("config.json")
+# When frozen by PyInstaller the config lives next to the .exe, not inside the bundle.
+_CONFIG_PATH = (
+    Path(sys.executable).parent / "config.json"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).with_name("config.json")
+)
+
+_PBKDF2_ITERS = 260_000
 
 
 class ConfigError(ValueError):
@@ -31,20 +50,58 @@ class ClientConfig:
     heartbeat_interval_sec: int = 300  # live vitals -> every 5 min
     events_interval_sec: int = 900  # event-log sweep -> every 15 min
     http_timeout_sec: int = 15
-    buffer_path: str = "buffer.jsonl"  # offline spool, relative to client/
-    # Site/org identity (W1.1).  Operator sets these in config.json per deployment.
-    # Empty string means "not assigned"; sent as None in the envelope so the server's
-    # COALESCE keeps any previously-stored value rather than wiping it.
+    buffer_path: str = "buffer.jsonl"  # offline spool, relative to config dir
+    # Site/org identity.  Empty string means "not assigned"; server COALESCE keeps
+    # any previously-stored value rather than wiping it.
     site_code: str = ""
     site_name: str = ""
-    ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment to match server
+    # Extended org identity set at install time.
+    org_code: str = ""  # organisation code (e.g. "ACME"); empty = not assigned
+    dept_code: str = ""  # department/subdivision code; empty = not assigned
+    comment: str = ""  # free-text label for this endpoint
+    ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
+    # Operating mode: when True the agent collects but does NOT attempt server calls.
+    offline_mode: bool = False
+    # Password protection for config changes.
+    # Format: "pbkdf2:sha256:<iters>:<salt_hex>:<hash_hex>"; empty = no password.
+    config_password_hash: str = ""  # nosec B105
+    # Update channel placeholder -- used by future self-update logic.
+    agent_version: str = "0.0.0"
+    update_channel: str = "stable"  # "stable" | "beta" | "none"
 
     def resolved_buffer_path(self) -> Path:
         p = Path(self.buffer_path)
         return p if p.is_absolute() else (_CONFIG_PATH.parent / p)
 
 
-def _machine_guid() -> str | None:
+# ---------------------------------------------------------------------------
+# Password helpers (pure stdlib -- no external deps)
+# ---------------------------------------------------------------------------
+
+
+def hash_password(password: str) -> str:
+    """Return PBKDF2-HMAC-SHA256 token: ``pbkdf2:sha256:<iters>:<salt>:<hash>``."""
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERS)
+    return f"pbkdf2:sha256:{_PBKDF2_ITERS}:{salt}:{dk.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Constant-time verify *password* against a stored PBKDF2 token."""
+    try:
+        _, algo, iters_s, salt, expected = stored_hash.split(":")
+        dk = hashlib.pbkdf2_hmac(algo, password.encode("utf-8"), bytes.fromhex(salt), int(iters_s))
+        return _hmac.compare_digest(dk.hex(), expected)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Load / persist
+# ---------------------------------------------------------------------------
+
+
+def _machine_guid() -> Optional[str]:
     """Stable per-OS-install id from the registry (survives agent reinstalls)."""
     try:
         import winreg  # Windows-only; absent on dev boxes -> fall back to uuid
@@ -53,7 +110,6 @@ def _machine_guid() -> str | None:
             val, _ = winreg.QueryValueEx(k, "MachineGuid")
             return str(val).strip() or None
     except (OSError, ImportError):
-        # ImportError: winreg is absent off Windows (dev boxes) -> fall back to uuid.
         return None
 
 
@@ -77,16 +133,43 @@ def _persist(cfg: ClientConfig, path: Path) -> None:
     path.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def save_config(
+    cfg: ClientConfig,
+    path: Path = _CONFIG_PATH,
+    *,
+    password: Optional[str] = None,
+) -> None:
+    """Persist *cfg* to disk.
+
+    If *cfg* has a password hash, *password* must be supplied and correct --
+    raises :class:`ConfigError` otherwise.  Pass ``password=None`` only when
+    writing a fresh config that has no hash yet (first-run / ``--setup``).
+    """
+    if cfg.config_password_hash:
+        if password is None:
+            raise ConfigError("Config is password-protected. Supply the password via --password.")
+        if not verify_password(password, cfg.config_password_hash):
+            raise ConfigError("Wrong password -- config was not saved.")
+    _persist(cfg, path)
+
+
+# ---------------------------------------------------------------------------
+# Runtime validation
+# ---------------------------------------------------------------------------
+
+
 def validate_runtime_config(cfg: ClientConfig) -> None:
     """Validate config that must be present before the agent can run.
 
-    Called at agent startup *after* any ``--server`` override is applied, so the
-    operator can supply the target via config.json or the CLI. Raises
-    :class:`ConfigError` (with actionable guidance) when ``server_url`` is unset.
+    Called at agent startup *after* any ``--server`` override is applied.
+    Offline mode skips the server_url requirement -- the agent will buffer
+    data locally and never attempt network calls.
     """
+    if cfg.offline_mode:
+        return  # offline: no server needed
     if not cfg.server_url.strip():
         raise ConfigError(
             'server_url is not set. Edit client/config.json and set "server_url" to your '
-            "SRP server -- a LAN address is typical (e.g. http://192.168.1.10:8000) -- or pass "
-            "--server URL on the command line."
+            "SRP server -- a LAN address is typical (e.g. http://192.168.1.10:8000) -- or "
+            "pass --server URL on the command line.  To run without a server use offline_mode=true."
         )
