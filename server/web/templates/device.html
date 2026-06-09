@@ -16,10 +16,10 @@
   margin-bottom: 8px; gap: 12px;
 }
 .coverage-title {
-  font: 600 10px/1 var(--mono); letter-spacing: 1.5px;
+  font: 600 12px/1 var(--mono); letter-spacing: 1.5px;
   text-transform: uppercase; color: var(--muted);
 }
-.coverage-counts { display: flex; gap: 14px; font: 11px/1 var(--mono); flex-wrap: wrap; }
+.coverage-counts { display: flex; gap: 14px; font: 13px/1 var(--mono); flex-wrap: wrap; }
 .cov-good { color: var(--good); }
 .cov-warn { color: var(--warn); }
 .cov-na   { color: var(--muted); }
@@ -46,22 +46,22 @@
   display: flex; align-items: flex-start;
   justify-content: space-between; gap: 14px;
 }
-.axis-name   { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
-.axis-reason { font-size: 12px; color: var(--muted); }
-.axis-val    { font: 700 26px/1 var(--mono); }
+.axis-name   { font-weight: 600; font-size: 16px; margin-bottom: 3px; }
+.axis-reason { font-size: 14px; color: var(--muted); }
+.axis-val    { font: 700 28px/1 var(--mono); }
 .axis-val.good { color: var(--good); }
 .axis-val.warn { color: var(--warn); }
 .axis-val.high { color: var(--high); }
 .axis-val.bad  { color: var(--bad); }
 .axis-val.na   { color: var(--muted); }
-.axis-conf { font: 600 9px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
+.axis-conf { font: 600 11px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
 .axis-factors { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 .axis-factor-item {
-  font-size: 11px; color: var(--muted);
+  font-size: 13px; color: var(--muted);
   background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 3px; padding: 3px 8px;
 }
-.axis-blind { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.axis-blind { font-size: 13px; color: var(--muted); margin-top: 8px; }
 
 /* ── Trajectory rows ───────────────────────────────────────────────────── */
 .traj-table { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
@@ -77,8 +77,8 @@
 .traj-row.warn { border-left-color: var(--warn); }
 .traj-row.good { border-left-color: var(--good); }
 .traj-row.na   { border-left-color: var(--na); }
-.traj-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
-.traj-val  { font: 12px/1 var(--mono); color: var(--muted); }
+.traj-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+.traj-val  { font: 14px/1 var(--mono); color: var(--muted); }
 .traj-bar  { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
 .traj-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
 .traj-fill.bad  { background: var(--bad); }
@@ -86,7 +86,7 @@
 .traj-fill.good { background: var(--good); }
 .traj-fill.na   { background: var(--na); }
 .traj-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
-.traj-eta { font: 700 12px/1 var(--mono); color: var(--text); }
+.traj-eta { font: 700 14px/1 var(--mono); color: var(--text); }
 .traj-eta.eta-imminent { color: var(--bad); animation: blink-eta 1.5s ease-in-out infinite; }
 .traj-eta.eta-soon { color: var(--warn); }
 @keyframes blink-eta {
@@ -102,7 +102,7 @@
 </p>
 
 <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">
-  <h1 style="font:700 22px/1.2 var(--mono);margin:0">{{ d.hostname or d.device_id }}</h1>
+  <h1 style="font:700 24px/1.2 var(--mono);margin:0">{{ d.hostname or d.device_id }}</h1>
   {% if d.chassis %}<span class="pill">{{ d.chassis }}</span>{% endif %}
 </div>
 <div class="small muted mono" style="margin-bottom:20px">
@@ -532,4 +532,29 @@
     <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
   </tbody>
 </table>
+
+{# ── Print summary (loaded async) ───────────────────────────────────────── #}
+<div class="section-label" style="margin-top:30px">Учёт печати (30 дней)</div>
+<div id="print-summary" class="cards">
+  <div class="stat"><div class="n muted">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Принтеров</div></div>
+</div>
+<script>
+(function () {
+  var did = {{ d.device_id | tojson }};
+  fetch("/api/v1/devices/" + encodeURIComponent(did) + "/print?days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var cards = document.querySelectorAll("#print-summary .stat .n");
+      cards[0].textContent = (p.total_pages || 0).toLocaleString("ru");
+      cards[1].textContent = (p.total_jobs  || 0).toLocaleString("ru");
+      cards[2].textContent = (p.printers    || []).length;
+      cards[0].classList.remove("muted");
+      cards[1].classList.remove("muted");
+      cards[2].classList.remove("muted");
+    })
+    .catch(function () {});
+})();
+</script>
 {% endblock %}

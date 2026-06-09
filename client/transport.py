@@ -111,10 +111,12 @@ class Transport:
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
             "source_health": source_health or {},
-            # W1.1: send None when empty so the server's COALESCE keeps any
-            # existing value rather than overwriting a known site with NULL.
+            # Send None when empty so the server's COALESCE keeps any existing value.
             "site_code": self._cfg.site_code or None,
             "site_name": self._cfg.site_name or None,
+            "org_code": self._cfg.org_code or None,
+            "dept_code": self._cfg.dept_code or None,
+            "comment": self._cfg.comment or None,
             # P1: client-generated idempotency key lets the server dedup retried
             # envelopes. UUID4 hex = 32 chars, stable for the lifetime of this
             # envelope object (buffered replays reuse the same key).

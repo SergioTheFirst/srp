@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import hmac
+import io
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
@@ -76,3 +80,70 @@ def ack_device(device_id: str, body: AckBody) -> dict:
 def metrics() -> dict:
     """Pipeline health snapshot: fleet counts, ingest rate, source health, DB sizes."""
     return db.get_pipeline_metrics()
+
+
+# ---------------------------------------------------------------------------
+# Print tracking endpoints
+# ---------------------------------------------------------------------------
+
+_DAYS_MIN = 1
+_DAYS_MAX = 365
+
+
+def _clamp_days(days: int) -> int:
+    return min(max(days, _DAYS_MIN), _DAYS_MAX)
+
+
+@router.get("/devices/{device_id}/print")
+def device_print(device_id: str, days: int = 30) -> dict:
+    if db.get_device(device_id) is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    return db.get_device_print(device_id, days=_clamp_days(days))
+
+
+@router.get("/fleet/print/analytics")
+def fleet_print_analytics(days: int = 30) -> dict:
+    return db.get_print_analytics(days=_clamp_days(days))
+
+
+@router.get("/fleet/print/export.csv")
+def fleet_print_export(days: int = 30) -> StreamingResponse:
+    rows = db.export_print_rows(days=_clamp_days(days))
+    buf = io.StringIO()
+    fieldnames = [
+        "ts",
+        "device_id",
+        "hostname",
+        "printer",
+        "pages",
+        "size_bytes",
+        "user_name",
+        "department",
+    ]
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=print_export_{days}d.csv"},
+    )
+
+
+@router.get("/fleet/print")
+def fleet_print(days: int = 30) -> dict:
+    return db.get_fleet_print(days=_clamp_days(days))
+
+
+class MetaPatch(BaseModel):
+    department: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.patch("/devices/{device_id}/meta")
+def patch_device_meta(device_id: str, body: MetaPatch) -> dict:
+    if db.get_device(device_id) is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    if body.department is not None:
+        db.set_device_department(device_id, body.department)
+    return {"status": "ok"}

@@ -19,6 +19,7 @@ import getpass
 import logging
 import time
 import urllib.parse
+from functools import partial
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +30,7 @@ from client.collectors import (
     collect_historical,
     collect_inventory,
 )
+from client.collectors.print_jobs import collect_print_jobs
 from client.collectors.sources import CollectorResult
 from client.config import ClientConfig, ConfigError, load_config, validate_runtime_config
 from client.transport import Transport
@@ -52,18 +54,22 @@ class Agent:
     def __init__(self, cfg: ClientConfig) -> None:
         self._cfg = cfg
         self._transport = Transport(cfg)
+        state_path = cfg.resolved_buffer_path().with_name("print_state.json")
+        self._tasks: list[tuple[str, Collector, str]] = list(TASKS) + [
+            ("print_jobs", partial(collect_print_jobs, state_path), "print_interval_sec"),
+        ]
 
     def run_once(self) -> None:
         """Run every collector a single time (used by --once and at startup)."""
-        for msg_type, collector, _ in TASKS:
+        for msg_type, collector, _ in self._tasks:
             self._run_task(msg_type, collector)
 
     def run_forever(self) -> None:
         """Loop forever, running each task when its interval comes due."""
-        due = {msg_type: time.monotonic() for msg_type, _, _ in TASKS}  # all due now
+        due = {msg_type: time.monotonic() for msg_type, _, _ in self._tasks}  # all due now
         try:
             while True:
-                for msg_type, collector, interval_attr in TASKS:
+                for msg_type, collector, interval_attr in self._tasks:
                     if time.monotonic() >= due[msg_type]:
                         self._run_task(msg_type, collector)
                         interval = max(1, int(getattr(self._cfg, interval_attr)))

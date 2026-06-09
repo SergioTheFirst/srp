@@ -177,3 +177,10 @@ def device(request: Request, device_id: str):
         "stale": age is not None and age > db.STALE_AFTER_SEC,
     }
     return _TEMPLATES.TemplateResponse(request, "device.html", {"d": d})
+
+
+@router.get("/print", response_class=HTMLResponse)
+def print_analytics(request: Request, days: int = 30):
+    """Print analytics page — fleet-wide charts (Plotly.js)."""
+    days = min(max(days, 1), 365)
+    return _TEMPLATES.TemplateResponse(request, "print.html", {"days": days})

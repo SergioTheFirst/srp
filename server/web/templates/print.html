@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Печать · SRP{% endblock %}
+{% block subtitle %}аналитика печати{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+.print-toolbar {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 24px; flex-wrap: wrap;
+}
+.days-btns { display: flex; gap: 6px; }
+.days-btns a {
+  font: 600 13px/1 var(--mono);
+  padding: 5px 14px; border-radius: 3px;
+  border: 1px solid var(--line-2);
+  color: var(--muted); text-decoration: none;
+  transition: background .15s, color .15s;
+}
+.days-btns a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.days-btns a.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.45); }
+.csv-btn {
+  margin-left: auto;
+  font: 600 13px/1 var(--mono);
+  padding: 6px 16px; border-radius: 3px;
+  background: var(--panel); border: 1px solid var(--line-2);
+  color: var(--muted); cursor: pointer; text-decoration: none;
+  transition: background .15s, color .15s;
+}
+.csv-btn:hover { background: var(--panel-2); color: var(--accent); text-decoration: none; }
+
+.summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
+.scard {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 16px 18px;
+}
+.scard .l { font: 600 11px/1 var(--mono); letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.scard .n { font: 700 32px/1 var(--mono); color: var(--accent); }
+
+.charts-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.charts-3col { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 18px; }
+@media (max-width: 900px) {
+  .charts-2col, .charts-3col { grid-template-columns: 1fr; }
+}
+.chart-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 16px 14px;
+}
+.chart-panel .ch-title {
+  font: 600 11px/1 var(--mono); letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+}
+.chart-wrap { width: 100%; }
+
+.no-data {
+  text-align: center; padding: 40px 20px;
+  color: var(--muted); font-size: 15px;
+}
+.loading { color: var(--muted); font-size: 14px; font-family: var(--mono); }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="print-toolbar">
+  <div class="days-btns">
+    <a href="/print?days=7"  class="{{ 'active' if days == 7 }}">7д</a>
+    <a href="/print?days=14" class="{{ 'active' if days == 14 }}">14д</a>
+    <a href="/print?days=30" class="{{ 'active' if days == 30 or days not in (7,14,90) }}">30д</a>
+    <a href="/print?days=90" class="{{ 'active' if days == 90 }}">90д</a>
+  </div>
+  <a class="csv-btn" href="/api/v1/fleet/print/export.csv?days={{ days }}" download>
+    ↓ CSV
+  </a>
+</div>
+
+<div class="summary-cards" id="summary-cards">
+  <div class="scard"><div class="l">Всего страниц</div><div class="n loading">…</div></div>
+  <div class="scard"><div class="l">Заданий</div><div class="n loading">…</div></div>
+  <div class="scard"><div class="l">Принтеров</div><div class="n loading">…</div></div>
+  <div class="scard"><div class="l">Пользователей</div><div class="n loading">…</div></div>
+</div>
+
+{# Timeline #}
+<div class="section-label">Динамика печати</div>
+<div class="chart-panel" style="margin-bottom:18px">
+  <div class="ch-title">Страниц в день — весь флот</div>
+  <div class="chart-wrap" id="chart-timeline" style="height:240px"></div>
+</div>
+
+{# Printers + Departments side by side #}
+<div class="charts-2col">
+  <div class="chart-panel">
+    <div class="ch-title">Страниц по принтерам (топ-10)</div>
+    <div class="chart-wrap" id="chart-printers" style="height:320px"></div>
+  </div>
+  <div class="chart-panel">
+    <div class="ch-title">Доля принтеров</div>
+    <div class="chart-wrap" id="chart-printer-pie" style="height:320px"></div>
+  </div>
+</div>
+
+{# Users + Departments #}
+<div class="charts-2col">
+  <div class="chart-panel">
+    <div class="ch-title">Топ-20 пользователей по страницам</div>
+    <div class="chart-wrap" id="chart-users" style="height:360px"></div>
+  </div>
+  <div class="chart-panel">
+    <div class="ch-title">Страниц по отделам</div>
+    <div class="chart-wrap" id="chart-departments" style="height:360px"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var DAYS = {{ days }};
+  var BASE_LAYOUT = {
+    paper_bgcolor: "transparent",
+    plot_bgcolor:  "transparent",
+    font:  { color: "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+    margin: { t: 10, r: 10, b: 40, l: 10 },
+    xaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
+    yaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
+    showlegend: false,
+    autosize: true,
+  };
+
+  function layout(overrides) {
+    return Object.assign({}, BASE_LAYOUT, overrides);
+  }
+
+  function fillSummary(d) {
+    var cards = document.querySelectorAll("#summary-cards .scard");
+    var nums = [
+      d.total_pages.toLocaleString("ru"),
+      d.total_jobs.toLocaleString("ru"),
+      (d.printers || []).length,
+      (d.users || []).length,
+    ];
+    nums.forEach(function (v, i) {
+      cards[i].querySelector(".n").textContent = v;
+    });
+  }
+
+  function renderTimeline(daily) {
+    var el = document.getElementById("chart-timeline");
+    if (!daily || daily.length === 0) { el.innerHTML = '<div class="no-data">Нет данных за период</div>'; return; }
+    var dates = daily.map(function (r) { return r.date; });
+    var pages = daily.map(function (r) { return r.pages; });
+    var trace = {
+      x: dates, y: pages, type: "scatter", mode: "lines+markers",
+      line: { color: "#0ea5e9", width: 2 },
+      marker: { color: "#0ea5e9", size: 5 },
+      fill: "tozeroy", fillcolor: "rgba(14,165,233,.08)",
+      hovertemplate: "%{x}<br><b>%{y}</b> стр<extra></extra>",
+    };
+    Plotly.newPlot(el, [trace], layout({
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
+      margin: { t: 6, r: 14, b: 44, l: 54 },
+    }), { responsive: true, displayModeBar: false });
+  }
+
+  function renderPrinters(printers) {
+    var el = document.getElementById("chart-printers");
+    if (!printers || printers.length === 0) { el.innerHTML = '<div class="no-data">Нет данных</div>'; return; }
+    var top = printers.slice(0, 10);
+    var names = top.map(function (r) { return r.name; }).reverse();
+    var pages = top.map(function (r) { return r.pages; }).reverse();
+    var trace = {
+      x: pages, y: names, type: "bar", orientation: "h",
+      marker: { color: "#0ea5e9", opacity: 0.85 },
+      hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
+    };
+    Plotly.newPlot(el, [trace], layout({
+      margin: { t: 6, r: 14, b: 40, l: 160 },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+    }), { responsive: true, displayModeBar: false });
+  }
+
+  function renderPrinterPie(printers) {
+    var el = document.getElementById("chart-printer-pie");
+    if (!printers || printers.length === 0) { el.innerHTML = '<div class="no-data">Нет данных</div>'; return; }
+    var top = printers.slice(0, 8);
+    var rest_pages = printers.slice(8).reduce(function (s, r) { return s + r.pages; }, 0);
+    var labels = top.map(function (r) { return r.name; });
+    var values = top.map(function (r) { return r.pages; });
+    if (rest_pages > 0) { labels.push("Остальные"); values.push(rest_pages); }
+    var trace = {
+      labels: labels, values: values, type: "pie", hole: 0.45,
+      textinfo: "percent", textfont: { size: 11 },
+      marker: { colors: ["#0ea5e9","#10d97a","#f59e0b","#f97316","#f43f5e","#a78bfa","#34d399","#60a5fa","#7aa8c4"] },
+      hovertemplate: "<b>%{label}</b><br>%{value} стр (%{percent})<extra></extra>",
+    };
+    Plotly.newPlot(el, [trace], layout({
+      margin: { t: 10, r: 10, b: 10, l: 10 },
+      showlegend: true,
+      legend: { font: { size: 11 }, x: 0.5, y: -0.1, xanchor: "center", orientation: "h" },
+    }), { responsive: true, displayModeBar: false });
+  }
+
+  function renderUsers(users) {
+    var el = document.getElementById("chart-users");
+    if (!users || users.length === 0) { el.innerHTML = '<div class="no-data">Нет данных</div>'; return; }
+    var top = users.slice(0, 20);
+    var names = top.map(function (r) { return r.user_name; }).reverse();
+    var pages = top.map(function (r) { return r.pages; }).reverse();
+    var trace = {
+      x: pages, y: names, type: "bar", orientation: "h",
+      marker: { color: "#10d97a", opacity: 0.85 },
+      hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
+    };
+    Plotly.newPlot(el, [trace], layout({
+      margin: { t: 6, r: 14, b: 40, l: 160 },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+    }), { responsive: true, displayModeBar: false });
+  }
+
+  function renderDepartments(departments) {
+    var el = document.getElementById("chart-departments");
+    if (!departments || departments.length === 0) { el.innerHTML = '<div class="no-data">Нет данных</div>'; return; }
+    var names = departments.map(function (r) { return r.dept; });
+    var pages = departments.map(function (r) { return r.pages; });
+    var trace = {
+      x: names, y: pages, type: "bar",
+      marker: { color: "#f59e0b", opacity: 0.85 },
+      hovertemplate: "<b>%{x}</b><br>%{y} стр<extra></extra>",
+    };
+    Plotly.newPlot(el, [trace], layout({
+      margin: { t: 6, r: 14, b: 80, l: 54 },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, tickangle: -35 },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+    }), { responsive: true, displayModeBar: false });
+  }
+
+  fetch("/api/v1/fleet/print/analytics?days=" + DAYS)
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      fillSummary(d);
+      renderTimeline(d.daily);
+      renderPrinters(d.printers);
+      renderPrinterPie(d.printers);
+      renderUsers(d.users);
+      renderDepartments(d.departments);
+    })
+    .catch(function (err) {
+      document.querySelector(".summary-cards").innerHTML =
+        '<div class="no-data">Ошибка загрузки: ' + err + '</div>';
+    });
+})();
+</script>
+{% endblock %}

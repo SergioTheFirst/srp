@@ -164,4 +164,94 @@ class PrintJobsPayload(_Base):
 - `test_print_collector.py`: virtual-printer filter, PowerShell output parsing, state-file tracking
 - `test_print_db.py`: store, dedup (same job_id idempotent), query aggregates
 - `test_print_pipeline.py`: integration — envelope → DB → API response
+- `test_print_analytics.py`: daily/printer/user/dept aggregates, `days=0`, empty table
 - Dashboard: visual check in browser
+
+---
+
+## Analytics Page + Export — Addendum (2026-06-09)
+
+_Approved additions: отдельная страница аналитики `/print`, CSV-экспорт, группировка по отделам._
+
+---
+
+### Department Support
+
+Новая колонка `department TEXT` в таблице `devices` (NULL = нет отдела, отображается как «Без отдела»).
+Устанавливается через: `PATCH /api/v1/devices/{id}/meta` — тело `{"department": "string"}`.
+
+```sql
+ALTER TABLE devices ADD COLUMN department TEXT;
+```
+
+---
+
+### New API Endpoints
+
+#### `GET /api/v1/fleet/print/analytics?days=30`
+Все данные для графиков — один вызов:
+```json
+{
+  "period_days": 30,
+  "total_pages": 12400,
+  "total_jobs": 2480,
+  "daily": [{"date": "2026-06-09", "pages": 412, "jobs": 87}],
+  "printers": [{"name": "HP LaserJet 1320", "pages": 8200, "jobs": 1640, "devices_count": 12, "pct": 66.1}],
+  "users": [{"user_name": "ivanov", "pages": 412, "jobs": 87, "pct": 3.3}],
+  "departments": [{"dept": "Бухгалтерия", "pages": 3200, "jobs": 640, "devices_count": 4}]
+}
+```
+
+#### `GET /api/v1/fleet/print/export.csv?days=30`
+Стриминг CSV. Поля: `ts, device_id, hostname, department, printer, user_name, pages, size_bytes`.
+`days=0` → все записи. `Content-Disposition: attachment; filename="print_YYYY-MM-DD.csv"`.
+
+#### `PATCH /api/v1/devices/{id}/meta`
+Тело: `{"department": "string"}`. Устанавливает отдел устройства (произвольный текст, обнуляемый).
+
+---
+
+### Analytics Page `/print`
+
+**Route:** `GET /print`
+**Template:** `server/web/templates/print.html` (extends `base.html`)
+**Nav:** добавить «печать» в `base.html` nav рядом с «флот» и «пайплайн»
+
+**Графики (Plotly.js CDN, загружается только на этой странице):**
+
+| # | Тип | Данные | Заголовок |
+|---|-----|--------|-----------|
+| 1 | Area | `daily.pages` по `daily.date` | Страниц в день |
+| 2 | Горизонтальный бар | `printers` по страницам | По принтерам |
+| 3 | Горизонтальный бар | `users` топ-20 по страницам | По пользователям |
+| 4 | Горизонтальный бар | `departments` по страницам (скрыт если все NULL) | По отделам |
+| 5 | HTML-таблица | принтеры: страниц / заданий / avg / % | Сводная таблица |
+
+Стиль: тёмный фон `#040810`, акцент `#0ea5e9`, сетка `#132030` (CSS-токены из `base.html`).
+
+**CSV-экспорт:**
+- Выбор периода: 7д / 30д / 90д / Всё
+- Кнопка → `GET /api/v1/fleet/print/export.csv?days=N`
+
+---
+
+### Extended Implementation Phases
+
+_(Добавлены к фазам 1–9 из основного спека)_
+
+| Фаза | Работа |
+|------|--------|
+| 10 | Миграция `devices`: `ALTER TABLE devices ADD COLUMN department TEXT` (аддитивная, идемпотентная) |
+| 11 | `db.get_print_analytics(days)` — SQL для daily/printers/users/departments |
+| 12 | API: `/analytics` роут + CSV-экспорт + `PATCH /devices/{id}/meta` |
+| 13 | Роут `GET /print` + шаблон `print.html` (5 графиков + кнопка экспорта, Plotly CDN) |
+| 14 | `base.html` nav: добавить «печать» |
+| 15 | Тесты: агрегаты аналитики, CSV (заголовки + строки + Content-Disposition), dept-группировка, PATCH meta |
+
+---
+
+### Test Plan Additions
+
+- `test_print_analytics.py`: daily aggregates, per-printer/user/dept grouping, `days=0` (all), empty table
+- CSV export: correct headers, correct rows, `Content-Disposition` header present
+- `PATCH /devices/{id}/meta`: sets department → 200, null clears it

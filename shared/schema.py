@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_VERSION = "0.1.0"
 
-MsgType = Literal["inventory", "historical", "heartbeat", "events"]
+MsgType = Literal["inventory", "historical", "heartbeat", "events", "print_jobs"]
 
 
 def utcnow_iso() -> str:
@@ -217,6 +217,10 @@ class Envelope(_Base):
     # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).
     site_code: Optional[str] = None
     site_name: Optional[str] = None
+    # Extended org identity (additive optional; COALESCE on server keeps existing values).
+    org_code: Optional[str] = None
+    dept_code: Optional[str] = None
+    comment: Optional[str] = None
     # P1 transport hardening: client-generated UUID4.hex for server-side dedup
     # of retried envelopes.  Additive optional; old agents that omit it are never
     # rejected -- the server just skips dedup for keyless envelopes.
@@ -225,11 +229,26 @@ class Envelope(_Base):
     idempotency_key: Optional[str] = Field(default=None, max_length=64)
 
 
+class PrintJobRecord(_Base):
+    job_id: Optional[int] = None
+    ts: str
+    printer: str
+    pages: int
+    size_bytes: Optional[int] = None
+    user_name: Optional[str] = None
+
+
+class PrintJobsPayload(_Base):
+    jobs: list[PrintJobRecord] = Field(default_factory=list)
+    window_from: Optional[str] = None
+
+
 _PAYLOAD_MODELS: dict[str, type[_Base]] = {
     "inventory": InventoryPayload,
     "historical": HistoricalPayload,
     "heartbeat": HeartbeatPayload,
     "events": EventBatchPayload,
+    "print_jobs": PrintJobsPayload,
 }
 
 
