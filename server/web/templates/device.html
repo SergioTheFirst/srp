@@ -532,4 +532,29 @@
     <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
   </tbody>
 </table>
+
+{# ── Print summary (loaded async) ───────────────────────────────────────── #}
+<div class="section-label" style="margin-top:30px">Учёт печати (30 дней)</div>
+<div id="print-summary" class="cards">
+  <div class="stat"><div class="n muted">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Принтеров</div></div>
+</div>
+<script>
+(function () {
+  var did = {{ d.device_id | tojson }};
+  fetch("/api/v1/devices/" + encodeURIComponent(did) + "/print?days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var cards = document.querySelectorAll("#print-summary .stat .n");
+      cards[0].textContent = (p.total_pages || 0).toLocaleString("ru");
+      cards[1].textContent = (p.total_jobs  || 0).toLocaleString("ru");
+      cards[2].textContent = (p.printers    || []).length;
+      cards[0].classList.remove("muted");
+      cards[1].classList.remove("muted");
+      cards[2].classList.remove("muted");
+    })
+    .catch(function () {});
+})();
+</script>
 {% endblock %}

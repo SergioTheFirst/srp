@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS device_source_trust (
   ts                TEXT,
   PRIMARY KEY (device_id, source)
 );
+CREATE TABLE IF NOT EXISTS print_jobs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id   TEXT NOT NULL,
+  job_id      INTEGER,
+  ts          TEXT NOT NULL,
+  received_at TEXT,
+  printer     TEXT,
+  user_name   TEXT,
+  pages       INTEGER,
+  size_bytes  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup
+  ON print_jobs(device_id, job_id) WHERE job_id IS NOT NULL;
 """
 
 
@@ -235,6 +249,7 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("org_code", "TEXT"),
         ("dept_code", "TEXT"),
         ("comment", "TEXT"),
+        ("department", "TEXT"),
     ),
 }
 _BACKFILL: dict[str, str] = {
@@ -605,7 +620,7 @@ def get_devices() -> list[dict[str, Any]]:
             """
             SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
                    d.site_code, d.site_name, d.org_code, d.dept_code, d.comment,
-                   d.last_reported_ts, d.clock_drift_sec,
+                   d.department, d.last_reported_ts, d.clock_drift_sec,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    h.payload AS hist_payload,
                    a.note AS ack_note, a.acked_at AS ack_at
@@ -643,6 +658,7 @@ def get_devices() -> list[dict[str, Any]]:
                 "org_code": r["org_code"],
                 "dept_code": r["dept_code"],
                 "comment": r["comment"],
+                "department": r["department"],
                 "performance": r["performance"],
                 "reliability": r["reliability"],
                 "wear": r["wear"],
@@ -1153,3 +1169,246 @@ def get_pipeline_metrics() -> dict[str, Any]:
         },
         "table_rows": table_rows,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Print tracking
+# --------------------------------------------------------------------------- #
+def store_print_jobs(
+    device_id: str,
+    jobs: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+) -> int:
+    """Insert print jobs; dedup via UNIQUE(device_id, job_id). Returns inserted count."""
+    if not jobs:
+        return 0
+    recv = received_at or _now_iso()
+    inserted = 0
+    with _lock, _connect() as conn:
+        for job in jobs:
+            try:
+                conn.execute(
+                    """INSERT INTO print_jobs
+                         (device_id, job_id, ts, received_at, printer, user_name, pages, size_bytes)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        device_id,
+                        job.get("job_id"),
+                        job.get("ts"),
+                        recv,
+                        job.get("printer"),
+                        job.get("user_name"),
+                        job.get("pages"),
+                        job.get("size_bytes"),
+                    ),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                pass  # duplicate job_id for this device — already stored
+    return inserted
+
+
+def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
+    """Print stats for a single device over the last *days* days (0 = all time)."""
+    ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS jobs, COALESCE(SUM(pages),0) AS pages"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}",
+            (device_id,),
+        ).fetchone()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " GROUP BY printer ORDER BY pages DESC",
+            (device_id,),
+        ).fetchall()
+        daily_rows = conn.execute(
+            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " GROUP BY date ORDER BY date",
+            (device_id,),
+        ).fetchall()
+        recent_rows = conn.execute(
+            f"SELECT ts, printer, pages, size_bytes"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " ORDER BY ts DESC LIMIT 20",
+            (device_id,),
+        ).fetchall()
+    return {
+        "device_id": device_id,
+        "period_days": days,
+        "total_pages": total_row["pages"],
+        "total_jobs": total_row["jobs"],
+        "printers": [
+            {"name": r["printer"], "pages": r["pages"], "jobs": r["jobs"]} for r in printer_rows
+        ],
+        "daily": [{"date": r["date"], "pages": r["pages"], "jobs": r["jobs"]} for r in daily_rows],
+        "recent": [
+            {
+                "ts": r["ts"],
+                "printer": r["printer"],
+                "pages": r["pages"],
+                "size_bytes": r["size_bytes"],
+            }
+            for r in recent_rows
+        ],
+    }
+
+
+def get_fleet_print(days: int = 30) -> dict[str, Any]:
+    """Fleet-level print totals over the last *days* days (0 = all time)."""
+    ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE 1=1 {ts_f}",
+            (),
+        ).fetchone()
+        device_rows = conn.execute(
+            f"SELECT p.device_id, COALESCE(d.hostname, p.device_id) AS hostname,"  # nosec B608
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE 1=1 {pts_f}"
+            " GROUP BY p.device_id ORDER BY pages DESC",
+            (),
+        ).fetchall()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages,"  # nosec B608
+            f" COUNT(DISTINCT device_id) AS devices"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY printer ORDER BY pages DESC",
+            (),
+        ).fetchall()
+    return {
+        "period_days": days,
+        "total_pages": int(total_row["pages"]),
+        "total_jobs": int(total_row["jobs"]),
+        "printer_count": len(printer_rows),
+        "devices": [
+            {
+                "device_id": r["device_id"],
+                "hostname": r["hostname"],
+                "pages": r["pages"],
+                "jobs": r["jobs"],
+            }
+            for r in device_rows
+        ],
+        "printers": [
+            {"name": r["printer"], "pages": r["pages"], "devices": r["devices"]}
+            for r in printer_rows
+        ],
+    }
+
+
+def get_print_analytics(days: int = 30) -> dict[str, Any]:
+    """All chart data for the /print analytics page (daily/printers/users/departments)."""
+    ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE 1=1 {ts_f}",
+            (),
+        ).fetchone()
+        total_pages = int(total_row["pages"])
+        _denom = total_pages if total_pages > 0 else 1
+
+        daily_rows = conn.execute(
+            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY date ORDER BY date",
+            (),
+        ).fetchall()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            f" COUNT(DISTINCT device_id) AS devices_count"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY printer ORDER BY pages DESC",
+            (),
+        ).fetchall()
+        user_rows = conn.execute(
+            f"SELECT user_name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE user_name IS NOT NULL AND user_name != '' {ts_f}"
+            " GROUP BY user_name ORDER BY pages DESC LIMIT 20",
+            (),
+        ).fetchall()
+        dept_rows = conn.execute(
+            f"SELECT COALESCE(d.department, 'Без отдела') AS dept,"  # nosec B608
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs,"
+            f" COUNT(DISTINCT p.device_id) AS devices_count"
+            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE 1=1 {pts_f}"
+            " GROUP BY dept ORDER BY pages DESC",
+            (),
+        ).fetchall()
+
+    return {
+        "period_days": days,
+        "total_pages": total_pages,
+        "total_jobs": int(total_row["jobs"]),
+        "daily": [
+            {"date": r["date"], "pages": int(r["pages"]), "jobs": int(r["jobs"])}
+            for r in daily_rows
+        ],
+        "printers": [
+            {
+                "name": r["printer"] or "(unknown)",
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "devices_count": int(r["devices_count"]),
+                "pct": round(100.0 * r["pages"] / _denom, 1),
+            }
+            for r in printer_rows
+        ],
+        "users": [
+            {
+                "user_name": r["user_name"],
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "pct": round(100.0 * r["pages"] / _denom, 1),
+            }
+            for r in user_rows
+        ],
+        "departments": [
+            {
+                "dept": r["dept"],
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "devices_count": int(r["devices_count"]),
+            }
+            for r in dept_rows
+        ],
+    }
+
+
+def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
+    """Raw print job rows for CSV export, enriched with hostname + department."""
+    ts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT p.ts, p.device_id,"  # nosec B608
+            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" COALESCE(d.department, '') AS department,"
+            f" COALESCE(p.printer, '') AS printer,"
+            f" COALESCE(p.user_name, '') AS user_name,"
+            f" p.pages, p.size_bytes"
+            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE 1=1 {ts_f}"
+            " ORDER BY p.ts DESC",
+            (),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_device_department(device_id: str, department: Optional[str]) -> bool:
+    """Set the department label for a device. Returns True if the device existed."""
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            "UPDATE devices SET department=? WHERE device_id=?",
+            (department, device_id),
+        ).rowcount
+    return n > 0

@@ -294,4 +294,29 @@ markEscalated();
 makeSortable();
 })();
 </script>
+
+{# ── Print teaser ───────────────────────────────────────────────────────── #}
+<div class="section-label" style="margin-top:30px">Печать (30 дней)</div>
+<div id="fleet-print-teaser" class="cards">
+  <div class="stat"><div class="n muted">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Принтеров</div></div>
+  <div class="stat" style="flex-grow:1;display:flex;align-items:flex-end">
+    <a href="/print" style="font:600 13px/1 var(--mono);color:var(--accent)">→ аналитика</a>
+  </div>
+</div>
+<script>
+(function () {
+  fetch("/api/v1/fleet/print?days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var ns = document.querySelectorAll("#fleet-print-teaser .stat .n");
+      ns[0].textContent = (p.total_pages || 0).toLocaleString("ru");
+      ns[1].textContent = (p.total_jobs  || 0).toLocaleString("ru");
+      ns[2].textContent = (p.printer_count || 0).toLocaleString("ru");
+      [ns[0],ns[1],ns[2]].forEach(function(n){ n.classList.remove("muted"); });
+    })
+    .catch(function () {});
+})();
+</script>
 {% endblock %}

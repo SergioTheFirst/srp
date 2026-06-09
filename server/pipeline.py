@@ -291,6 +291,21 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
         db.store_events(
             did, env.payload.get("events", []), received_at=received_at, clock_drift_sec=drift
         )
+    elif env.msg_type == "print_jobs":
+        db.touch_device(
+            did,
+            ts,
+            env.agent_version,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            org_code=env.org_code,
+            dept_code=env.dept_code,
+            comment=env.comment,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
+        )
+        db.store_print_jobs(did, env.payload.get("jobs", []), received_at=received_at)
 
     if env.source_health:
         # Convert SourceHealth pydantic objects to plain dicts for evaluate_trust
@@ -305,7 +320,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # events message is pure waste (and now drags in the O(n^2) W4.1 trend pass),
     # so we store the events above and skip the recompute. Message types that do
     # change scores still rescore synchronously, so fresh scores land on ingest.
-    scores = None if env.msg_type == "events" else recompute_scores(did)
+    scores = None if env.msg_type in {"events", "print_jobs"} else recompute_scores(did)
     return {
         "device_id": did,
         "msg_type": env.msg_type,

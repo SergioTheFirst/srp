@@ -21,6 +21,7 @@ THROTTLE = "throttle"
 IDENTITY = "identity"
 EVENTS = "events"
 CERTIFICATES = "certificates"
+PRINT_JOBS = "print_jobs"
 
 
 class CollectorResult(NamedTuple):

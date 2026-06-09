@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_VERSION = "0.1.0"
 
-MsgType = Literal["inventory", "historical", "heartbeat", "events"]
+MsgType = Literal["inventory", "historical", "heartbeat", "events", "print_jobs"]
 
 
 def utcnow_iso() -> str:
@@ -229,11 +229,26 @@ class Envelope(_Base):
     idempotency_key: Optional[str] = Field(default=None, max_length=64)
 
 
+class PrintJobRecord(_Base):
+    job_id: Optional[int] = None
+    ts: str
+    printer: str
+    pages: int
+    size_bytes: Optional[int] = None
+    user_name: Optional[str] = None
+
+
+class PrintJobsPayload(_Base):
+    jobs: list[PrintJobRecord] = Field(default_factory=list)
+    window_from: Optional[str] = None
+
+
 _PAYLOAD_MODELS: dict[str, type[_Base]] = {
     "inventory": InventoryPayload,
     "historical": HistoricalPayload,
     "heartbeat": HeartbeatPayload,
     "events": EventBatchPayload,
+    "print_jobs": PrintJobsPayload,
 }
 
 

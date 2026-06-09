@@ -49,6 +49,7 @@ class ClientConfig:
     historical_interval_sec: int = 86400  # 30-day rollups -> daily is plenty
     heartbeat_interval_sec: int = 300  # live vitals -> every 5 min
     events_interval_sec: int = 900  # event-log sweep -> every 15 min
+    print_interval_sec: int = 900  # print-job sweep -> every 15 min
     http_timeout_sec: int = 15
     buffer_path: str = "buffer.jsonl"  # offline spool, relative to config dir
     # Site/org identity.  Empty string means "not assigned"; server COALESCE keeps
