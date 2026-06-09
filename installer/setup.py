@@ -51,6 +51,25 @@ def _ps(script: str) -> None:
     )
 
 
+def _enable_print_log() -> None:
+    """Enable Microsoft-Windows-PrintService/Operational so Event 307 is written.
+
+    Non-fatal: a warning is printed if the call fails (e.g. restricted policy),
+    but the rest of the install continues. The print queue clears normally after
+    each job — this log is invisible to end users.
+    """
+    script = (
+        "$log = Get-WinEvent -ListLog 'Microsoft-Windows-PrintService/Operational';"
+        "if (-not $log.IsEnabled) { $log.IsEnabled = $true; $log.SaveChanges();"
+        "  Write-Host '  Print log enabled.' }"
+        "else { Write-Host '  Print log already enabled.' }"
+    )
+    try:
+        _ps(script)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARNING: could not enable print log ({exc}); print tracking may not work")
+
+
 # --------------------------------------------------------------------------- #
 # Install / uninstall
 # --------------------------------------------------------------------------- #
@@ -61,6 +80,10 @@ def install(server_url: str, token: str = "") -> None:
     subprocess.run(["schtasks", "/end", "/tn", TASK_NAME], capture_output=True)
 
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Enable Windows print-job event log (Event 307) so the agent can collect it.
+    # Invisible to end users — the print queue still clears after each job as normal.
+    _enable_print_log()
 
     # Copy agent binary
     shutil.copy2(_resource(EXE_NAME), INSTALL_DIR / EXE_NAME)
