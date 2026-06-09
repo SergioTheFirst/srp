@@ -265,8 +265,8 @@ def test_device_page_shows_expiry_chips(client):
     )
     resp = client.get(f"/device/{CERT_DEVICE}")
     assert resp.status_code == 200
-    # soon-expiring cert (10 days) should render a bad chip
-    assert "chip bad" in resp.text
+    # 10-day cert → < 17d threshold → cert-alert-inline (yellow highlight)
+    assert "cert-alert-inline" in resp.text
     # long-lived cert (400 days) should render a good chip
     assert "chip good" in resp.text
 
@@ -291,4 +291,4 @@ def test_device_page_no_certs_shows_placeholder(client):
     )
     resp = client.get(f"/device/{CERT_DEVICE}")
     assert resp.status_code == 200
-    assert "Сертификаты не получены" in resp.text
+    assert "Действующих личных сертификатов нет" in resp.text

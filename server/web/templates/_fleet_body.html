@@ -53,11 +53,13 @@
       <tr>
         <th>Устройство</th>
         <th>Статус</th>
-        <th class="sortable" data-col="2"><span>Произв</span><span class="sort-icon"></span></th>
-        <th class="sortable" data-col="3"><span>Надёжн</span><span class="sort-icon"></span></th>
-        <th class="sortable" data-col="4"><span>Износ</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="2"><span>П</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="3"><span>Н</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="4"><span>И</span><span class="sort-icon"></span></th>
         <th class="sortable" data-col="5"><span>Риск</span><span class="sort-icon"></span></th>
         <th title="ухудшающиеся траектории">Тренд</th>
+        <th>Сертификат</th>
+        <th title="страниц за 30 дней">Печать</th>
         <th>Связь</th>
         <th></th>
       </tr>
@@ -69,23 +71,26 @@
         data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id ~ ' ' ~ site)|lower }}"
         data-id="{{ d.device_id }}"
         data-risk="{{ d.risk_exposure or 0 }}">
+
+      {# ── Device name — single line ───────────────────────────────────── #}
       <td>
-        <a href="/device/{{ d.device_id }}" style="font-weight:600">{{ d.hostname or d.device_id }}</a>
-        {% if d.chassis %}
-        <div class="small muted" style="margin-top:2px">
-          {{ d.chassis }}{% if d.model %} · {{ d.model }}{% endif %}
-        </div>
-        {% endif %}
+        <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
       </td>
+
+      {# ── Status badges ────────────────────────────────────────────────── #}
       <td>
         <div class="alerts">
           {% if d.stale %}<span class="badge warn">OFFLINE</span>{% endif %}
           {% if d.device_trust == "untrusted" %}<span class="badge bad">untrusted</span>{% endif %}
-          {% if d.unknown_domains %}<span class="badge na">{{ d.unknown_domains }}×UNKN</span>{% endif %}
+          {% if d.unknown_domains %}<span class="badge na">{{ d.unknown_domains }}×unkn</span>{% endif %}
           {% if d.regressed_count %}<span class="badge high">{{ d.regressed_count }}×пропал</span>{% endif %}
-          {% if d.cert_expiring %}<span class="badge bad">cert {{ d.cert_min_days }}д</span>{% endif %}
+          {% if not d.stale and not d.device_trust and not d.unknown_domains and not d.regressed_count and not d.cert_expiring %}
+            <span class="badge good">OK</span>
+          {% endif %}
         </div>
       </td>
+
+      {# ── Scores ───────────────────────────────────────────────────────── #}
       <td data-val="{{ d.performance or 0 }}">
         <span class="chip {{ health_color(d.performance) }}">{{ "%.0f"|format(d.performance) if d.performance is not none else "—" }}</span>
       </td>
@@ -98,23 +103,49 @@
       <td data-val="{{ d.risk_exposure or 0 }}">
         <span class="chip {{ risk_color(d.risk_exposure) }}">{{ "%.0f"|format(d.risk_exposure) if d.risk_exposure is not none else "—" }}</span>
       </td>
-      <td class="trend-cell" style="text-align:center">
+
+      {# ── Trend ────────────────────────────────────────────────────────── #}
+      <td style="text-align:center">
         {% if d.worsening_count %}
           <span class="trend-up" title="{{ d.worsening_count }} метрик ухудшаются">↑{{ d.worsening_count }}</span>
         {% elif d.trajectory_risk is not none %}
-          <span class="trend-flat" title="тренд стабилен">→</span>
+          <span class="trend-flat">→</span>
         {% else %}
           <span class="trend-none">·</span>
         {% endif %}
       </td>
-      <td class="muted small mono" title="{{ d.last_seen or '' }}">
+
+      {# ── Certificate: closest active personal cert ─────────────────────── #}
+      <td>
+        {% if d.cert_min_days is none %}
+          <span class="chip na">—</span>
+        {% elif d.cert_min_days < 17 %}
+          <span class="cert-alert">{{ d.cert_min_days }}д</span>
+        {% elif d.cert_min_days < 30 %}
+          <span class="chip bad">{{ d.cert_min_days }}д</span>
+        {% elif d.cert_min_days < 90 %}
+          <span class="chip warn">{{ d.cert_min_days }}д</span>
+        {% else %}
+          <span class="chip good">{{ d.cert_min_days }}д</span>
+        {% endif %}
+      </td>
+
+      {# ── Print pages (30d) — populated async by JS ────────────────────── #}
+      <td class="pprint" data-dev="{{ d.device_id }}">
+        <span class="chip na">…</span>
+      </td>
+
+      {# ── Last seen ────────────────────────────────────────────────────── #}
+      <td class="mono" title="{{ d.last_seen or '' }}">
         {{ fmt_age(d.last_seen_age_sec) }}
       </td>
+
+      {# ── Ack ──────────────────────────────────────────────────────────── #}
       <td>
         <button class="ackbtn {{ 'acked' if d.ack else '' }}"
                 data-id="{{ d.device_id }}"
                 title="{{ d.ack.note if d.ack else 'квитировать' }}">
-          {{ '✓' if d.ack else 'квит.' }}
+          {{ '✓' if d.ack else '·' }}
         </button>
       </td>
     </tr>

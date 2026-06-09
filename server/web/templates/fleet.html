@@ -118,16 +118,16 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .ackbtn:hover { border-color: var(--accent); color: var(--accent); }
 .ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
 
-/* ── Row overrides: white text, +2px, vivid badges, yellow numbers ─────── */
-tbody td { color: #ffffff; font-size: 18px; }
-tbody td.muted,
-tbody td .muted,
-tbody td .small { color: #ffffff; font-size: 16px; }
-tbody td a { color: #ffffff; font-weight: 700; }
+/* ── Compact table rows ─────────────────────────────────────────────────── */
+table th { padding: 5px 8px; }
+table td { padding: 4px 8px; }
+tbody td { color: #e8f4ff; font-size: 13px; white-space: nowrap; }
+tbody td a { color: #e8f4ff; font-weight: 600; font-size: 13px; }
 tbody td a:hover { color: var(--accent); text-decoration: none; }
+.dev-sub { color: var(--muted); font: 400 11px/1 var(--mono); margin-left: 5px; }
 
-/* Score chip values → bright yellow; !important beats .chip.good/.warn etc. */
-tbody td .chip { font: 700 15px/1 var(--mono); }
+/* Score chips — same visual size as device name */
+tbody td .chip { font: 600 13px/1 var(--mono); padding: 2px 7px; }
 tbody td .chip.good,
 tbody td .chip.warn,
 tbody td .chip.high,
@@ -135,18 +135,26 @@ tbody td .chip.bad,
 tbody td .chip.na,
 tbody td .chip.accent { color: #ffe000; }
 
-/* Trend arrows → keep color, bump size */
+/* Trend arrows */
 tbody td .trend-up,
 tbody td .trend-flat,
-tbody td .trend-none { font-size: 17px; }
+tbody td .trend-none { font-size: 13px; }
 
-/* Status badges → solid vivid fill, white label */
-.badge { font-size: 14px; padding: 4px 9px; }
+/* Status badges — compact */
+.badge { font-size: 12px; padding: 2px 7px; }
 .badge.warn { background: rgba(245,158,11,.82); color: #fff; border-color: var(--warn); }
 .badge.bad  { background: rgba(244,63,94,.82);  color: #fff; border-color: var(--bad); }
 .badge.high { background: rgba(249,115,22,.82); color: #fff; border-color: var(--high); }
 .badge.good { background: rgba(16,217,122,.82); color: #fff; border-color: var(--good); }
 .badge.na   { background: rgba(88,120,160,.3);  color: #cce4f8; border-color: rgba(88,120,160,.65); }
+
+/* Certificate alert: yellow background, black text */
+.cert-alert {
+  display: inline-flex; align-items: center;
+  font: 700 13px/1 var(--mono); padding: 2px 7px; border-radius: 3px;
+  background: #ffe000; color: #000; border: 1px solid #d4ba00;
+  white-space: nowrap;
+}
 </style>
 {% endblock %}
 
@@ -243,6 +251,28 @@ function makeSortable() {
   });
 }
 
+// ── Print column (one fetch → all rows) ──────────────────────────────────
+function refreshPrint() {
+  fetch("/api/v1/fleet/print?days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var map = {};
+      (p.devices || []).forEach(function (d) { map[d.device_id] = d.pages || 0; });
+      fleet.querySelectorAll("td.pprint[data-dev]").forEach(function (td) {
+        var dev = td.getAttribute("data-dev");
+        var pages = map[dev];
+        if (pages !== undefined) {
+          td.innerHTML = pages > 0
+            ? "<span class=\"chip na\">" + pages.toLocaleString("ru") + "</span>"
+            : "<span class=\"chip na\">0</span>";
+        } else {
+          td.innerHTML = "<span class=\"chip na\">—</span>";
+        }
+      });
+    })
+    .catch(function () {});
+}
+
 // ── Poll ──────────────────────────────────────────────────────────────────
 function refresh() {
   fetch("/fleet/fragment").then(function (r) {
@@ -254,6 +284,7 @@ function refresh() {
     applyFilter();
     markEscalated();
     makeSortable();
+    refreshPrint();
   }).catch(function () {});
 }
 
@@ -292,6 +323,7 @@ setInterval(function () {
 loadPrevRisk();
 markEscalated();
 makeSortable();
+refreshPrint();
 })();
 </script>
 

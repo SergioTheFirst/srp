@@ -33,6 +33,6 @@ def test_fleet_fragment_is_a_partial(client):
 
 def test_ack_button_reflects_acknowledgement(client):
     client.post("/api/v1/ingest", json=_env("d3", "inventory", healthy("inventory")))
-    assert "квит." in client.get("/fleet/fragment").text  # un-acked label
+    assert "квитировать" in client.get("/fleet/fragment").text  # un-acked title attr
     client.post("/api/v1/devices/d3/ack", json={"note": "investigating"})
     assert "acked" in client.get("/fleet/fragment").text  # acked button class

@@ -581,14 +581,15 @@ def _risk_alerts(risk: dict[str, Any]) -> tuple[Optional[str], int, int]:
 
 
 def _cert_summary(hist_payload: Optional[str]) -> tuple[Optional[int], bool]:
-    """(min days-to-expiry across the device's certs, is any expiring < 30d)."""
+    """(min days-to-expiry across active personal certs, is any expiring < 30d)."""
     if not hist_payload:
         return None, False
     try:
         certs = json.loads(hist_payload).get("certificates") or []
     except (ValueError, AttributeError):
         return None, False
-    days = [d for d in (_days_until(c.get("not_after")) for c in certs) if d is not None]
+    # Only active (not-yet-expired) certs; expired ones are excluded from the fleet column.
+    days = [d for d in (_days_until(c.get("not_after")) for c in certs) if d is not None and d >= 0]
     if not days:
         return None, False
     lo = min(days)
