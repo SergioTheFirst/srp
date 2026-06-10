@@ -51,3 +51,36 @@ def test_get_network_snapshots_skips_networkless(client):
     s = snaps[0]
     assert s["adapters"][0]["gateway"] == "192.168.1.1"
     assert s["neighbors"] and s["quality"]
+
+
+def test_netmap_api_and_page(client):
+    _ingest(client, "map-11", _net_payload(loss=30.0))
+    _ingest(client, "map-12", _net_payload(ip="192.168.1.11", mac="AA-BB-CC-00-00-02", loss=40.0))
+    api = client.get("/api/v1/netmap")
+    assert api.status_code == 200
+    m = api.json()
+    assert m["totals"]["clusters"] == 1 and m["totals"]["agents"] == 2
+    assert m["clusters"][0]["anomaly"] is True
+
+    page = client.get("/netmap")
+    assert page.status_code == 200
+    body = page.text
+    assert "Карта сети" in body and "map-11" in body and "инфраструктур" in body
+
+
+def test_device_page_shows_axis_and_subnet_note(client):
+    _ingest(client, "map-21", _net_payload(loss=30.0))
+    _ingest(client, "map-22", _net_payload(ip="192.168.1.11", mac="AA-BB-CC-00-00-02", loss=40.0))
+    page = client.get("/device/map-21")
+    assert page.status_code == 200
+    body = page.text
+    assert "Здоровье сети" in body  # axis card
+    assert "инфраструктур" in body  # subnet annotation (D8)
+    assert "Качество связи" in body  # probes table
+
+
+def test_diagnostics_exposes_network_risk(client):
+    _ingest(client, "map-31", _net_payload())
+    d = client.get("/api/v1/diagnostics/map-31")
+    assert d.status_code == 200
+    assert d.json()["network_risk"]["value"] is not None

@@ -14,6 +14,7 @@ from shared.schema import Envelope, utcnow_iso
 
 from server import db
 from server.analytics.diagnostics import compute_diagnostics
+from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.pipeline import ingest_envelope
 
@@ -80,6 +81,12 @@ def ack_device(device_id: str, body: AckBody) -> dict:
 def metrics() -> dict:
     """Pipeline health snapshot: fleet counts, ingest rate, source health, DB sizes."""
     return db.get_pipeline_metrics()
+
+
+@router.get("/netmap")
+def netmap() -> dict:
+    """Phase-2 network map: gateway clusters, agentless neighbors, subnet anomalies."""
+    return build_netmap(db.get_network_snapshots())
 
 
 # ---------------------------------------------------------------------------
