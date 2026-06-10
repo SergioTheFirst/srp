@@ -167,7 +167,7 @@ def build_netmap(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
 
     for snap in snapshots:
         adapters = [a for a in (snap.get("adapters") or []) if isinstance(a, dict)]
-        gateways = sorted({a.get("gateway") for a in adapters if a.get("gateway")})
+        gateways = sorted({str(a["gateway"]) for a in adapters if a.get("gateway")})
         for gw in gateways:
             c = clusters.setdefault(gw, _new_cluster(gw))
             _attach_agent(c, snap, [a for a in adapters if a.get("gateway") == gw])
