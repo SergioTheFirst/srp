@@ -16,6 +16,7 @@ from server import db
 from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
+from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
 from server.analytics.storage import compute_storage_risk
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
@@ -426,6 +427,11 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     _model, _site = db.get_device_model_site(device_id)
     cohort_stats = db.get_fleet_cohort_stats(_model, _site)
     fleet_anomaly_risk = compute_fleet_anomaly_risk(cohort_stats, device_trust=device_trust)
+    # Phase 2: per-device axis only (own data); the subnet anomaly is read-side (D7).
+    net_domain = ((trust or {}).get("domains") or {}).get("network") or {}
+    network_risk = compute_network_risk(
+        hist, device_trust=device_trust, domain_state=net_domain.get("state")
+    )
 
     # W4.3: thin Bayesian prioritizer over domain engines (D5). domain_values feeds
     # the W4.2 outputs (0..100) as supplementary log-odds factors into each class so
@@ -468,6 +474,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
     risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)
+    risk_block["score100"]["network_risk"] = score_to_dict(network_risk)
     risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
 
     scores = {
