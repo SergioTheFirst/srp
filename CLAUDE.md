@@ -11,13 +11,14 @@
 - ANY "where defined / what calls / imports / which module" → query `.codegraph/` FIRST; Glob/grep only on a miss.
 - If `.codegraph/` mtime predates your last edit → re-read that symbol from disk before trusting it.
 
-## 2 · Model routing (classify task → pick; DEFAULT = Sonnet 4.6)
-| Tier | For | Triggers |
+## 2 · Model routing (classify task → pick model + effort; enforce strictly)
+| Task | Model | Effort |
 |---|---|---|
-| Haiku 4.5 | mechanical · 1 file · deterministic | rename/format, boilerplate, test scaffold, grep/log triage, doc/CHANGELOG line |
-| Sonnet 4.6 | standard build (DEFAULT) | feature in a known pattern, bugfix w/ repro, write tests, review one diff |
-| Opus 4.8 | hard reasoning · high blast-radius | architecture, ambiguous spec, multi-module/contract change, subtle debug, security/correctness-critical, the decomposition itself |
-- Rule: LOW ambiguity ∧ 1 file → Haiku · known pattern → Sonnet · ambiguous ∨ cross-module ∨ touches contract/security/scoring → Opus. Unsure → +1 tier.
+| Q&A, format/rename, grep/log triage, doc/CHANGELOG line, 1-file deterministic patch | Haiku 4.5 | low |
+| Routine dev in a known pattern: CRUD, write tests, refactor, bugfix w/ repro, review one diff | Opus · Fast Mode | medium |
+| New feature, multi-file change, complex/subtle bug, module design | Opus | high |
+| Architecture, ambiguous spec, contract/security/scoring change, the decomposition itself, research/novel | Opus | max |
+- Rule: pick the LOWEST row that fully covers the task; ambiguous ∨ cross-module ∨ touches contract/security/scoring → `max`; unsure → +1 row. Fast Mode = Opus w/ faster output, no quality downgrade (`/fast`); set reasoning depth via `/effort`.
 
 ## 3 · Subagents = delegate by default (almost always)
 - DEFAULT = spawn a subagent; main thread keeps only the decision + the edit + the merge.
@@ -44,5 +45,5 @@
 
 ## 6 · Process + "Done" gates (verify; never claim green unverified)
 - Big/ambiguous change → design first (brainstorm/Plan) → TDD (test RED→GREEN) → subagent review → fix. Invoke the matching skill BEFORE coding.
-- Git: branch-first → gate green → `merge --no-ff` → `push origin main`; conventional commits, NO attribution; commit/push only when asked.
+- Git: branch-first → gate green → `merge --no-ff` → `push origin main`; conventional commits, NO attribution. **Auto-commit after each important/complete change WITHOUT asking** (user directive 2026-06-10); push only when asked. NEVER `git add -A`/sweep — stage ONLY files you touched for THIS change; never commit unrelated working-tree edits.
 - GATES before "done"/merge: `make check` (ruff · mypy[server+shared] · bandit · pytest cov ≥80%) ALL GREEN · `python smoke.py` OK · visible change → CHANGELOG line in the same commit.
