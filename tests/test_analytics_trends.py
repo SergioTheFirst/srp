@@ -281,12 +281,16 @@ def test_gateway_latency_trend_direction_only():
             ],
         }
 
+    def hb(day, free=50.0):
+        return {"received_at": f"2026-06-{day:02d}T00:00:00+00:00", "free_space_pct": free}
+
     series = [row(9, 80.0), row(7, 40.0), row(5, 20.0), row(3, 5.0), row(1, 1.0)]
-    trends = compute_trends(series, [])
+    hb_series = [hb(d) for d in (9, 7, 5, 3, 1)]  # stable disk -> trajectory has data
+    trends = compute_trends(series, hb_series)
     t = trends["gateway_latency"]
     assert t.direction == "worsening"
     assert t.eta_days is None and t.slope_per_day > 0
     # full-loss probe carries no usable latency
     assert compute_trends([row(1, None, loss=100.0)], [])["gateway_latency"].n_points == 0
-    # direction-only metrics never fabricate trajectory risk
+    # direction-only metrics never add trajectory risk: stable depletion -> 0.0
     assert trajectory_risk_score(trends).value == 0.0
