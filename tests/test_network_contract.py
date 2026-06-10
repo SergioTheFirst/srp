@@ -1,0 +1,51 @@
+"""Contract tests: network fields are additive-optional; no CONTRACT_VERSION bump."""
+
+from __future__ import annotations
+
+import pytest
+from shared.schema import CONTRACT_VERSION, HistoricalPayload
+
+pytestmark = pytest.mark.unit
+
+
+def test_historical_payload_valid_without_network_fields():
+    """An older agent that sends no network fields must still validate."""
+    p = HistoricalPayload(reliability_stability_index=9.1)
+    assert p.network_adapters == []
+    assert p.network_neighbors == []
+    assert p.network_connections == []
+    assert p.network_quality == []
+
+
+def test_network_fields_round_trip():
+    p = HistoricalPayload(
+        network_adapters=[
+            {"name": "Ethernet", "kind": "ethernet", "up": True, "ipv4": ["192.168.1.5"]}
+        ],
+        network_neighbors=[{"ip": "192.168.1.1", "mac": "AA-BB-CC-00-11-22", "state": "Reachable"}],
+        network_connections=[
+            {
+                "local_ip": "192.168.1.5",
+                "local_port": 50515,
+                "remote_ip": "192.168.1.10",
+                "remote_port": 445,
+                "state": "Established",
+            }
+        ],
+        network_quality=[
+            {
+                "target_kind": "gateway",
+                "target": "192.168.1.1",
+                "latency_ms": 1.4,
+                "loss_pct": 0.0,
+                "samples": 3,
+            }
+        ],
+    )
+    assert p.network_adapters[0].ipv4 == ["192.168.1.5"]
+    assert p.network_connections[0].remote_port == 445
+    assert p.network_quality[0].latency_ms == 1.4
+
+
+def test_contract_version_unchanged():
+    assert CONTRACT_VERSION == "0.1.0"
