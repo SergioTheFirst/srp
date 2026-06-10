@@ -107,6 +107,19 @@ def _extract_reading(source: str, payload: dict) -> dict:
         return {"value": payload.get("reliability_stability_index")}
     if source == "boot_time":
         return {"value": payload.get("avg_boot_ms")}
+    if source == "network":
+        # Decision-material slice only (quality probes + Wi-Fi signal); neighbors/
+        # connections are bulk map data and stay out of last_good.
+        adapters = payload.get("network_adapters") or []
+        return {
+            "quality": payload.get("network_quality") or [],
+            "adapters_count": len(adapters),
+            "signal_pcts": [
+                a.get("signal_pct")
+                for a in adapters
+                if isinstance(a, dict) and a.get("signal_pct") is not None
+            ],
+        }
     # disk_latency, identity, events, and any unknown source:
     # not material → validate_source returns UNCHECKED
     return {}

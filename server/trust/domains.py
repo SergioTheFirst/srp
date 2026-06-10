@@ -22,6 +22,9 @@ DOMAIN_SOURCES: Dict[str, Dict[str, List[str]]] = {
     "os_stability": {"required": ["reliability"], "optional": []},
     "boot": {"required": ["boot_time"], "optional": []},
     "thermal": {"required": ["throttle"], "optional": []},
+    # Phase 2: network feeds the network_risk axis -> it gates that axis only
+    # (never the day-1 health axes; observability counts it as coverage).
+    "network": {"required": ["network"], "optional": []},
 }
 
 

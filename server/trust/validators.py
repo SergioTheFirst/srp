@@ -89,6 +89,7 @@ MATERIAL_SOURCES = frozenset(
         "boot_time",
         "throttle",
         "event_counts",
+        "network",
     }
 )
 
@@ -108,9 +109,32 @@ def _known_bad(item: dict) -> Result:
     return _OK
 
 
+def validate_network(reading: dict) -> Result:
+    """Stateless range checks over the quality probes + Wi-Fi signal (Phase 2).
+
+    The network source feeds the network_risk axis (decision-material), so
+    garbage must not pass: loss outside 0..100, negative/absurd latency or a
+    signal% outside 0..100 mark the source IMPLAUSIBLE.
+    """
+    for q in reading.get("quality") or []:
+        if not isinstance(q, dict):
+            continue
+        for key, lo, hi in (("loss_pct", 0.0, 100.0), ("latency_ms", 0.0, 60000.0)):
+            status, reason = validate_scalar_range(f"network.{key}", q.get(key), lo, hi)
+            if status is not SemanticStatus.PLAUSIBLE:
+                return status, reason
+    for sig in reading.get("signal_pcts") or []:
+        status, reason = validate_scalar_range("network.signal_pct", sig, 0.0, 100.0)
+        if status is not SemanticStatus.PLAUSIBLE:
+            return status, reason
+    return _OK
+
+
 def validate_source(source: str, reading: dict, last: Optional[dict]) -> Result:
     if source not in MATERIAL_SOURCES:
         return SemanticStatus.UNCHECKED, None
+    if source == "network":
+        return validate_network(reading)
     if source == "storage_reliability":
         kb = _known_bad(reading)
         if kb[0] is not SemanticStatus.PLAUSIBLE:
