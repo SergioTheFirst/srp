@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from client.collectors import network
+from client.collectors import historical, network
 from client.collectors.ps import PsResult
 
 pytestmark = pytest.mark.unit
@@ -264,3 +264,57 @@ def test_adapter_cyrillic_name_passes_through(monkeypatch):
     a = res.payload["network_adapters"][0]
     assert a["name"] == "Подключение Ethernet"
     assert a["kind"] == "ethernet"  # from numeric ifType, not text
+
+
+# --------------------------------------------------------------------------- #
+# Fold into collect_historical (certificates-style merge)
+# --------------------------------------------------------------------------- #
+def test_historical_merges_network(monkeypatch):
+    """collect_historical folds network payload + source_health in."""
+
+    def _hist_ps(script, timeout=30):
+        if timeout == 120:
+            return _ok(
+                {"reliability_stability_index": 9.0, "storage": [], "battery": {"present": False}}
+            )
+        if timeout == 60:
+            return _ok({"certificates": []})
+        return PsResult("empty")
+
+    monkeypatch.setattr(historical, "run_ps", _hist_ps)
+    monkeypatch.setattr(
+        historical,
+        "collect_network",
+        lambda: network.CollectorResult(
+            {
+                "network_adapters": [{"name": "Ethernet"}],
+                "network_neighbors": [],
+                "network_connections": [],
+                "network_quality": [],
+            },
+            {network.NETWORK: network.health("ok")},
+        ),
+    )
+    res = historical.collect_historical()
+    assert res.payload["network_adapters"] == [{"name": "Ethernet"}]
+    assert res.source_health[network.NETWORK]["status"] == "ok"
+
+
+def test_historical_network_failure_sets_empty_fields(monkeypatch):
+    def _hist_ps(script, timeout=30):
+        if timeout == 120:
+            return _ok(
+                {"reliability_stability_index": 9.0, "storage": [], "battery": {"present": False}}
+            )
+        return _ok({"certificates": []})
+
+    monkeypatch.setattr(historical, "run_ps", _hist_ps)
+    monkeypatch.setattr(
+        historical,
+        "collect_network",
+        lambda: network.CollectorResult(None, network.failed([network.NETWORK], "blocked")),
+    )
+    res = historical.collect_historical()
+    assert res.payload["network_adapters"] == []
+    assert res.payload["network_connections"] == []
+    assert res.source_health[network.NETWORK]["status"] == "blocked"
