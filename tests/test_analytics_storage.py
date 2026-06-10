@@ -108,7 +108,7 @@ def test_graded_bands_and_high_power_on_hours():
     )
     assert s.value is not None and s.value >= 60  # >100 I/O errors dominate
     labels = " ".join(f["label"].lower() for f in s.factors)
-    assert "wear" in labels and "power-on" in labels
+    assert "износ" in labels and "power-on" in labels
 
 
 def test_power_on_hours_mid_band():
@@ -120,4 +120,4 @@ def test_factors_explain_the_verdict():
     s = compute_storage_risk(_hist([_disk(reallocated_sectors=300, read_errors_total=4)]), None)
     assert s.factors  # non-empty, explainable
     labels = " ".join(f["label"].lower() for f in s.factors)
-    assert "realloc" in labels or "sector" in labels
+    assert "переназначенных" in labels or "сектор" in labels

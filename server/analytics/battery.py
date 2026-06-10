@@ -41,9 +41,11 @@ from server.scoring.score100 import (
 # Capacity is the only failure mode WMI lets us measure; swelling, internal
 # resistance and charge habits are invisible. We say so on every present-battery
 # verdict so a healthy capacity reading is never mistaken for a safety clearance.
-_SWELLING_BLIND_SPOT = "physical swelling / safety not observable (WMI exposes capacity only)"
+_SWELLING_BLIND_SPOT = (
+    "физическое вздутие / безопасность не наблюдаются (WMI предоставляет только ёмкость)"
+)
 
-_UNTRUSTED_REASON = "device identity untrusted (contract §7)"
+_UNTRUSTED_REASON = "идентификатор устройства не подтверждён (контракт §7)"
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -94,20 +96,20 @@ def _grade(wear: Optional[float], cycles: Optional[float]) -> tuple[float, list[
 
     if wear is not None:
         if wear >= 50:
-            hit(f"battery {wear:.0f}% capacity loss — severely degraded", 65)
+            hit(f"батарея: потеря ёмкости {wear:.0f}% — критическая деградация", 65)
         elif wear >= 35:
-            hit(f"battery {wear:.0f}% capacity loss — significant", 45)
+            hit(f"батарея: потеря ёмкости {wear:.0f}% — значительная", 45)
         elif wear >= 20:
-            hit(f"battery {wear:.0f}% capacity loss (service recommended)", 22)
+            hit(f"батарея: потеря ёмкости {wear:.0f}% (рекомендуется обслуживание)", 22)
         elif wear >= 12:
-            hit(f"battery {wear:.0f}% capacity loss", 8)
+            hit(f"батарея: потеря ёмкости {wear:.0f}%", 8)
 
     # Context only: a high cycle count ages a battery but never fails it alone.
     if cycles is not None:
         if cycles >= 1000:
-            hit(f"{int(cycles)} charge cycles (heavily used)", 12)
+            hit(f"{int(cycles)} циклов зарядки (интенсивный износ)", 12)
         elif cycles >= 500:
-            hit(f"{int(cycles)} charge cycles", 6)
+            hit(f"{int(cycles)} циклов зарядки", 6)
 
     return _clamp(value), factors
 
@@ -133,7 +135,7 @@ def compute_battery_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
             reason=_UNTRUSTED_REASON,
         )
@@ -145,8 +147,8 @@ def compute_battery_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no battery telemetry"],
-            reason="no battery telemetry (UNKNOWN over false confidence)",
+            missing_evidence=["нет телеметрии батареи"],
+            reason="нет телеметрии батареи (UNKNOWN — ложная уверенность недопустима)",
         )
 
     if not bat.get("present"):
@@ -157,7 +159,7 @@ def compute_battery_risk(
             "unknown",
             "unknown",
             source_lineage={"battery_present": False},
-            reason="no battery present (desktop — not applicable)",
+            reason="батарея отсутствует (настольный ПК — неприменимо)",
         )
 
     wear, wear_source = _wear_pct(bat)
@@ -169,9 +171,11 @@ def compute_battery_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no battery capacity or cycle data"],
+            missing_evidence=["нет данных о ёмкости или циклах батареи"],
             source_lineage={"battery_present": True},
-            reason="battery present but no usable metric (UNKNOWN over false confidence)",
+            reason=(
+                "батарея есть, но нет пригодных данных (UNKNOWN — ложная уверенность недопустима)"
+            ),
         )
 
     value, factors = _grade(wear, cycles)
@@ -182,9 +186,9 @@ def compute_battery_risk(
 
     missing = [_SWELLING_BLIND_SPOT]
     if wear is None:
-        missing.append("battery capacity (design/full) unavailable — cycles only")
+        missing.append("ёмкость батареи (проектная/реальная) недоступна — только циклы")
     if cycles is None:
-        missing.append("cycle count unavailable")
+        missing.append("счётчик циклов недоступен")
 
     return make_score100(
         value,
@@ -199,5 +203,5 @@ def compute_battery_risk(
             "wear_pct": round(wear, 1) if wear is not None else None,
             "cycle_count": int(cycles) if cycles is not None else None,
         },
-        reason="capacity nominal; swelling not observable" if value == 0.0 else "",
+        reason="ёмкость в норме; вздутие не наблюдается" if value == 0.0 else "",
     )

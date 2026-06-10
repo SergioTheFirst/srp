@@ -65,10 +65,12 @@ _MIN_HIGH_CONF_SAMPLES = 3
 # the trajectory engine's job, not this current-state verdict.
 _RECENCY_DAYS = 14.0
 
-_UNTRUSTED_REASON = "device identity untrusted (contract §7)"
-_SYSTEM_DRIVE_BLIND_SPOT = "only system-drive free space observed (other volumes not measured)"
+_UNTRUSTED_REASON = "идентификатор устройства не подтверждён (контракт §7)"
+_SYSTEM_DRIVE_BLIND_SPOT = (
+    "наблюдается только свободное место на системном диске (другие тома не измеряются)"
+)
 _SERVICING_BLIND_SPOT = (
-    "Windows servicing health inferred from WindowsUpdateClient failure events only"
+    "состояние обслуживания Windows определяется только по событиям сбоев WindowsUpdateClient"
 )
 
 
@@ -148,13 +150,22 @@ def _servicing_failures(events: list[dict[str, Any]]) -> int:
 def _free_space_risk(typical: float) -> tuple[float, Optional[Factor]]:
     """Current-state risk 0..100 from the persistent (median) free-space level."""
     if typical < _FREE_CRITICAL:
-        return 75.0, {"label": f"system drive {typical:.0f}% free — critically full", "delta": 75.0}
+        return 75.0, {
+            "label": f"системный диск: {typical:.0f}% свободно — критически заполнен",
+            "delta": 75.0,
+        }
     if typical < _FREE_SEVERE:
-        return 55.0, {"label": f"system drive {typical:.0f}% free — severe", "delta": 55.0}
+        return 55.0, {
+            "label": f"системный диск: {typical:.0f}% свободно — критический уровень",
+            "delta": 55.0,
+        }
     if typical < _FREE_HIGH:
-        return 30.0, {"label": f"system drive {typical:.0f}% free — low", "delta": 30.0}
+        return 30.0, {"label": f"системный диск: {typical:.0f}% свободно — мало", "delta": 30.0}
     if typical < _FREE_WATCH:
-        return 18.0, {"label": f"system drive {typical:.0f}% free — getting full", "delta": 18.0}
+        return 18.0, {
+            "label": f"системный диск: {typical:.0f}% свободно — заполняется",
+            "delta": 18.0,
+        }
     return 0.0, None
 
 
@@ -179,7 +190,7 @@ def compute_disk_fill_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
             reason=_UNTRUSTED_REASON,
         )
@@ -194,8 +205,8 @@ def compute_disk_fill_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no system-drive free-space telemetry"],
-            reason="no free-space telemetry (UNKNOWN over false confidence)",
+            missing_evidence=["нет телеметрии свободного места на системном диске"],
+            reason="нет телеметрии свободного места (UNKNOWN — ложная уверенность недопустима)",
         )
 
     current: Optional[float] = samples[0] if samples else None
@@ -215,10 +226,10 @@ def compute_disk_fill_risk(
     if collapse:
         if disk_low:
             delta = 20.0
-            label = f"Windows Update failing ({servicing_count}) — low disk is breaking servicing"
+            label = f"Windows Update: сбои ({servicing_count}) — мало места мешает обслуживанию"
         else:
             delta = 28.0
-            label = f"Windows Update repeatedly failing ({servicing_count}) — machine not patching"
+            label = f"Windows Update: многократные сбои ({servicing_count}) — машина не обновляется"
         value += delta
         factors.append({"label": label, "delta": delta})
 
@@ -226,15 +237,15 @@ def compute_disk_fill_risk(
     # level is healthy = a probable Windows-servicing cleanup in progress, not depletion.
     if current is not None and typical is not None and current < _FREE_WATCH <= typical:
         notes.append(
-            f"latest reading {current:.0f}% free but not persistent "
-            "(possible cleanup/transient — see trajectory)"
+            f"последнее значение: {current:.0f}% свободно, нестабильно "
+            "(возможная очистка/временное — см. тренд)"
         )
 
     confidence = _confidence(len(samples), disk_low, collapse)
 
     missing = [_SYSTEM_DRIVE_BLIND_SPOT, _SERVICING_BLIND_SPOT]
     if not samples:
-        missing.append("system-drive free space not observed")
+        missing.append("свободное место на системном диске не наблюдалось")
     missing.extend(notes)
 
     return make_score100(
@@ -269,5 +280,5 @@ def _verdict_reason(value: float, samples: list[float], collapse: bool) -> str:
     if value > 0.0:
         return ""
     if samples and not collapse:
-        return "system drive has ample free space; no Windows Update failures observed"
+        return "системный диск: достаточно свободного места; сбоев Windows Update не обнаружено"
     return ""

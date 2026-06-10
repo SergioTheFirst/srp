@@ -258,7 +258,7 @@ def test_pending_reboot_blind_spot_always_present_on_verdict():
     # Must appear in every non-UNKNOWN verdict.
     s = compute_os_degradation_risk(_hist())
     joined = " ".join(s.missing_evidence).lower()
-    assert "reboot" in joined or "restart" in joined or "pending" in joined
+    assert "перезагрузк" in joined
 
 
 def test_cause_blind_spot_always_present_on_verdict():

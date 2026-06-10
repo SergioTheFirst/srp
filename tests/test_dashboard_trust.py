@@ -48,7 +48,7 @@ def test_device_page_shows_untrusted_banner(client):
     )
     resp = client.get("/device/du")
     assert resp.status_code == 200
-    assert "untrusted" in resp.text
+    assert "Идентичность недостоверна" in resp.text
 
 
 def test_fleet_page_still_renders(client):

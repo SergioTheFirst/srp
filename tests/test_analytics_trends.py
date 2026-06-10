@@ -178,7 +178,7 @@ def test_untrusted_identity_withholds_trajectory():
     s = trajectory_risk_score(compute_trends(series, []), device_trust="untrusted")
     assert s.value is None
     assert s.band == "unknown"
-    assert "identity trust failed" in s.missing_evidence
+    assert "идентификация не подтверждена" in s.missing_evidence
 
 
 def test_no_depletion_history_is_unknown_not_zero():

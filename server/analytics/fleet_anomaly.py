@@ -69,14 +69,14 @@ _MIN_COHORT = 2
 # cohort size at which confidence is promoted from low to medium
 _COHORT_MEDIUM = 5
 
-_UNTRUSTED_REASON = "device identity untrusted (contract §7)"
+_UNTRUSTED_REASON = "идентификатор устройства не подтверждён (контракт §7)"
 _BLIND_SPOT_BUILD = (
-    "os_build not used as cohort key — cohort is model-only; devices with different "
-    "OS builds but same model are grouped together (may widen or dilute patterns)"
+    "os_build не используется как ключ когорты — когорта только по модели; устройства с разными "
+    "сборками OS, но одной моделью группируются вместе (может расширять или размывать паттерны)"
 )
 _BLIND_SPOT_CAUSE = (
-    "fleet pattern is correlation-based — correlation of crash/RSI rates across a model "
-    "cohort does not prove a shared root cause; manual patch/driver log review required"
+    "флотовый паттерн основан на корреляции — корреляция показателей сбоев/RSI в когорте модели "
+    "не доказывает общую первопричину; требуется ручной анализ логов patch/driver"
 )
 
 
@@ -94,15 +94,15 @@ def _site_kp41_contribution(
     if site_kp41_pct >= _KP41_HIGH:
         delta = 40.0
         label = (
-            f"{site_kp41_pct:.0%} of site devices have elevated KP41 events "
-            f"({site_size} devices) — site-wide power cluster, not individual PC faults"
+            f"{site_kp41_pct:.0%} устройств площадки имеют повышенный KP41 "
+            f"({site_size} устр.) — кластер питания площадки, не индивидуальные сбои ПК"
         )
         return delta, {"label": label, "delta": delta}
     if site_kp41_pct >= _KP41_MOD:
         delta = 20.0
         label = (
-            f"{site_kp41_pct:.0%} of site devices have elevated KP41 events "
-            f"({site_size} devices) — possible building power event"
+            f"{site_kp41_pct:.0%} устройств площадки имеют повышенный KP41 "
+            f"({site_size} устр.) — возможное событие электропитания здания"
         )
         return delta, {"label": label, "delta": delta}
     return 0.0, None
@@ -116,22 +116,22 @@ def _cohort_bsod_contribution(
     if bsod_pct >= _BSOD_HIGH:
         delta = 35.0
         label = (
-            f"{bsod_pct:.0%} of {cohort_size}-device model cohort have BSODs — "
-            f"likely bad driver or OS patch rollout, not simultaneous hardware failures"
+            f"{bsod_pct:.0%} устройств когорты модели ({cohort_size}) имеют BSOD — "
+            f"вероятно плохой driver или обновление OS, не одновременные аппаратные сбои"
         )
         return delta, {"label": label, "delta": delta}
     if bsod_pct >= _BSOD_MOD:
         delta = 20.0
         label = (
-            f"{bsod_pct:.0%} of {cohort_size}-device model cohort have BSODs — "
-            f"elevated fleet crash rate (possible patch/driver issue)"
+            f"{bsod_pct:.0%} устройств когорты модели ({cohort_size}) имеют BSOD — "
+            f"повышенный уровень сбоев флота (возможная проблема patch/driver)"
         )
         return delta, {"label": label, "delta": delta}
     if bsod_pct >= _BSOD_LOW:
         delta = 8.0
         label = (
-            f"{bsod_pct:.0%} of {cohort_size}-device model cohort have BSODs — "
-            f"slightly elevated (monitor)"
+            f"{bsod_pct:.0%} устройств когорты модели ({cohort_size}) имеют BSOD — "
+            f"незначительное повышение (наблюдение)"
         )
         return delta, {"label": label, "delta": delta}
     return 0.0, None
@@ -145,15 +145,15 @@ def _cohort_rsi_contribution(
     if rsi_low_pct >= _RSI_HIGH:
         delta = 20.0
         label = (
-            f"{rsi_low_pct:.0%} of {cohort_size}-device cohort have RSI < 5.0 — "
-            f"fleet-wide OS degradation pattern"
+            f"{rsi_low_pct:.0%} устройств когорты ({cohort_size}) имеют RSI < 5.0 — "
+            f"паттерн деградации OS по всему флоту"
         )
         return delta, {"label": label, "delta": delta}
     if rsi_low_pct >= _RSI_MOD:
         delta = 10.0
         label = (
-            f"{rsi_low_pct:.0%} of {cohort_size}-device cohort have low RSI — "
-            f"elevated cohort instability"
+            f"{rsi_low_pct:.0%} устройств когорты ({cohort_size}) имеют низкий RSI — "
+            f"повышенная нестабильность когорты"
         )
         return delta, {"label": label, "delta": delta}
     return 0.0, None
@@ -183,7 +183,7 @@ def compute_fleet_anomaly_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
             reason=_UNTRUSTED_REASON,
         )
@@ -194,23 +194,28 @@ def compute_fleet_anomaly_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no fleet cohort data available"],
-            reason="no fleet data (UNKNOWN over false confidence)",
+            missing_evidence=["данные когорты флота недоступны"],
+            reason="нет данных флота (UNKNOWN — ложная уверенность недопустима)",
         )
 
     cohort_size = int(cohort_stats.get("cohort_size") or 0)
     if cohort_size < _MIN_COHORT:
         if cohort_size == 0:
-            _reason = "model unknown or no historical data — cohort cannot be formed"
-            _missing = ["model not in devices table — cohort key unavailable", _BLIND_SPOT_BUILD]
-        else:
-            _device_word = "device" if cohort_size == 1 else "devices"
             _reason = (
-                f"only {cohort_size} {_device_word} with this model "
-                f"— need ≥{_MIN_COHORT} to compare"
+                "модель неизвестна или нет исторических данных — когорта не может быть сформирована"
             )
             _missing = [
-                f"cohort size {cohort_size} — need ≥{_MIN_COHORT} for fleet comparison",
+                "модель отсутствует в таблице устройств — ключ когорты недоступен",
+                _BLIND_SPOT_BUILD,
+            ]
+        else:
+            _device_word = "устройство" if cohort_size == 1 else "устройств"
+            _reason = (
+                f"только {cohort_size} {_device_word} с этой моделью "
+                f"— нужно ≥{_MIN_COHORT} для сравнения"
+            )
+            _missing = [
+                f"размер когорты {cohort_size} — нужно ≥{_MIN_COHORT} для сравнения по флоту",
                 _BLIND_SPOT_BUILD,
             ]
         return make_score100(
@@ -255,11 +260,11 @@ def compute_fleet_anomaly_risk(
 
     if value == 0.0:
         reason = (
-            f"no fleet patterns detected — cohort of {cohort_size} devices shows "
-            f"normal crash rate and stable OS; site KP41 below threshold"
+            f"флотовые паттерны не обнаружены — когорта из {cohort_size} устройств показывает "
+            f"нормальный уровень сбоев и стабильную OS; KP41 площадки ниже порога"
         )
     else:
-        reason = "fleet patterns detected — see factors above"
+        reason = "флотовые паттерны обнаружены — см. факторы выше"
 
     return make_score100(
         _clamp(value),

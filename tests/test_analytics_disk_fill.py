@@ -83,7 +83,7 @@ def test_cleanup_rebound_is_not_alarmed():
     assert s.value == 0.0
     # the dip is not hidden -- it is noted as a possible transient.
     joined = " ".join(s.missing_evidence).lower()
-    assert "transient" in joined or "not persistent" in joined
+    assert "временное" in joined or "нестабильно" in joined
 
 
 def test_critical_free_space_reads_severe():
@@ -162,7 +162,7 @@ def test_servicing_collapse_without_free_space_data_is_medium():
     assert s.value is not None and s.value > 0
     assert s.confidence == "medium"
     joined = " ".join(s.missing_evidence).lower()
-    assert "free space" in joined or "free-space" in joined
+    assert "свободное место" in joined
 
 
 def test_non_windowsupdate_event_id_20_is_not_a_servicing_failure():
@@ -188,21 +188,21 @@ def test_malformed_events_do_not_crash_or_false_trigger():
 def test_blind_spots_always_flagged_on_a_verdict():
     s = compute_disk_fill_risk(_series(5, 6, 4), [])
     joined = " ".join(s.missing_evidence).lower()
-    assert "system" in joined and "drive" in joined  # only system-drive observed
-    assert "servicing" in joined or "update" in joined  # servicing inferred from events
+    assert "систем" in joined and "диск" in joined  # only system-drive observed
+    assert "обслуживан" in joined or "update" in joined  # servicing inferred from events
 
 
 def test_factors_explain_the_verdict():
     s = compute_disk_fill_risk(_series(3, 4, 3), [])
     assert s.factors
     labels = " ".join(f["label"].lower() for f in s.factors)
-    assert "free" in labels or "disk" in labels or "full" in labels
+    assert "свободно" in labels or "диск" in labels or "заполнен" in labels
 
 
 def test_all_clear_reason_is_explained():
     s = compute_disk_fill_risk(_series(50, 55, 52), [])
     assert s.value == 0.0
-    assert "ample" in s.reason.lower() or "free space" in s.reason.lower()
+    assert "достаточно" in s.reason.lower() or "свободного места" in s.reason.lower()
 
 
 def test_lineage_exposes_current_and_typical_and_counts():

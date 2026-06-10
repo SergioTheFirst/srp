@@ -81,7 +81,8 @@ def _score_disk(disk: dict, heartbeat: Optional[dict]) -> tuple[float, list[Fact
     if realloc is not None and realloc > 0:
         # A growing reallocated count is the classic pre-failure signal.
         hit(
-            f"{int(realloc)} reallocated sector(s)" + (" — drive failing" if realloc > 100 else ""),
+            f"{int(realloc)} переназначенных секторов"
+            + (" — диск отказывает" if realloc > 100 else ""),
             60 if realloc > 100 else 35,
         )
 
@@ -89,30 +90,30 @@ def _score_disk(disk: dict, heartbeat: Optional[dict]) -> tuple[float, list[Fact
     write_err = _num(disk, "write_errors_total") or 0.0
     io_errors = read_err + write_err
     if io_errors > 0:
-        hit(f"{int(io_errors)} cumulative I/O error(s)", 60 if io_errors > 100 else 40)
+        hit(f"{int(io_errors)} накопленных I/O ошибок", 60 if io_errors > 100 else 40)
 
     wear = _num(disk, "wear_pct")
     if wear is not None:
         if wear > 95:
-            hit(f"SSD wear {wear:.0f}% (end of rated life)", 40)
+            hit(f"износ SSD {wear:.0f}% (конец ресурса)", 40)
         elif wear > 85:
-            hit(f"SSD wear {wear:.0f}%", 25)
+            hit(f"износ SSD {wear:.0f}%", 25)
         elif wear > 70:
-            hit(f"SSD wear {wear:.0f}%", 12)
+            hit(f"износ SSD {wear:.0f}%", 12)
 
     temp = _num(disk, "temperature_c")
     if temp is not None:
         if temp > 70:
-            hit(f"Drive {int(temp)}°C (thermal stress)", 15)
+            hit(f"диск {int(temp)}°C (тепловой стресс)", 15)
         elif temp > 60:
-            hit(f"Drive {int(temp)}°C (warm)", 8)
+            hit(f"диск {int(temp)}°C (нагрев)", 8)
 
     poh = _num(disk, "power_on_hours")
     if poh is not None:
         if poh > 40000:
-            hit(f"Power-on {poh / 1000:.0f}k h", 8)
+            hit(f"Power-on {poh / 1000:.0f}k ч", 8)
         elif poh > 25000:
-            hit(f"Power-on {poh / 1000:.0f}k h", 4)
+            hit(f"Power-on {poh / 1000:.0f}k ч", 4)
 
     # Confirmation only: latency may amplify a SMART signal, never create one.
     if value > 0:
@@ -120,7 +121,7 @@ def _score_disk(disk: dict, heartbeat: Optional[dict]) -> tuple[float, list[Fact
             _num(heartbeat, "disk_read_sec") or 0.0, _num(heartbeat, "disk_write_sec") or 0.0
         )
         if latency > _LATENCY_HIGH_SEC:
-            hit(f"high disk latency confirms SMART signal ({latency * 1000:.0f} ms)", 10)
+            hit(f"высокая задержка диска подтверждает сигнал SMART ({latency * 1000:.0f} мс)", 10)
 
     return _clamp(value), factors
 
@@ -145,9 +146,9 @@ def compute_storage_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
-            reason="device identity untrusted (contract §7)",
+            reason="идентификатор устройства не подтверждён (контракт §7)",
         )
 
     disks = (historical or {}).get("storage") or []
@@ -170,8 +171,8 @@ def compute_storage_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no SMART / StorageReliability data for any disk"],
-            reason="no storage SMART telemetry (UNKNOWN over false confidence)",
+            missing_evidence=["нет данных SMART / StorageReliability ни для одного диска"],
+            reason="нет телеметрии SMART хранилища (UNKNOWN — ложная уверенность недопустима)",
         )
 
     return make_score100(
@@ -185,5 +186,5 @@ def compute_storage_risk(
             "disks_with_smart": smart_disks,
             "disks_total": len(disks),
         },
-        reason="" if worst_value > 0 else "SMART nominal on all reporting disks",
+        reason="" if worst_value > 0 else "SMART в норме на всех отчитывающихся дисках",
     )
