@@ -4,7 +4,7 @@
 ::
 :: Использование:
 ::   run_agent_persistent.bat                         -- server_url из config.json
-::   run_agent_persistent.bat http://192.168.1.10:8000 -- переопределить сервер
+::   run_agent_persistent.bat http://127.0.0.1:8000 -- переопределить сервер
 ::
 :: Лог: agent.log рядом со скриптом
 :: Остановка: закрой окно или нажми Ctrl+C дважды
@@ -73,17 +73,22 @@ echo.
 echo [%DATE% %TIME%] Агент завершился (код: %EXIT_CODE%)
 echo.
 
-:: Если ExitCode=1 — скорее всего ошибка конфига (нет server_url), не перезапускать сразу
-if %EXIT_CODE% EQU 1 (
-    echo  Возможно не задан server_url в config.json.
+:: ExitCode 1 или 2 — ошибка конфига (нет server_url), не перезапускать сразу
+if %EXIT_CODE% EQU 1 goto :cfg_error
+if %EXIT_CODE% EQU 2 goto :cfg_error
+goto :normal_restart
+
+:cfg_error
+    echo  Не задан server_url в config.json.
     echo  Добавь "server_url": "http://IP:8000" в client\config.json
     echo  или передай адрес аргументом:  run_agent_persistent.bat http://IP:8000
+    echo  или поставь "offline_mode": true для работы без сервера.
     echo.
     echo  Повтор через 30 секунд...
     timeout /t 30 /nobreak >nul
-) else (
+    goto restart
+
+:normal_restart
     echo  Перезапуск через 10 секунд...
     timeout /t 10 /nobreak >nul
-)
-
-goto restart
+    goto restart
