@@ -58,7 +58,7 @@ def test_healthy_battery_low_risk_capped_medium_confidence():
 def test_swelling_blind_spot_always_flagged_when_present():
     s = compute_battery_risk(_hist(_bat(wear_pct=5.0)))
     joined = " ".join(s.missing_evidence).lower()
-    assert "swell" in joined
+    assert "вздути" in joined
 
 
 def test_high_wear_high_risk():
@@ -115,8 +115,8 @@ def test_factors_explain_the_verdict():
     s = compute_battery_risk(_hist(_bat(wear_pct=45.0, cycle_count=1100)))
     assert s.factors  # non-empty, explainable
     labels = " ".join(f["label"].lower() for f in s.factors)
-    assert "capacity" in labels or "wear" in labels
-    assert "cycle" in labels
+    assert "ёмкости" in labels or "износ" in labels
+    assert "циклов" in labels
 
 
 def test_dead_battery_zero_fcc_reads_severe():

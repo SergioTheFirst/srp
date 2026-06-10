@@ -197,7 +197,7 @@ def build_trend(
             None,
             None,
             "insufficient",
-            f"need >= {_MIN_POINTS} readings, have {n}",
+            f"нужно >= {_MIN_POINTS} показаний, есть {n}",
         )
 
     slope = theil_sen_slope(points)
@@ -211,7 +211,7 @@ def build_trend(
             None,
             None,
             "insufficient",
-            "readings not separated in time",
+            "показания не разделены во времени",
         )
 
     toward_failure = slope * worsening_sign > 0
@@ -355,9 +355,9 @@ def trajectory_risk_score(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
-            reason="device identity untrusted (contract §7)",
+            reason="идентификатор устройства не подтверждён (контракт §7)",
         )
 
     factors: list[Factor] = []
@@ -369,7 +369,7 @@ def trajectory_risk_score(
     for name in _DEPLETION_DOMAINS:
         t = trends.get(name)
         if t is None or t.direction == "insufficient":
-            missing.append(f"{name} insufficient history")
+            missing.append(f"{name}: недостаточно истории")
             continue
         have_any_trend = True
         best_points = max(best_points, t.n_points)
@@ -377,8 +377,8 @@ def trajectory_risk_score(
             risk = _eta_to_risk(t.eta_days)
             factors.append(
                 {
-                    "label": f"{name} -> {t.eta_days:.0f}d to limit "
-                    f"(slope {t.slope_per_day:+.3f}/day)",
+                    "label": f"{name} → {t.eta_days:.0f}д до предела "
+                    f"(наклон {t.slope_per_day:+.3f}/день)",
                     "delta": risk,
                 }
             )
@@ -391,7 +391,7 @@ def trajectory_risk_score(
             "unknown",
             "unknown",
             missing_evidence=missing,
-            reason="insufficient longitudinal history for any depletion domain",
+            reason="недостаточно истории ни по одному контролируемому ресурсу",
         )
 
     # We may have trends but none depleting toward a boundary -> stable (0.0).
@@ -410,5 +410,7 @@ def trajectory_risk_score(
             for n in _DEPLETION_DOMAINS
             if n in trends
         },
-        reason="" if soonest_eta is not None else "no depletion projected; trends stable",
+        reason=""
+        if soonest_eta is not None
+        else "истощение ресурса не прогнозируется; тренды стабильны",
     )

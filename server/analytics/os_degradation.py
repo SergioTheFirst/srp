@@ -63,14 +63,15 @@ _DIRTY_SOME = 2  # -> +6
 _BOOT_SLOW = 60_000  # 60 s -> +5
 _BOOT_VERY_SLOW = 120_000  # 2 min -> +12
 
-_UNTRUSTED_REASON = "device identity untrusted (contract §7)"
+_UNTRUSTED_REASON = "идентификатор устройства не подтверждён (контракт §7)"
 _PENDING_REBOOT_BLIND_SPOT = (
-    "pending restart state not collected — a machine awaiting reboot to apply "
-    "security or driver updates is in a degraded state that cannot be detected here"
+    "статус ожидающей перезагрузки не собирается — машина, ожидающая перезагрузки "
+    "для применения обновлений безопасности или driver-обновлений, находится в "
+    "деградированном состоянии, которое здесь не обнаруживается"
 )
 _CAUSE_BLIND_SPOT = (
-    "crash counts cannot distinguish hardware fault, driver regression, or OS "
-    "corruption — cause attribution requires per-event analysis"
+    "счётчики сбоев не позволяют различить аппаратную неисправность, регрессию driver "
+    "или повреждение OS — определение причины требует анализа каждого события"
 )
 
 
@@ -94,16 +95,16 @@ def _rsi_contribution(rsi: float) -> tuple[float, Optional[Factor]]:
     """Risk delta and factor from the Reliability Stability Index."""
     if rsi < _RSI_CRITICAL:
         delta = 60.0
-        label = f"RSI {rsi:.1f}/10 — OS extremely unstable (critical)"
+        label = f"RSI {rsi:.1f}/10 — OS крайне нестабильна (критично)"
     elif rsi < _RSI_SEVERE:
         delta = 40.0
-        label = f"RSI {rsi:.1f}/10 — OS severely degraded"
+        label = f"RSI {rsi:.1f}/10 — OS серьёзно деградировала"
     elif rsi < _RSI_HIGH:
         delta = 22.0
-        label = f"RSI {rsi:.1f}/10 — OS significantly degraded"
+        label = f"RSI {rsi:.1f}/10 — OS заметно деградировала"
     elif rsi < _RSI_WATCH:
         delta = 10.0
-        label = f"RSI {rsi:.1f}/10 — mild OS instability"
+        label = f"RSI {rsi:.1f}/10 — лёгкая нестабильность OS"
     else:
         return 0.0, None
     return delta, {"label": label, "delta": delta}
@@ -122,12 +123,15 @@ def _crash_contribution(
         if count >= _BSOD_SEVERE:
             delta = 30.0
             factors.append(
-                {"label": f"{count} BSODs in 30 days — severe system instability", "delta": delta}
+                {
+                    "label": f"{count} BSOD за 30 дней — серьёзная нестабильность системы",
+                    "delta": delta,
+                }
             )
             value += delta
         elif count >= _BSOD_ONE:
             delta = 15.0
-            factors.append({"label": f"{count} BSOD in 30 days", "delta": delta})
+            factors.append({"label": f"{count} BSOD за 30 дней", "delta": delta})
             value += delta
 
     if dirty is not None:
@@ -136,14 +140,16 @@ def _crash_contribution(
             delta = 12.0
             factors.append(
                 {
-                    "label": f"{count} dirty shutdowns in 30 days — frequent unexpected reboot",
+                    "label": (
+                        f"{count} аварийных выключений за 30 дней — частые внезапные перезагрузки"
+                    ),
                     "delta": delta,
                 }
             )
             value += delta
         elif count >= _DIRTY_SOME:
             delta = 6.0
-            factors.append({"label": f"{count} dirty shutdowns in 30 days", "delta": delta})
+            factors.append({"label": f"{count} аварийных выключений за 30 дней", "delta": delta})
             value += delta
 
     return value, factors
@@ -155,11 +161,17 @@ def _boot_contribution(avg_boot_ms: Optional[float]) -> tuple[float, Optional[Fa
         return 0.0, None
     if avg_boot_ms >= _BOOT_VERY_SLOW:
         delta = 12.0
-        label = f"avg boot {avg_boot_ms / 1000:.0f}s — very slow (OS rot or failing component)"
+        label = (
+            f"средняя загрузка {avg_boot_ms / 1000:.0f} с — очень медленно "
+            "(деградация OS или отказывающий компонент)"
+        )
         return delta, {"label": label, "delta": delta}
     if avg_boot_ms >= _BOOT_SLOW:
         delta = 5.0
-        return delta, {"label": f"avg boot {avg_boot_ms / 1000:.0f}s — slow", "delta": delta}
+        return delta, {
+            "label": f"средняя загрузка {avg_boot_ms / 1000:.0f} с — медленно",
+            "delta": delta,
+        }
     return 0.0, None
 
 
@@ -182,7 +194,7 @@ def compute_os_degradation_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентификация не подтверждена"],
             source_lineage={"identity": "untrusted"},
             reason=_UNTRUSTED_REASON,
         )
@@ -200,8 +212,8 @@ def compute_os_degradation_risk(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no RSI or crash-count telemetry"],
-            reason="no OS stability telemetry (UNKNOWN over false confidence)",
+            missing_evidence=["нет телеметрии RSI и счётчиков сбоев"],
+            reason="нет телеметрии стабильности OS (UNKNOWN — ложная уверенность недопустима)",
         )
 
     factors: list[Factor] = []
@@ -230,18 +242,18 @@ def compute_os_degradation_risk(
 
     missing = [_PENDING_REBOOT_BLIND_SPOT, _CAUSE_BLIND_SPOT]
     if rsi is None:
-        missing.append("RSI unavailable — OS stability index not readable")
+        missing.append("RSI недоступен — индекс стабильности OS не считывается")
     if bugchecks is None:
-        missing.append("BSOD count unavailable (event log access required)")
+        missing.append("счётчик BSOD недоступен (требуется доступ к журналу событий)")
     if avg_boot is None:
-        missing.append("boot time not observed")
+        missing.append("время загрузки не наблюдалось")
 
     reason = ""
     if value == 0.0:
         if rsi is not None and rsi >= _RSI_WATCH:
-            reason = f"RSI {rsi:.1f}/10 — OS stable; no crash signals observed"
+            reason = f"RSI {rsi:.1f}/10 — OS стабильна; сигналов сбоев не обнаружено"
         else:
-            reason = "no OS degradation signals observed"
+            reason = "сигналов деградации OS не обнаружено"
 
     return make_score100(
         _clamp(value),
