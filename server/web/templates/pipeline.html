@@ -37,6 +37,36 @@
 .mc-val.accent { color: var(--accent); }
 .db-table { max-width: 480px; }
 .refresh-note { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+
+/* ─── Meta theme overrides (pipeline) ─────────────────────────────────── */
+[data-theme="meta"] .mc-val { font: 700 17px/1 var(--font-body); }
+
+/* ─── Vercel theme overrides (pipeline) ─────────────────────────────────── */
+[data-theme="vercel"] .metric-card {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 20px;
+}
+[data-theme="vercel"] .metric-card.good,
+[data-theme="vercel"] .metric-card.warn,
+[data-theme="vercel"] .metric-card.bad,
+[data-theme="vercel"] .metric-card.na { border: none; }
+[data-theme="vercel"] .metric-card::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  border-radius: var(--r-card) var(--r-card) 0 0;
+  background: var(--line-2);
+}
+[data-theme="vercel"] .metric-card.good::before { background: var(--good); }
+[data-theme="vercel"] .metric-card.warn::before { background: var(--warn); }
+[data-theme="vercel"] .metric-card.bad::before  { background: var(--bad); }
+[data-theme="vercel"] .mc-val {
+  font: 600 17px/1 var(--font-body);
+  letter-spacing: -.4px;
+}
 </style>
 <meta http-equiv="refresh" content="15">
 {% endblock %}
