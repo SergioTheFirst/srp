@@ -135,6 +135,45 @@ class CertInfo(_Base):
     not_before: Optional[str] = None
 
 
+class NetAdapter(_Base):
+    name: Optional[str] = None
+    desc: Optional[str] = None
+    mac: Optional[str] = None
+    kind: Optional[str] = None  # "ethernet" | "wifi" | "other"
+    up: Optional[bool] = None
+    link_mbps: Optional[float] = None
+    ipv4: list[str] = Field(default_factory=list)
+    ipv6: list[str] = Field(default_factory=list)
+    gateway: Optional[str] = None
+    dns: list[str] = Field(default_factory=list)
+    dhcp: Optional[bool] = None
+    ssid: Optional[str] = None
+    signal_pct: Optional[int] = None
+    channel: Optional[int] = None
+
+
+class NetNeighbor(_Base):
+    ip: Optional[str] = None
+    mac: Optional[str] = None
+    state: Optional[str] = None
+
+
+class NetConnection(_Base):
+    local_ip: Optional[str] = None
+    local_port: Optional[int] = None
+    remote_ip: Optional[str] = None
+    remote_port: Optional[int] = None
+    state: Optional[str] = None
+
+
+class NetQuality(_Base):
+    target_kind: Optional[str] = None  # "gateway" | "dns"
+    target: Optional[str] = None
+    latency_ms: Optional[float] = None
+    loss_pct: Optional[float] = None
+    samples: Optional[int] = None
+
+
 class HistoricalPayload(_Base):
     reliability_stability_index: Optional[float] = None  # 0..10, latest sample
     kernel_power_41_30d: Optional[int] = None  # unexpected power loss / hang
@@ -147,6 +186,10 @@ class HistoricalPayload(_Base):
     battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)
+    network_adapters: list[NetAdapter] = Field(default_factory=list)
+    network_neighbors: list[NetNeighbor] = Field(default_factory=list)
+    network_connections: list[NetConnection] = Field(default_factory=list)
+    network_quality: list[NetQuality] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

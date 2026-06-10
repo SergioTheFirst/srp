@@ -22,6 +22,7 @@ IDENTITY = "identity"
 EVENTS = "events"
 CERTIFICATES = "certificates"
 PRINT_JOBS = "print_jobs"
+NETWORK = "network"  # Phase 1: ungated (intentionally not in DOMAIN_SOURCES)
 
 
 class CollectorResult(NamedTuple):

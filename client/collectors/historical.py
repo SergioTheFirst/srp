@@ -8,11 +8,13 @@ or missing counter yields a neutral gap, not a crash.
 
 from __future__ import annotations
 
+from client.collectors.network import collect_network
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import (
     BATTERY,
     BOOT_TIME,
     CERTIFICATES,
+    NETWORK,
     RELIABILITY,
     STORAGE_RELIABILITY,
     CollectorResult,
@@ -111,7 +113,7 @@ foreach ($store in 'Cert:\LocalMachine\My','Cert:\CurrentUser\My') {
 
 def collect_historical() -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=120)
-    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME, CERTIFICATES]
+    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME, CERTIFICATES, NETWORK]
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
         return CollectorResult(None, failed(owned, status))
@@ -162,5 +164,16 @@ def collect_historical() -> CollectorResult:
         raw["certificates"] = []
         err_status = cert_res.status if cert_res.status != "ok" else "empty"
         sh[CERTIFICATES] = health(err_status)
+
+    # Network metadata: separate script, separate error domain (certificates-style).
+    net = collect_network()
+    if net.payload is not None:
+        raw.update(net.payload)
+    else:
+        raw["network_adapters"] = []
+        raw["network_neighbors"] = []
+        raw["network_connections"] = []
+        raw["network_quality"] = []
+    sh.update(net.source_health)
 
     return CollectorResult(raw, sh)
