@@ -19,6 +19,19 @@ _MAX_CONNECTIONS = 256
 _BAD_MACS = {"", "00-00-00-00-00-00", "FF-FF-FF-FF-FF-FF"}
 _MCAST_MAC_PREFIXES = ("01-00-5E", "33-33", "01-80-C2")
 
+# Spec privacy contract: ONLY RFC1918 addresses may leave the agent.
+_RFC1918 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+# Get-NetAdapter TransmitLinkSpeed "speed unknown" driver sentinels: exact
+# 32-bit all-ones, or anything implausibly large (covers the 64-bit all-ones
+# sentinel, which float round-tripping in _i() shifts off its exact value).
+_SPEED_UNKNOWN_32 = 0xFFFFFFFF
+_SPEED_MAX_PLAUSIBLE_BPS = 1_000_000_000_000_000  # 1 Pbps
+
 
 def _f(v: Any) -> Optional[float]:
     try:
@@ -42,21 +55,27 @@ def _kind(iftype: Any) -> str:
 
 
 def _is_internal(ip: Optional[str]) -> bool:
-    """True only for private LAN addresses usable as a map edge (no loopback,
-    link-local, multicast, or unspecified)."""
+    """True only for RFC1918 LAN addresses (the spec's privacy contract).
+
+    Deliberately stricter than ``ipaddress.is_private``: TEST-NET, benchmarking,
+    CGNAT, loopback, link-local, multicast and broadcast all fall outside 10/8,
+    172.16/12 and 192.168/16 and are never serialized. IPv6: IPv4-mapped forms
+    unwrap to their v4 address; ULA/global v6 are dropped (RFC1918-only).
+    Known Phase-1 gap: a connection to a public-IP SRP server is dropped too —
+    treating server_url as internal needs it plumbed into the collector.
+    """
     if not ip:
         return False
     try:
         a = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return (
-        a.is_private
-        and not a.is_loopback
-        and not a.is_link_local
-        and not a.is_multicast
-        and not a.is_unspecified
-    )
+    if isinstance(a, ipaddress.IPv6Address):
+        mapped = a.ipv4_mapped
+        if mapped is None:
+            return False
+        a = mapped
+    return any(a in net for net in _RFC1918)
 
 
 def _clean_strs(value: Any) -> list[str]:
@@ -64,9 +83,13 @@ def _clean_strs(value: Any) -> list[str]:
 
 
 def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
+    # The adapter's own ipv4/ipv6/gateway/dns are intentionally NOT privacy-
+    # filtered: this is the machine reporting its own NIC config (spec §4).
     if not isinstance(raw, dict):
         return None
     bps = _i(raw.get("link_bps"))
+    if bps is not None and (bps == _SPEED_UNKNOWN_32 or bps > _SPEED_MAX_PLAUSIBLE_BPS):
+        bps = None
     return {
         "name": (raw.get("name") or None),
         "desc": (raw.get("desc") or None),
@@ -86,6 +109,9 @@ def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
 
 
 def _parse_neighbor(raw: Any) -> Optional[dict[str, Any]]:
+    # Broadcast/multicast dropping is MAC-based (FF-FF…, 01-00-5E…): detecting
+    # a subnet *directed* broadcast by IP needs the prefix length, which the
+    # script does not emit — an RFC1918 .255 with a unicast MAC passes (Ф1 gap).
     if not isinstance(raw, dict):
         return None
     ip = raw.get("ip")
@@ -165,9 +191,18 @@ foreach ($a in $adapters) {
   if ($a.gateway) { $targets += [pscustomobject]@{ kind='gateway'; addr=$a.gateway } }
   foreach ($d in $a.dns) { if ($d) { $targets += [pscustomobject]@{ kind='dns'; addr=$d } } }
 }
-$targets = $targets | Sort-Object addr -Unique
+# Dedupe keeping insertion order (gateways first), cap at 4 targets: WinPS 5.1
+# Test-Connection has no -TimeoutSeconds, worst case ~4s/probe * 3 * 4 = ~48s
+# stays under the 60s run_ps cap. Ping only literal IPs (no name resolution).
+$seen = @{}
+$uniq = @()
+foreach ($tg in $targets) {
+  if (-not $seen["$($tg.addr)"]) { $seen["$($tg.addr)"] = $true; $uniq += $tg }
+}
+$targets = @($uniq | Select-Object -First 4)
 $quality = @()
 foreach ($tg in $targets) {
+  if (-not [System.Net.IPAddress]::TryParse($tg.addr, [ref]$null)) { continue }
   $r = @(Test-Connection -ComputerName $tg.addr -Count 3 -ErrorAction SilentlyContinue)
   $recv = $r.Count
   $lat = if ($recv -gt 0) { [math]::Round((($r | Measure-Object ResponseTime -Average).Average), 1) } else { $null }
@@ -181,6 +216,9 @@ foreach ($tg in $targets) {
 
 
 def collect_network() -> CollectorResult:
+    # Phase 1 runs ONE script: a policy-blocked individual cmdlet (under
+    # SilentlyContinue) yields an empty block inside an "ok" result — per-block
+    # partial status is deliberately deferred to Phase 2 (spec §5.4 deviation).
     result = run_ps(_NET_SCRIPT, timeout=60)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
@@ -198,5 +236,5 @@ def collect_network() -> CollectorResult:
         "network_connections": connections[:_MAX_CONNECTIONS],
         "network_quality": quality,
     }
-    present = bool(adapters or neighbors or connections)
+    present = bool(adapters or neighbors or connections or quality)
     return CollectorResult(payload, {NETWORK: health(field_status(present))})

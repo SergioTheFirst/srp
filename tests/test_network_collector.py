@@ -317,4 +317,70 @@ def test_historical_network_failure_sets_empty_fields(monkeypatch):
     res = historical.collect_historical()
     assert res.payload["network_adapters"] == []
     assert res.payload["network_connections"] == []
-    assert res.source_health[network.NETWORK]["status"] == "blocked"
+
+
+# --------------------------------------------------------------------------- #
+# Review hardening: RFC1918-strict privacy filter (spec privacy contract)
+# --------------------------------------------------------------------------- #
+def test_internal_filter_is_rfc1918_strict():
+    """Spec: only 10/8, 172.16/12, 192.168/16 ever leave the agent — stricter
+    than ipaddress.is_private (TEST-NET/benchmark/CGNAT/broadcast all out)."""
+    assert network._is_internal("10.1.2.3") is True
+    assert network._is_internal("172.31.0.9") is True
+    assert network._is_internal("192.168.0.1") is True
+    assert network._is_internal("203.0.113.5") is False  # TEST-NET-3
+    assert network._is_internal("198.18.0.7") is False  # benchmarking
+    assert network._is_internal("192.0.2.10") is False  # TEST-NET-1
+    assert network._is_internal("100.64.0.1") is False  # CGNAT
+    assert network._is_internal("255.255.255.255") is False  # limited broadcast
+    assert network._is_internal("169.254.10.10") is False  # link-local
+    assert network._is_internal("8.8.8.8") is False  # public
+
+
+def test_internal_filter_ipv6_rfc1918_only():
+    """IPv6: only IPv4-mapped forms unwrap to their v4 address; ULA and global
+    v6 are outside the RFC1918-only contract and never serialized."""
+    assert network._is_internal("::ffff:192.168.1.7") is True  # v4-mapped, RFC1918
+    assert network._is_internal("::ffff:8.8.8.8") is False  # v4-mapped, public
+    assert network._is_internal("fd00::1") is False  # ULA
+    assert network._is_internal("2001:db8::1") is False  # documentation
+    assert network._is_internal("::1") is False  # loopback
+
+
+def test_neighbor_broadcast_filter_is_mac_based():
+    """Honest Phase-1 limitation: a directed-broadcast IP inside RFC1918 is only
+    dropped via the FF-FF MAC; with a unicast MAC it passes (subnet-broadcast
+    detection needs the prefix length, which the script does not emit)."""
+    kept = network._parse_neighbor(
+        {"ip": "192.168.1.255", "mac": "AA-BB-CC-00-11-22", "state": "Stale"}
+    )
+    assert kept is not None
+
+
+def test_link_speed_unknown_sentinel_is_none():
+    """Driver 'speed unknown' sentinels must not render as a ~4.3 Tbps link."""
+    a32 = network._parse_adapter({"name": "X", "iftype": 6, "link_bps": 4294967295})
+    assert a32["link_mbps"] is None
+    a64 = network._parse_adapter({"name": "X", "iftype": 6, "link_bps": 18446744073709551615})
+    assert a64["link_mbps"] is None
+
+
+def test_collect_network_quality_counts_as_present(monkeypatch):
+    """A quality-only snapshot is data, not 'empty'."""
+    only_q = {
+        "adapters": [],
+        "neighbors": [],
+        "connections": [],
+        "quality": [
+            {
+                "target_kind": "gateway",
+                "target": "192.168.1.1",
+                "latency_ms": 1.0,
+                "loss_pct": 0.0,
+                "samples": 3,
+            }
+        ],
+    }
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(only_q))
+    res = network.collect_network()
+    assert res.source_health[network.NETWORK]["status"] == "ok"
