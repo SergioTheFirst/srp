@@ -135,6 +135,15 @@ class CertInfo(_Base):
     not_before: Optional[str] = None
 
 
+# Boundary caps on the Phase-1 network lists: one inflated payload is rejected
+# at validation instead of stored. Agent caps stay strictly <= these (a
+# compliant agent can never be rejected); read-side caps remain as depth.
+NET_ADAPTERS_MAX = 64
+NET_NEIGHBORS_MAX = 512
+NET_CONNECTIONS_MAX = 512
+NET_QUALITY_MAX = 16
+
+
 class NetAdapter(_Base):
     name: Optional[str] = None
     desc: Optional[str] = None
@@ -186,10 +195,12 @@ class HistoricalPayload(_Base):
     battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)
-    network_adapters: list[NetAdapter] = Field(default_factory=list)
-    network_neighbors: list[NetNeighbor] = Field(default_factory=list)
-    network_connections: list[NetConnection] = Field(default_factory=list)
-    network_quality: list[NetQuality] = Field(default_factory=list)
+    network_adapters: list[NetAdapter] = Field(default_factory=list, max_length=NET_ADAPTERS_MAX)
+    network_neighbors: list[NetNeighbor] = Field(default_factory=list, max_length=NET_NEIGHBORS_MAX)
+    network_connections: list[NetConnection] = Field(
+        default_factory=list, max_length=NET_CONNECTIONS_MAX
+    )
+    network_quality: list[NetQuality] = Field(default_factory=list, max_length=NET_QUALITY_MAX)
 
 
 # --------------------------------------------------------------------------- #
