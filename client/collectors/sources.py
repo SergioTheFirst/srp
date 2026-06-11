@@ -22,7 +22,7 @@ IDENTITY = "identity"
 EVENTS = "events"
 CERTIFICATES = "certificates"
 PRINT_JOBS = "print_jobs"
-NETWORK = "network"  # Phase 1: ungated (intentionally not in DOMAIN_SOURCES)
+NETWORK = "network"  # Phase 2: trust domain gating the network_risk axis
 
 
 class CollectorResult(NamedTuple):
