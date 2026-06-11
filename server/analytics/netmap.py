@@ -55,13 +55,17 @@ def _icmp_filtered(rows: list[dict[str, Any]]) -> bool:
 
 
 def _gateway_quality(snap: dict[str, Any], gateway: str) -> Optional[dict[str, Any]]:
+    """The device's probe row for *this* gateway, or None when absent/ambiguous.
+
+    No gateway-targeted probe -> None (never reported). Whole-device ICMP
+    ambiguity (every probe unanswered, D5) -> None too: an unanswerable device
+    must not be counted as a degraded reporter in the subnet cohort.
+    """
     rows = [q for q in (snap.get("quality") or []) if isinstance(q, dict)]
-    if _icmp_filtered(rows):
+    gw_rows = [q for q in rows if q.get("target_kind") == "gateway" and q.get("target") == gateway]
+    if not gw_rows or _icmp_filtered(rows):
         return None
-    for q in rows:
-        if q.get("target_kind") == "gateway" and q.get("target") == gateway:
-            return q
-    return None
+    return gw_rows[0]
 
 
 def _new_cluster(gw: str) -> dict[str, Any]:
@@ -122,10 +126,12 @@ def _attach_neighbors(
                 "mac": mac,
                 "vendor": vendor_for_mac(mac),
                 "state": n.get("state"),
-                "seen_by": 0,
+                "_seen": set(),
             },
         )
-        node["seen_by"] += 1
+        # Unique observers, not ARP entries: a duplicate row in one agent's
+        # snapshot must not inflate the "seen by N agents" metric (review HIGH).
+        node["_seen"].add(snap["device_id"])
 
 
 def _finalize(c: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +153,19 @@ def _finalize(c: dict[str, Any]) -> dict[str, Any]:
         "gateway_mac": c["gateway_mac"],
         "gateway_vendor": c["gateway_vendor"],
         "agents": sorted(c["agents"], key=lambda a: (a.get("hostname") or "", a["device_id"])),
-        "others": sorted(c["others"].values(), key=lambda n: _ip_key(n.get("ip"))),
+        "others": sorted(
+            (
+                {
+                    "ip": n["ip"],
+                    "mac": n["mac"],
+                    "vendor": n["vendor"],
+                    "state": n["state"],
+                    "seen_by": len(n["_seen"]),
+                }
+                for n in c["others"].values()
+            ),
+            key=lambda n: _ip_key(n.get("ip")),
+        ),
         "quality": {
             "reporting": len(reporting),
             "degraded": len(degraded),
@@ -191,8 +209,30 @@ def build_netmap(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def subnet_context_for(snapshots: list[dict[str, Any]], device_id: str) -> Optional[str]:
-    """RU annotation for the device page when the device sits in an anomalous subnet (D8)."""
-    for c in build_netmap(snapshots)["clusters"]:
+    """RU annotation for the device page when the device sits in an anomalous subnet (D8).
+
+    Builds the map only over snapshots sharing a gateway with this device (review:
+    the device page must not pay for unrelated subnets); the cohort and its
+    anomaly verdict are identical to the full map's for those clusters.
+    """
+    mine = next((s for s in snapshots if s["device_id"] == device_id), None)
+    if mine is None:
+        return None
+    my_gateways = {
+        str(a["gateway"])
+        for a in mine.get("adapters") or []
+        if isinstance(a, dict) and a.get("gateway")
+    }
+    if not my_gateways:
+        return None
+    subset = [
+        s
+        for s in snapshots
+        if any(
+            isinstance(a, dict) and a.get("gateway") in my_gateways for a in s.get("adapters") or []
+        )
+    ]
+    for c in build_netmap(subset)["clusters"]:
         if c["anomaly"] and any(a["device_id"] == device_id for a in c["agents"]):
             return f"Подсеть {c['subnet_hint']} (шлюз {c['gateway']}): {c['anomaly_reason']}"
     return None

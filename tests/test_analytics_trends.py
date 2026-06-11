@@ -294,3 +294,8 @@ def test_gateway_latency_trend_direction_only():
     assert compute_trends([row(1, None, loss=100.0)], [])["gateway_latency"].n_points == 0
     # direction-only metrics never add trajectory risk: stable depletion -> 0.0
     assert trajectory_risk_score(trends).value == 0.0
+    # ...and in isolation (no depletion data at all) they cannot fabricate a
+    # value either: trajectory stays honestly UNKNOWN (review MEDIUM #5)
+    isolated = compute_trends(series, [])
+    assert isolated["gateway_latency"].direction == "worsening"
+    assert trajectory_risk_score(isolated).value is None

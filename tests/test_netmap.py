@@ -102,6 +102,17 @@ def test_unknown_neighbor_union_dedup_and_gateway_extraction():
     assert m["totals"]["others"] == 1
 
 
+def test_seen_by_counts_unique_agents_not_arp_entries():
+    n = {"ip": "192.168.1.50", "mac": "00:50:56:00:00:09", "state": "Stale"}
+    m = build_netmap(
+        [
+            _snap("d1", neighbors=[n, dict(n)]),  # duplicate rows in ONE snapshot
+            _snap("d2", ip="192.168.1.11", mac="AA-BB-CC-00-00-02", neighbors=[n]),
+        ]
+    )
+    assert m["clusters"][0]["others"][0]["seen_by"] == 2  # agents, not entries
+
+
 def test_subnet_anomaly_threshold():
     bad = build_netmap(
         [

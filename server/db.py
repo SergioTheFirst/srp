@@ -844,9 +844,13 @@ def get_network_snapshots() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in rows:
         payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
-        adapters = payload.get("network_adapters") or []
-        neighbors = payload.get("network_neighbors") or []
-        quality = payload.get("network_quality") or []
+        # Defensive read-side caps (security review): the contract lists carry no
+        # max_length yet, and build_netmap work scales with fleet x list sizes --
+        # one bloated payload must not slow every page view. Proper boundary fix
+        # (schema max_length) is a future contract PR.
+        adapters = (payload.get("network_adapters") or [])[:64]
+        neighbors = (payload.get("network_neighbors") or [])[:512]
+        quality = (payload.get("network_quality") or [])[:16]
         if not (adapters or neighbors or quality):
             continue
         out.append(
