@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from server import db
+from server.analytics.netmap import build_netmap, subnet_context_for
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 
@@ -176,7 +177,20 @@ def device(request: Request, device_id: str):
         "last_seen_age_sec": age,
         "stale": age is not None and age > db.STALE_AFTER_SEC,
     }
-    return _TEMPLATES.TemplateResponse(request, "device.html", {"d": d})
+    # Phase 2 (D8): if the whole subnet degrades, tell the operator it is the
+    # infrastructure, not this PC. Read-side fleet query — page views only.
+    net_note = subnet_context_for(db.get_network_snapshots(), device_id)
+    return _TEMPLATES.TemplateResponse(
+        request, "device.html", {"d": d, "net_subnet_note": net_note}
+    )
+
+
+@router.get("/netmap", response_class=HTMLResponse)
+def network_map(request: Request):
+    """Phase-2 network map page (server-rendered, D1: no graph JS library)."""
+    return _TEMPLATES.TemplateResponse(
+        request, "netmap.html", {"m": build_netmap(db.get_network_snapshots())}
+    )
 
 
 @router.get("/print", response_class=HTMLResponse)

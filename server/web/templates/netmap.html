@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Карта сети · SRP{% endblock %}
+{% block subtitle %}карта сети{% endblock %}
+
+{% block extra_head %}
+<style>
+.net-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+.net-search {
+  flex: 1; min-width: 220px; max-width: 420px;
+  font: 500 14px/1 var(--mono);
+  padding: 8px 12px; border-radius: var(--r-btn);
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-2); outline: none;
+}
+.net-search:focus { border-color: var(--accent); }
+
+.cluster {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 16px 18px; margin-bottom: 14px;
+  box-shadow: var(--shadow-card);
+}
+.cluster-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.cluster-gw { font: 700 17px/1 var(--mono); }
+.cluster-sub { color: var(--muted); font-size: 14px; }
+.cluster-q { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+
+.node-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.node {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--r-chip); padding: 6px 10px;
+  font: 500 13px/1 var(--mono);
+}
+.node .v { color: var(--muted); }
+.node.gw-node { border-color: rgba(14,165,233,.4); }
+table.net-agents td { padding: 7px 10px; font-size: 14px; }
+table.net-agents th { position: static; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="net-toolbar">
+  <input id="net-search" class="net-search" type="search"
+         placeholder="фильтр: имя / IP / MAC / производитель…" autocomplete="off">
+  <div class="cards" style="margin-left:auto">
+    <div class="stat"><div class="n">{{ m.totals.agents }}</div><div class="l">агентов</div></div>
+    <div class="stat"><div class="n">{{ m.totals.others }}</div><div class="l">без агента</div></div>
+    <div class="stat"><div class="n">{{ m.totals.clusters }}</div><div class="l">подсетей</div></div>
+    <div class="stat"><div class="n {{ 'bad' if m.totals.anomalies }}">{{ m.totals.anomalies }}</div><div class="l">аномалий</div></div>
+  </div>
+</div>
+
+{% if not m.clusters %}
+<p class="muted">Сетевые данные ещё не собраны — карта появится после первого пакета `historical` с сетью.</p>
+{% endif %}
+
+{% for c in m.clusters %}
+<div class="cluster" data-filter="{{ c.gateway }} {{ c.subnet_hint }} {{ c.gateway_vendor or '' }}">
+  <div class="cluster-head">
+    <span class="cluster-gw" title="Шлюз подсети (роутер)">Шлюз {{ c.gateway }}</span>
+    <span class="cluster-sub">подсеть {{ c.subnet_hint }}</span>
+    {% if c.gateway_vendor %}<span class="pill" title="Производитель по MAC шлюза">{{ c.gateway_vendor }}</span>{% endif %}
+    {% if c.gateway_mac %}<span class="muted small mono">{{ c.gateway_mac }}</span>{% endif %}
+    <div class="cluster-q">
+      <span class="chip na" title="Сколько машин подсети измерили связь до шлюза">отчиталось: {{ c.quality.reporting }}</span>
+      {% if c.quality.median_loss_pct is not none %}
+      <span class="chip {{ 'bad' if c.quality.median_loss_pct >= 20 else ('warn' if c.quality.median_loss_pct >= 5 else 'good') }}"
+            title="Медиана потерь пакетов до шлюза по подсети">потери {{ "%.0f"|format(c.quality.median_loss_pct) }}%</span>
+      {% endif %}
+      {% if c.quality.median_latency_ms is not none %}
+      <span class="chip {{ 'warn' if c.quality.median_latency_ms >= 30 else 'good' }}"
+            title="Медиана задержки до шлюза по подсети">{{ "%.0f"|format(c.quality.median_latency_ms) }} мс</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if c.anomaly %}
+  <div class="alert-banner alert-bad" title="Деградация затрагивает несколько машин одновременно — причина почти наверняка общая">⚠ {{ c.anomaly_reason }}</div>
+  {% endif %}
+
+  {% if c.agents %}
+  <table class="net-agents">
+    <thead><tr><th>Машина</th><th>IP</th><th>MAC</th><th>Тип</th><th>Потери</th><th>Задержка</th></tr></thead>
+    <tbody>
+    {% for a in c.agents %}
+    <tr data-filter="{{ a.hostname or '' }} {{ a.device_id }} {{ a.ip or '' }} {{ a.mac or '' }}">
+      <td><a href="/device/{{ a.device_id }}">{{ a.hostname or a.device_id }}</a></td>
+      <td class="mono small">{{ a.ip or "—" }}</td>
+      <td class="mono small muted">{{ a.mac or "—" }}</td>
+      <td class="small muted">{{ a.kind or "—" }}</td>
+      <td>
+        {% if a.loss_pct is none %}<span class="chip na" title="Связь до шлюза не измерена (нет данных или ICMP блокируется)">н/д</span>
+        {% elif a.loss_pct >= 20 %}<span class="chip bad">{{ "%.0f"|format(a.loss_pct) }}%</span>
+        {% elif a.loss_pct >= 5 %}<span class="chip warn">{{ "%.0f"|format(a.loss_pct) }}%</span>
+        {% else %}<span class="chip good">{{ "%.0f"|format(a.loss_pct) }}%</span>{% endif %}
+      </td>
+      <td class="mono small">{{ "%.0f мс"|format(a.latency_ms) if a.latency_ms is not none else "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if c.others %}
+  <div class="node-grid">
+    {% for n in c.others %}
+    <span class="node" data-filter="{{ n.ip or '' }} {{ n.mac or '' }} {{ n.vendor or '' }}"
+          title="Устройство видно в ARP-таблицах агентов, но агент SRP на нём не стоит{% if n.state %} · состояние ARP: {{ n.state }}{% endif %}">
+      <span>{{ n.ip or "—" }}</span>
+      <span class="v">{{ n.mac or "—" }}</span>
+      {% if n.vendor %}<span class="pill">{{ n.vendor }}</span>{% endif %}
+      <span class="v" title="Сколько агентов видят это устройство">×{{ n.seen_by }}</span>
+    </span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if m.unclustered %}
+<p class="muted small">Без шлюза (не попали в подсети):
+  {% for u in m.unclustered %}<a href="/device/{{ u.device_id }}">{{ u.hostname or u.device_id }}</a>{% if not loop.last %} · {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+<script>
+(function () {
+  var input = document.getElementById("net-search");
+  if (!input) return;
+  input.addEventListener("input", function () {
+    var q = input.value.trim().toLowerCase();
+    document.querySelectorAll("[data-filter]").forEach(function (el) {
+      var hay = (el.getAttribute("data-filter") || "").toLowerCase();
+      var hit = !q || hay.indexOf(q) !== -1;
+      if (el.tagName === "TR" || el.classList.contains("node")) {
+        el.style.display = hit ? "" : "none";
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

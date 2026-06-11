@@ -269,6 +269,19 @@ def _cpu_perf_pct(row: dict[str, Any]) -> Optional[float]:
     return float(v) if v is not None else None
 
 
+def _gateway_latency_ms(row: dict[str, Any]) -> Optional[float]:
+    """Median gateway-probe latency of one snapshot; full-loss probes carry none."""
+    vals = [
+        float(q["latency_ms"])
+        for q in row.get("network_quality") or []
+        if isinstance(q, dict)
+        and q.get("target_kind") == "gateway"
+        and q.get("latency_ms") is not None
+        and (q.get("loss_pct") or 0.0) < 100.0
+    ]
+    return median(vals) if vals else None
+
+
 def _eta_to_risk(eta_days: float) -> float:
     for horizon, risk in _ETA_RISK_BANDS:
         if eta_days <= horizon:
@@ -325,6 +338,15 @@ def compute_trends(
             "throttle",
             _cpu_perf_pct,
             worsening_sign=-1,
+            now=now,
+        ),
+        # Phase 2: direction-only (no failure boundary -> no ETA, D10). Rising
+        # latency to the gateway = link/switch degradation worth a look.
+        "gateway_latency": build_trend(
+            historical_series,
+            "gateway_latency",
+            _gateway_latency_ms,
+            worsening_sign=1,
             now=now,
         ),
     }

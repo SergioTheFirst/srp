@@ -409,6 +409,33 @@
 </div>
 {% endif %}
 
+{# Network risk (phase 2) #}
+{% set net_ax = (s.risk.score100 or {}).get("network_risk") %}
+{% if net_ax %}
+<div class="axis-card {{ 'na' if net_ax.value is none else risk_color(net_ax.value) }}">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name"
+           title="Состояние сети машины: потери и задержка до шлюза, адрес без DHCP (APIPA), слабый Wi-Fi. 0–100, выше = хуже. Блокировка ICMP честно показывается как «не видно», а не как авария">Здоровье сети</div>
+      <div class="axis-reason">{{ net_ax.reason or "" }}</div>
+    </div>
+    {% if net_ax.value is none %}<span class="chip na" title="Нет сетевой телеметрии или источник не прошёл проверку доверия">НЕИЗВЕСТНО</span>
+    {% else %}
+    <div style="text-align:right">
+      <div class="axis-val {{ risk_color(net_ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(net_ax.value) }}</div>
+      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(net_ax.confidence, net_ax.confidence or "?") }}</div>
+    </div>{% endif %}
+  </div>
+  {% if net_ax.factors %}<div class="axis-factors">{% for f in net_ax.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
+  {% if net_subnet_note %}
+  <div class="axis-blind" title="Деградация видна на нескольких машинах подсети одновременно — причина почти наверняка общая (инфраструктура)">⚠ {{ net_subnet_note }}</div>
+  {% endif %}
+  {% if net_ax.value is not none and net_ax.missing_evidence %}
+  <div class="axis-blind">⚠ не видно: {{ net_ax.missing_evidence | join("; ") }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
 {# Fleet anomaly #}
 {% set fleet_ax = (s.risk.score100 or {}).get("fleet_anomaly_risk") %}
 {% if fleet_ax %}
@@ -571,7 +598,29 @@
   {% endfor %}
   </tbody>
 </table>
-<p class="muted small">Соседей в сети: {{ (hist.network_neighbors or [])|length }} · связей: {{ (hist.network_connections or [])|length }}</p>
+<p class="muted small">Соседей в сети: {{ (hist.network_neighbors or [])|length }} · связей: {{ (hist.network_connections or [])|length }} · <a href="/netmap">карта сети</a></p>
+{% if hist.network_quality %}
+<p class="small" style="margin:10px 0 6px"><strong>Качество связи</strong> <span class="muted">(пробы с этой машины)</span></p>
+<table style="max-width:640px">
+  <thead><tr><th>Цель</th><th>Тип</th><th>Задержка</th><th>Потери</th></tr></thead>
+  <tbody>
+  {% for q in hist.network_quality %}
+  <tr>
+    <td class="small mono">{{ q.target or "—" }}</td>
+    <td class="small muted">{{ "шлюз" if q.target_kind == "gateway" else ("DNS" if q.target_kind == "dns" else (q.target_kind or "—")) }}</td>
+    <td class="small mono">{{ "%.0f мс"|format(q.latency_ms) if q.latency_ms is not none else "—" }}</td>
+    <td>
+      {% if q.loss_pct is none %}<span class="chip na">н/д</span>
+      {% elif q.loss_pct >= 100 and q.latency_ms is none %}<span class="chip na" title="Ни одного ответа: либо ICMP блокируется, либо связи нет — отличить нельзя">нет ответа</span>
+      {% elif q.loss_pct >= 20 %}<span class="chip bad">{{ "%.0f"|format(q.loss_pct) }}%</span>
+      {% elif q.loss_pct >= 5 %}<span class="chip warn">{{ "%.0f"|format(q.loss_pct) }}%</span>
+      {% else %}<span class="chip good">{{ "%.0f"|format(q.loss_pct) }}%</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% else %}
   <p class="muted small">Сетевые данные ещё не собраны.</p>
 {% endif %}
