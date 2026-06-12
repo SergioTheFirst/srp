@@ -183,7 +183,11 @@ def test_publish_status_writes_next_to_buffer(tmp_path: Path) -> None:
     cfg = _cfg(buffer_path=str(tmp_path / "buffer.jsonl"))
     transport = SimpleNamespace(last_ok_ts=1781234500.0, last_error="", buffer_depth=lambda: 2)
     publish_status(cfg, transport, tmp_path / "print_state.json")
-    doc = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    raw = (tmp_path / "status.json").read_text(encoding="utf-8")
+    doc = json.loads(raw)
     assert doc["buffer_depth"] == 2
     assert doc["hostname"]  # real hostname of the test box
-    assert "super-secret-token" not in json.dumps(doc)
+    # Pin the full written file, not just the in-memory doc: a future cfg.*
+    # field added to build_status must not leak any of these.
+    for forbidden in ("super-secret-token", "pbkdf2", "user:pass", "ingest_token", "password"):
+        assert forbidden not in raw, f"secret leaked to status.json: {forbidden!r}"

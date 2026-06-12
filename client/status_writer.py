@@ -32,6 +32,15 @@ log = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 
+# Explicit RFC1918 allowlist: `ip.is_private` also admits IANA test/reserved
+# ranges and drifts across Python versions (3.11 added CGNAT etc.).
+_RFC1918 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
 def filter_lan_ips(candidates: Iterable[str]) -> list[str]:
     """Keep RFC1918 IPv4 addresses only, order-preserving dedup.
 
@@ -41,10 +50,10 @@ def filter_lan_ips(candidates: Iterable[str]) -> list[str]:
     out: list[str] = []
     for raw in candidates:
         try:
-            ip = ipaddress.ip_address(str(raw).strip())
-        except ValueError:
+            ip = ipaddress.IPv4Address(str(raw).strip())
+        except (ValueError, ipaddress.AddressValueError):
             continue
-        if ip.version != 4 or not ip.is_private or ip.is_loopback or ip.is_link_local:
+        if not any(ip in net for net in _RFC1918):
             continue
         text = str(ip)
         if text not in out:
