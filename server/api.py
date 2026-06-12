@@ -126,6 +126,7 @@ def fleet_print_export(days: int = 30) -> StreamingResponse:
         "size_bytes",
         "user_name",
         "department",
+        "source",
     ]
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
