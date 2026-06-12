@@ -13,18 +13,18 @@
   --panel-2:     #0b1828;
   --line:        #132030;
   --line-2:      #1d3250;
-  --text:        #deeef8;
-  --muted:       #7aa8c4;
-  --accent:      #0ea5e9;
-  --accent-dim:  rgba(14,165,233,.12);
-  --good:        #10d97a;
-  --good-dim:    rgba(16,217,122,.12);
-  --warn:        #f59e0b;
-  --warn-dim:    rgba(245,158,11,.12);
-  --high:        #f97316;
-  --high-dim:    rgba(249,115,22,.12);
-  --bad:         #f43f5e;
-  --bad-dim:     rgba(244,63,94,.12);
+  --text:        #ffffff;
+  --muted:       #9fc6e0;
+  --accent:      #1fb6ff;
+  --accent-dim:  rgba(31,182,255,.13);
+  --good:        #1ce589;
+  --good-dim:    rgba(28,229,137,.13);
+  --warn:        #ffd60a;
+  --warn-dim:    rgba(255,214,10,.13);
+  --high:        #ffaa1e;
+  --high-dim:    rgba(255,170,30,.13);
+  --bad:         #ff7300;
+  --bad-dim:     rgba(255,115,0,.13);
   --na:          #5878a0;
   --na-dim:      rgba(88,120,160,.12);
   --mono:        "JetBrains Mono","Cascadia Code","Fira Code",Consolas,monospace;
@@ -54,8 +54,8 @@
   --warn-dim:    rgba(247,185,40,.12);
   --high:        #f2a918;
   --high-dim:    rgba(242,169,24,.12);
-  --bad:         #e41e3f;
-  --bad-dim:     rgba(228,30,63,.10);
+  --bad:         #c2410c;
+  --bad-dim:     rgba(194,65,12,.10);
   --na:          #8595a4;
   --na-dim:      rgba(133,149,164,.10);
   --font-body:   "Helvetica Neue",Helvetica,"Segoe UI",Arial,sans-serif;
@@ -179,9 +179,9 @@ h2::after, .section-label::after {
   background: var(--line);
 }
 .section-label.predictive { color: var(--accent); }
-.section-label.predictive::after { background: rgba(14,165,233,.25); }
+.section-label.predictive::after { background: rgba(31,182,255,.25); }
 .section-label.incident { color: var(--warn); }
-.section-label.incident::after { background: rgba(245,158,11,.2); }
+.section-label.incident::after { background: rgba(255,214,10,.2); }
 
 /* Meta section labels: drop uppercase mono, use clean style */
 [data-theme="meta"] h2,
@@ -218,12 +218,12 @@ h2::after, .section-label::after {
   font-size: 12px;
   padding: 4px 10px;
 }
-.chip.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.35); }
-.chip.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.35); }
-.chip.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.35); }
-.chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
+.chip.good { background: var(--good-dim); color: var(--good); border-color: rgba(28,229,137,.4); }
+.chip.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(255,214,10,.4); }
+.chip.high { background: var(--high-dim); color: var(--high); border-color: rgba(255,170,30,.4); }
+.chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(255,115,0,.4); }
 .chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
-.chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+.chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(31,182,255,.4); }
 
 /* ─── Score grid ─────────────────────────────────────────────────────── */
 .scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
@@ -323,14 +323,15 @@ h2::after, .section-label::after {
 /* ─── Table ──────────────────────────────────────────────────────────── */
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+td { font-size: 18px; color: var(--text); }
 th {
-  color: var(--muted); font: 600 12px/1 var(--mono);
+  color: var(--muted); font: 600 14px/1 var(--mono);
   letter-spacing: 1px; text-transform: uppercase;
   background: var(--panel);
   position: sticky; top: var(--header-h); z-index: 10;
 }
 [data-theme="meta"] th {
-  font: 700 12px/1 var(--font-body);
+  font: 700 14px/1 var(--font-body);
   letter-spacing: .2px; text-transform: none;
 }
 tbody tr { transition: background .1s; }
@@ -390,8 +391,8 @@ code {
   --warn-dim:    rgba(245,166,35,.10);
   --high:        #f5a623;
   --high-dim:    rgba(245,166,35,.10);
-  --bad:         #ee0000;
-  --bad-dim:     rgba(238,0,0,.07);
+  --bad:         #c2410c;
+  --bad-dim:     rgba(194,65,12,.08);
   --na:          #888888;
   --na-dim:      rgba(136,136,136,.10);
   --font-body:   system-ui,-apple-system,"Segoe UI Variable","Segoe UI",sans-serif;
@@ -508,7 +509,7 @@ code {
 [data-theme="vercel"] .chip.good  { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
 [data-theme="vercel"] .chip.warn  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
 [data-theme="vercel"] .chip.high  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
-[data-theme="vercel"] .chip.bad   { background: rgba(238,0,0,.07);    color: #ee0000; border-color: rgba(238,0,0,.2); }
+[data-theme="vercel"] .chip.bad   { background: rgba(194,65,12,.08);  color: #c2410c; border-color: rgba(194,65,12,.25); }
 [data-theme="vercel"] .chip.na    { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
 [data-theme="vercel"] .chip.accent{ background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
 [data-theme="vercel"] .riskrow {
@@ -534,14 +535,14 @@ code {
 }
 [data-theme="vercel"] th {
   background: var(--bg);
-  font: 400 11px/1 var(--mono);
+  font: 400 13px/1 var(--mono);
   letter-spacing: .8px;
   text-transform: uppercase;
   color: var(--muted);
 }
 [data-theme="vercel"] td { border-bottom-color: var(--line); }
 [data-theme="vercel"] tbody tr:hover { background: rgba(0,0,0,.02); }
-[data-theme="vercel"] .alert-bad  { background: rgba(238,0,0,.06);    border-color: var(--bad);  color: #ee0000; }
+[data-theme="vercel"] .alert-bad  { background: rgba(194,65,12,.07);  border-color: var(--bad);  color: #c2410c; }
 [data-theme="vercel"] .alert-warn { background: rgba(245,166,35,.08); border-color: var(--warn); color: #ab570a; }
 [data-theme="vercel"] .pill { background: var(--panel-2); border-color: var(--line); color: var(--muted); }
 [data-theme="vercel"] code { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }

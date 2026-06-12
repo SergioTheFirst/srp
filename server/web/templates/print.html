@@ -53,9 +53,9 @@
 }
 .chart-wrap { width: 100%; }
 
-.ptable { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ptable th { color: var(--muted); font: 600 11px/1 var(--mono); letter-spacing: .8px; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid var(--line-2); text-align: left; }
-.ptable td { padding: 5px 8px; border-bottom: 1px solid var(--line-2); color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.ptable { width: 100%; border-collapse: collapse; font-size: 15px; }
+.ptable th { color: var(--muted); font: 600 13px/1 var(--mono); letter-spacing: .8px; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid var(--line-2); text-align: left; }
+.ptable td { padding: 5px 8px; border-bottom: 1px solid var(--line-2); color: var(--text); font-family: var(--mono); font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 .ptable tr:last-child td { border-bottom: none; }
 .ptable td:nth-child(2),
 .ptable td:nth-child(3),
@@ -130,7 +130,7 @@
   var BASE_LAYOUT = {
     paper_bgcolor: "transparent",
     plot_bgcolor:  "transparent",
-    font:  { color: "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+    font:  { color: "#ffffff", family: "JetBrains Mono, Consolas, monospace", size: 12 },
     margin: { t: 10, r: 10, b: 40, l: 10 },
     xaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
     yaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
@@ -200,7 +200,7 @@
         x: anom.map(function (r) { return r.date; }),
         y: anom.map(function (r) { return r.pages; }),
         type: "scatter", mode: "markers",
-        marker: { color: "#f43f5e", size: 9, symbol: "diamond" },
+        marker: { color: "#ff7300", size: 9, symbol: "diamond" },
         hovertemplate: "<b>%{x}</b><br>%{y} стр ⚠ аномалия<extra></extra>",
         name: "аномалия",
         showlegend: true,
@@ -208,7 +208,7 @@
     }
     Plotly.newPlot(el, traces, layout({
       xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
-      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#9fc6e0" } } },
       margin: { t: 6, r: 14, b: 44, l: 54 },
       showlegend: anomalyDates.length > 0,
       legend: { font: { size: 11 }, x: 1, y: 1, xanchor: "right" },
@@ -227,7 +227,7 @@
       hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
     }], layout({
       margin: { t: 6, r: 14, b: 40, l: 160 },
-      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#9fc6e0" } } },
       yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
     }), { responsive: true, displayModeBar: false });
   }
@@ -262,7 +262,7 @@
       hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
     }], layout({
       margin: { t: 6, r: 14, b: 40, l: 160 },
-      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#9fc6e0" } } },
       yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
     }), { responsive: true, displayModeBar: false });
   }
@@ -283,7 +283,7 @@
     }], layout({
       margin: { t: 6, r: 14, b: 80, l: 54 },
       xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, tickangle: -35 },
-      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#9fc6e0" } } },
     }), { responsive: true, displayModeBar: false });
   }
 
