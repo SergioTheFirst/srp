@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,17 +81,71 @@ try {
     )
 
 
-def _read_state(state_path: Path) -> str:
+_DAILY_KEEP_DAYS = 62  # rolling per-day page map: two months covers the panel's "month"
+
+
+def _load_state(state_path: Path) -> dict[str, Any]:
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
-        return _safe_ts(data.get("last_sweep_ts"))
+        return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, TypeError):
-        return ""
+        return {}
 
 
-def _write_state(state_path: Path, ts: str) -> None:
+def _store_state(state_path: Path, state: dict[str, Any]) -> None:
     with contextlib.suppress(OSError):
-        state_path.write_text(json.dumps({"last_sweep_ts": ts}), encoding="utf-8")
+        state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
+def accumulate_daily(
+    state: dict[str, Any], jobs: list[dict[str, Any]], today_iso: str
+) -> dict[str, Any]:
+    """Return a NEW state with today's pages added to the rolling per-day map.
+
+    Pages are credited to the *sweep* date: jobs land within one print
+    interval of printing, so only the midnight edge can shift a job by one
+    day -- negligible for the today/month panel counters. Entries older than
+    ``_DAILY_KEEP_DAYS`` are pruned. The input state is not mutated.
+    """
+    daily: dict[str, int] = {}
+    raw_daily = state.get("daily")
+    if isinstance(raw_daily, dict):
+        for day, pages in raw_daily.items():
+            try:
+                daily[str(day)] = int(pages)
+            except (TypeError, ValueError):
+                continue
+    added = 0
+    for job in jobs:
+        pages = job.get("pages")
+        if isinstance(pages, int) and pages > 0:
+            added += pages
+    if added:
+        daily[today_iso] = daily.get(today_iso, 0) + added
+    cutoff = (date.fromisoformat(today_iso) - timedelta(days=_DAILY_KEEP_DAYS)).isoformat()
+    pruned = {day: pages for day, pages in daily.items() if day >= cutoff}
+    return {**state, "daily": pruned}
+
+
+def read_print_counters(state_path: Path, today: date) -> dict[str, Any]:
+    """Today/month page totals + collection mode, for status.json (tray panel)."""
+    state = _load_state(state_path)
+    raw_daily = state.get("daily")
+    daily = raw_daily if isinstance(raw_daily, dict) else {}
+    today_key = today.isoformat()
+    month_prefix = today_key[:7]
+    today_pages = 0
+    month_pages = 0
+    for day, pages in daily.items():
+        try:
+            count = int(pages)
+        except (TypeError, ValueError):
+            continue
+        if str(day).startswith(month_prefix):
+            month_pages += count
+        if str(day) == today_key:
+            today_pages = count
+    return {"today": today_pages, "month": month_pages, "mode": str(state.get("mode", "events"))}
 
 
 def _parse_job(raw: Any) -> Optional[dict[str, Any]]:
@@ -128,7 +182,8 @@ def _parse_job(raw: Any) -> Optional[dict[str, Any]]:
 
 
 def collect_print_jobs(state_path: Path) -> CollectorResult:
-    last_ts = _read_state(state_path)
+    state = _load_state(state_path)
+    last_ts = _safe_ts(state.get("last_sweep_ts"))
     sweep_ts = datetime.now(timezone.utc).isoformat()
 
     result = run_ps(_build_script(last_ts), timeout=90)
@@ -137,7 +192,9 @@ def collect_print_jobs(state_path: Path) -> CollectorResult:
         return CollectorResult(None, failed([PRINT_JOBS], status))
 
     jobs = [j for j in (_parse_job(x) for x in as_list(result.data.get("jobs"))) if j]
-    _write_state(state_path, sweep_ts)
+    new_state = accumulate_daily(state, jobs, datetime.now().date().isoformat())
+    new_state["last_sweep_ts"] = sweep_ts
+    _store_state(state_path, new_state)
 
     payload = {"jobs": jobs, "window_from": last_ts or None}
     return CollectorResult(payload, {PRINT_JOBS: health(field_status(True))})

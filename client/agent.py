@@ -33,6 +33,7 @@ from client.collectors import (
 from client.collectors.print_jobs import collect_print_jobs
 from client.collectors.sources import CollectorResult
 from client.config import ClientConfig, ConfigError, load_config, validate_runtime_config
+from client.status_writer import publish_status
 from client.transport import Transport
 
 log = logging.getLogger("srp.agent")
@@ -55,6 +56,7 @@ class Agent:
         self._cfg = cfg
         self._transport = Transport(cfg)
         state_path = cfg.resolved_buffer_path().with_name("print_state.json")
+        self._print_state_path = state_path
         self._tasks: list[tuple[str, Collector, str]] = list(TASKS) + [
             ("print_jobs", partial(collect_print_jobs, state_path), "print_interval_sec"),
         ]
@@ -63,6 +65,7 @@ class Agent:
         """Run every collector a single time (used by --once and at startup)."""
         for msg_type, collector, _ in self._tasks:
             self._run_task(msg_type, collector)
+        publish_status(self._cfg, self._transport, self._print_state_path)
 
     def run_forever(self) -> None:
         """Loop forever, running each task when its interval comes due."""
@@ -76,6 +79,8 @@ class Agent:
                         due[msg_type] = time.monotonic() + interval
                 # Retry any backlog even when no task is due (no-op if buffer empty).
                 self._transport.flush_buffer()
+                # Refresh the tray's one-way status file every loop iteration.
+                publish_status(self._cfg, self._transport, self._print_state_path)
                 sleep_for = min(due.values()) - time.monotonic()
                 time.sleep(max(1.0, min(sleep_for, _MAX_SLEEP_SEC)))
         except KeyboardInterrupt:
