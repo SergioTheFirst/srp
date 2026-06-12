@@ -14,8 +14,12 @@ from typing import Any, Optional
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import NETWORK, CollectorResult, failed, field_status, health
 
+# Every cap stays <= the contract max_length (shared/schema.py NET_*_MAX):
+# a compliant agent can never be 422'd by its own server.
+_MAX_ADAPTERS = 64
 _MAX_NEIGHBORS = 256
 _MAX_CONNECTIONS = 256
+_MAX_QUALITY = 16
 _BAD_MACS = {"", "00-00-00-00-00-00", "FF-FF-FF-FF-FF-FF"}
 _MCAST_MAC_PREFIXES = ("01-00-5E", "33-33", "01-80-C2")
 
@@ -231,10 +235,10 @@ def collect_network() -> CollectorResult:
     quality = [q for q in (_parse_quality(x) for x in as_list(d.get("quality"))) if q]
 
     payload = {
-        "network_adapters": adapters,
+        "network_adapters": adapters[:_MAX_ADAPTERS],
         "network_neighbors": neighbors[:_MAX_NEIGHBORS],
         "network_connections": connections[:_MAX_CONNECTIONS],
-        "network_quality": quality,
+        "network_quality": quality[:_MAX_QUALITY],
     }
     present = bool(adapters or neighbors or connections or quality)
     return CollectorResult(payload, {NETWORK: health(field_status(present))})
