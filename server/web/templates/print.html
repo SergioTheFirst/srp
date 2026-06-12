@@ -18,7 +18,7 @@
   transition: background .15s, color .15s;
 }
 .days-btns a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
-.days-btns a.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.45); }
+.days-btns a.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(31,182,255,.45); }
 .csv-btn {
   margin-left: auto;
   font: 600 13px/1 var(--mono);
@@ -190,7 +190,7 @@
       x: dates, y: pages, type: "scatter", mode: "lines+markers",
       line:  { color: "#0ea5e9", width: 2 },
       marker: { color: "#0ea5e9", size: 4 },
-      fill: "tozeroy", fillcolor: "rgba(14,165,233,.08)",
+      fill: "tozeroy", fillcolor: "rgba(31,182,255,.08)",
       hovertemplate: "%{x}<br><b>%{y}</b> стр<extra></extra>",
     }];
     var anomalyDates = detectAnomalies(daily);
@@ -200,7 +200,7 @@
         x: anom.map(function (r) { return r.date; }),
         y: anom.map(function (r) { return r.pages; }),
         type: "scatter", mode: "markers",
-        marker: { color: "#ff7300", size: 9, symbol: "diamond" },
+        marker: { color: "#ff5500", size: 9, symbol: "diamond" },
         hovertemplate: "<b>%{x}</b><br>%{y} стр ⚠ аномалия<extra></extra>",
         name: "аномалия",
         showlegend: true,

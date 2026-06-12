@@ -86,7 +86,7 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .devrow.escalated { animation: escalate-flash 2.5s ease-in-out 3; }
 @keyframes escalate-flash {
   0%,100% { background: transparent; }
-  40%     { background: rgba(255,115,0,.12); }
+  40%     { background: rgba(255,85,0,.12); }
 }
 
 /* ── Alerts / badges ───────────────────────────────────────────────────── */
@@ -99,7 +99,7 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(28,229,137,.4); }
 .badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(255,214,10,.4); }
 .badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(255,170,30,.4); }
-.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(255,115,0,.4); }
+.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(255,85,0,.4); }
 .badge.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(51,78,104,.4); }
 
 /* ── Trend cell ────────────────────────────────────────────────────────── */
@@ -116,7 +116,7 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
   border: 1px solid var(--line-2); transition: all .12s;
 }
 .ackbtn:hover { border-color: var(--accent); color: var(--accent); }
-.ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
+.ackbtn.acked { color: var(--good); border-color: rgba(28,229,137,.4); }
 
 /* ── Compact table rows ─────────────────────────────────────────────────── */
 table th { padding: 5px 8px; }
@@ -154,6 +154,11 @@ tbody td .trend-none { font-size: 17px; }
 [data-theme="meta"] tbody td { color: var(--text); }
 [data-theme="meta"] tbody td a { color: var(--text); font-weight: 700; }
 [data-theme="meta"] tbody td a:hover { color: var(--accent); }
+/* Solid bright badge fills are a dark-theme optimisation — meta keeps light tints */
+[data-theme="meta"] .badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(247,185,40,.35); }
+[data-theme="meta"] .badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(194,65,12,.3); }
+[data-theme="meta"] .badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(242,169,24,.3); }
+[data-theme="meta"] .badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(49,162,76,.3); }
 
 /* ─── Vercel theme overrides (fleet) ────────────────────────────────────── */
 [data-theme="vercel"] .search {
