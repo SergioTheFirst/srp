@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 import pytest
 from tests.conftest import healthy
 
@@ -84,3 +87,52 @@ def test_diagnostics_exposes_network_risk(client):
     d = client.get("/api/v1/diagnostics/map-31")
     assert d.status_code == 200
     assert d.json()["network_risk"]["value"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# Visual map (canvas + embedded JSON island)
+# --------------------------------------------------------------------------- #
+def _embedded_json(body: str) -> dict:
+    m = re.search(r'<script id="netmap-data" type="application/json">(.*?)</script>', body, re.S)
+    assert m, "embedded netmap JSON island missing"
+    return json.loads(m.group(1))
+
+
+def test_netmap_page_embeds_canvas_and_data(client):
+    _ingest(client, "map-41", _net_payload())
+    body = client.get("/netmap").text
+    assert 'id="netmap-canvas"' in body
+    data = _embedded_json(body)
+    assert data["totals"]["agents"] == 1
+    cluster = data["clusters"][0]
+    assert cluster["gateway"] == "192.168.1.1"
+    # device_id must survive the round-trip: canvas click-through builds /device/{id}
+    assert cluster["agents"][0]["device_id"] == "map-41"
+
+
+def test_netmap_page_without_data_has_no_canvas(client):
+    body = client.get("/netmap").text
+    assert 'id="netmap-canvas"' not in body
+    assert "карта появится" in body  # empty state survives
+
+
+def test_netmap_embedded_json_cannot_break_out_of_script(client):
+    """A hostile hostname must not terminate the JSON <script> island (XSS pin)."""
+    inv = healthy("inventory")
+    inv["hostname"] = "</script><script>alert(1)//"
+    r = client.post(
+        "/api/v1/ingest",
+        json={
+            "device_id": "map-51",
+            "agent_version": "0.1.0",
+            "msg_type": "inventory",
+            "payload": inv,
+        },
+    )
+    assert r.status_code == 200, r.text
+    _ingest(client, "map-51", _net_payload())
+    body = client.get("/netmap").text
+    assert "</script><script>alert(1)" not in body
+    data = _embedded_json(body)
+    # the value itself survives intact after JSON parsing
+    assert data["clusters"][0]["agents"][0]["hostname"] == "</script><script>alert(1)//"

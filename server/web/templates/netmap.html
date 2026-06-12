@@ -35,6 +35,54 @@
 .node.gw-node { border-color: rgba(14,165,233,.4); }
 table.net-agents td { padding: 7px 10px; font-size: 14px; }
 table.net-agents th { position: static; }
+
+/* ─── Живая карта (canvas) ─────────────────────────────────────────── */
+.netmap-stage {
+  position: relative; margin-bottom: 20px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r-card);
+  background:
+    radial-gradient(1100px 460px at 28% -12%, var(--accent-dim), transparent 62%),
+    radial-gradient(900px 420px at 88% 118%, var(--na-dim), transparent 58%),
+    var(--panel);
+  box-shadow: var(--shadow-card);
+}
+#netmap-canvas { display: block; width: 100%; }
+.netmap-legend {
+  position: absolute; top: 10px; right: 12px; z-index: 5;
+  display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center;
+  max-width: 60%;
+  font: 600 11px/1 var(--mono); letter-spacing: .3px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 8px 11px; opacity: .94;
+}
+.nm-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.nm-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.nm-dot.good { background: var(--good); }
+.nm-dot.warn { background: var(--warn); }
+.nm-dot.bad  { background: var(--bad); }
+.nm-dot.na   { background: var(--na); }
+.nm-dia {
+  width: 9px; height: 9px; display: inline-block; flex-shrink: 0;
+  background: var(--accent); border-radius: 2px; transform: rotate(45deg);
+}
+.nm-mini { width: 5px; height: 5px; border-radius: 50%; background: var(--na); display: inline-block; flex-shrink: 0; }
+.netmap-hint {
+  position: absolute; left: 12px; bottom: 8px; z-index: 5; pointer-events: none;
+  font: 500 11px/1.5 var(--mono); color: var(--muted); opacity: .75;
+}
+.netmap-tip {
+  position: absolute; z-index: 30; pointer-events: none;
+  background: var(--panel); border: 1px solid var(--line-2);
+  border-left: 3px solid var(--accent); border-radius: var(--r-card);
+  padding: 9px 12px; max-width: 320px;
+  font: 500 12.5px/1.55 var(--mono); color: var(--text);
+  box-shadow: 0 10px 28px rgba(0,0,0,.35);
+}
+.netmap-tip .t-head  { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+.netmap-tip .t-muted { color: var(--muted); }
+.netmap-tip .t-good  { color: var(--good); }
+.netmap-tip .t-warn  { color: var(--warn); }
+.netmap-tip .t-bad   { color: var(--bad); }
 </style>
 {% endblock %}
 
@@ -50,7 +98,21 @@ table.net-agents th { position: static; }
   </div>
 </div>
 
-{% if not m.clusters %}
+{% if m.clusters %}
+<div class="netmap-stage" id="netmap-stage">
+  <canvas id="netmap-canvas" role="img"
+          aria-label="Интерактивная карта сети: шлюзы, машины с агентом и устройства без агента; подробности в таблицах ниже"></canvas>
+  <div class="netmap-legend">
+    <span class="nm-key"><i class="nm-dot good"></i>норма</span>
+    <span class="nm-key"><i class="nm-dot warn"></i>потери ≥5%</span>
+    <span class="nm-key"><i class="nm-dot bad"></i>потери ≥20%</span>
+    <span class="nm-key"><i class="nm-dot na"></i>нет данных</span>
+    <span class="nm-key"><i class="nm-dia"></i>шлюз</span>
+    <span class="nm-key"><i class="nm-mini"></i>без агента</span>
+  </div>
+  <div class="netmap-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по ПК — карточка</div>
+</div>
+{% else %}
 <p class="muted">Сетевые данные ещё не собраны — карта появится после первого пакета `historical` с сетью.</p>
 {% endif %}
 
@@ -123,7 +185,11 @@ table.net-agents th { position: static; }
 </p>
 {% endif %}
 
+<div class="netmap-tip" id="netmap-tip" hidden></div>
+<script id="netmap-data" type="application/json">{{ m | tojson }}</script>
+
 <script>
+/* Текстовый фильтр: SSR-таблицы + узлы canvas-карты (карта слушает тот же input). */
 (function () {
   var input = document.getElementById("net-search");
   if (!input) return;
@@ -137,6 +203,457 @@ table.net-agents th { position: static; }
       }
     });
   });
+})();
+
+/* ─── Живая карта сети: force-граф на чистом canvas, ноль зависимостей ──
+   Шлюзы = ромбы-хабы, агенты = круги цвета здоровья линка, без-агентные
+   устройства = точки. Пульс «пакета» бежит по измеренным линкам и гибнет
+   на полпути там, где реальные потери. Темы читаются из CSS-переменных. */
+(function () {
+  "use strict";
+  var cv = document.getElementById("netmap-canvas");
+  var dataEl = document.getElementById("netmap-data");
+  if (!cv || !dataEl) return;
+  var M;
+  try { M = JSON.parse(dataEl.textContent); } catch (e) { return; }
+  if (!M || !M.clusters || !M.clusters.length) return;
+
+  var stage = document.getElementById("netmap-stage");
+  var tip = document.getElementById("netmap-tip");
+  var ctx = cv.getContext("2d");
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* — тема: цвета берём из CSS-переменных, чтобы все 3 темы работали — */
+  var C = {};
+  function readTheme() {
+    var s = getComputedStyle(document.body);
+    ["good", "warn", "bad", "na", "accent", "muted", "text", "line"].forEach(function (n) {
+      C[n] = s.getPropertyValue("--" + n).trim() || "#888";
+    });
+    C.mono = s.getPropertyValue("--mono").trim() || "monospace";
+  }
+  readTheme();
+
+  /* — детерминированный PRNG: раскладка стабильна между перезагрузками — */
+  function hashStr(s) {
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+    return h;
+  }
+  function mulberry(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function lossClass(loss) {
+    return loss == null ? "na" : loss >= 20 ? "bad" : loss >= 5 ? "warn" : "good";
+  }
+
+  /* — граф из модели сервера — */
+  var nodes = [], links = [], clusters = [];
+  M.clusters.forEach(function (c) {
+    var count = 1 + c.agents.length + c.others.length;
+    var R = 64 + 13 * Math.sqrt(count);
+    var rnd = mulberry(hashStr(c.gateway));
+    var gw = {
+      type: "gw", r: 13, cls: c.anomaly ? "bad" : "accent",
+      label: c.gateway, vendor: c.gateway_vendor, mac: c.gateway_mac,
+      quality: c.quality, anomaly: c.anomaly, anomaly_reason: c.anomaly_reason,
+      subnet: c.subnet_hint, x: 0, y: 0, vx: 0, vy: 0,
+      filter: (c.gateway + " " + c.subnet_hint + " " + (c.gateway_vendor || "")).toLowerCase()
+    };
+    var cluster = { gw: gw, R: R, cx: 0, cy: 0, anomaly: c.anomaly, subnet: c.subnet_hint };
+    clusters.push(cluster);
+    gw.cluster = cluster;
+    nodes.push(gw);
+    c.agents.forEach(function (a, i) {
+      var ang = rnd() * 6.283 + i * 2.399963;
+      var n = {
+        type: "agent", r: 9, cls: lossClass(a.loss_pct), cluster: cluster,
+        device_id: a.device_id, hostname: a.hostname, ip: a.ip, mac: a.mac,
+        kind: a.kind, loss: a.loss_pct, lat: a.latency_ms, last_seen: a.last_seen,
+        x: Math.cos(ang) * R * 0.45, y: Math.sin(ang) * R * 0.45, vx: 0, vy: 0,
+        filter: ((a.hostname || "") + " " + a.device_id + " " + (a.ip || "") + " " +
+                 (a.mac || "")).toLowerCase()
+      };
+      nodes.push(n);
+      links.push({ a: n, b: gw, kind: "agent", cls: n.cls, wifi: a.kind === "wifi",
+                   measured: a.loss_pct != null, idx: links.length });
+    });
+    c.others.forEach(function (o, i) {
+      var ang = rnd() * 6.283 + i * 2.399963;
+      var n = {
+        type: "other", r: 3.5 + Math.min(o.seen_by || 1, 4) * 0.5, cls: "na",
+        cluster: cluster, ip: o.ip, mac: o.mac, vendor: o.vendor,
+        state: o.state, seen_by: o.seen_by,
+        x: Math.cos(ang) * R * 0.8, y: Math.sin(ang) * R * 0.8, vx: 0, vy: 0,
+        filter: ((o.ip || "") + " " + (o.mac || "") + " " + (o.vendor || "")).toLowerCase()
+      };
+      nodes.push(n);
+      links.push({ a: n, b: gw, kind: "other", cls: "na", wifi: false,
+                   measured: false, idx: links.length });
+    });
+  });
+
+  /* — раскладка кластеров: построчная упаковка по ширине сцены — */
+  var W = Math.max(stage.clientWidth || 900, 640);
+  var packW = Math.max(W, 760);
+  var cx = 0, cy = 0, rowH = 0, rows = 1, margin = 56;
+  cx = margin;
+  clusters.forEach(function (cl) {
+    if (cx + cl.R * 2 > packW - margin && cx > margin) {
+      cx = margin; cy += rowH + 88; rowH = 0; rows++;
+    }
+    cl.cx = cx + cl.R; cl.cy = cy + cl.R;
+    cx += cl.R * 2 + 72;
+    rowH = Math.max(rowH, cl.R * 2);
+  });
+  var H = Math.min(680, Math.max(480, cy + rowH + 130));
+  clusters.forEach(function (cl) {
+    cl.gw.x += cl.cx; cl.gw.y += cl.cy;
+  });
+  nodes.forEach(function (n) {
+    if (n.type !== "gw") { n.x += n.cluster.cx; n.y += n.cluster.cy; }
+  });
+
+  /* — физика: пружины линков, отталкивание, гравитация к центру кластера — */
+  var alpha = 1;
+  function tick() {
+    var i, j, n, m2, dx, dy, d2, d, f;
+    for (i = 0; i < links.length; i++) {
+      var L = links[i];
+      var rest = L.kind === "agent" ? 92 : 54;
+      var k = L.kind === "agent" ? 0.05 : 0.028;
+      dx = L.b.x - L.a.x; dy = L.b.y - L.a.y;
+      d = Math.sqrt(dx * dx + dy * dy) || 1;
+      f = (d - rest) * k * alpha;
+      L.a.vx += (dx / d) * f; L.a.vy += (dy / d) * f;
+      L.b.vx -= (dx / d) * f * 0.2; L.b.vy -= (dy / d) * f * 0.2;
+    }
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      for (j = i + 1; j < nodes.length; j++) {
+        m2 = nodes[j];
+        dx = m2.x - n.x; dy = m2.y - n.y;
+        if (dx > 170 || dx < -170 || dy > 170 || dy < -170) continue;
+        d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = 0.5; dy = 0.5; d2 = 0.5; }
+        var c = (n.type === "other" && m2.type === "other") ? 320 : 850;
+        f = (c / d2) * alpha;
+        if (f > 4) f = 4;
+        d = Math.sqrt(d2);
+        n.vx -= (dx / d) * f; n.vy -= (dy / d) * f;
+        m2.vx += (dx / d) * f; m2.vy += (dy / d) * f;
+      }
+      var g = n.type === "gw" ? 0.09 : n.type === "other" ? 0.02 : 0.012;
+      n.vx += (n.cluster.cx - n.x) * g * alpha;
+      n.vy += (n.cluster.cy - n.y) * g * alpha;
+    }
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; continue; }
+      n.vx *= 0.86; n.vy *= 0.86;
+      if (n.vx > 6) n.vx = 6; if (n.vx < -6) n.vx = -6;
+      if (n.vy > 6) n.vy = 6; if (n.vy < -6) n.vy = -6;
+      n.x += n.vx; n.y += n.vy;
+    }
+    alpha *= 0.984;
+  }
+  for (var pre = 0; pre < 300 && alpha > 0.02; pre++) tick();
+
+  /* — вьюпорт: панорама/масштаб + вписывание содержимого — */
+  var view = { x: 0, y: 0, k: 1 };
+  function fit() {
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    nodes.forEach(function (n) {
+      if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+    });
+    var bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1);
+    var k = Math.min((W - 90) / bw, (H - 110) / bh);
+    view.k = Math.max(0.45, Math.min(1.5, k));
+    view.x = W / 2 - (minX + bw / 2) * view.k;
+    view.y = H / 2 - (minY + bh / 2) * view.k + 8;
+  }
+
+  function resize() {
+    W = Math.max(stage.clientWidth || 900, 320);
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cv.style.height = H + "px";
+    invalidate();
+  }
+
+  /* — фильтр и hover — */
+  var FILTER = "", hover = null;
+  function matches(n) { return !FILTER || n.filter.indexOf(FILTER) !== -1; }
+
+  /* — отрисовка — */
+  function draw(now) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.translate(view.x, view.y);
+    ctx.scale(view.k, view.k);
+    var i, n, L;
+
+    /* фон: точечная сетка мира + орбиты кластеров */
+    var step = 26;
+    var x0 = Math.floor((-view.x / view.k) / step) * step,
+        y0 = Math.floor((-view.y / view.k) / step) * step,
+        x1 = (-view.x + W) / view.k, y1 = (-view.y + H) / view.k;
+    ctx.fillStyle = C.muted; ctx.globalAlpha = 0.07;
+    for (var gx = x0; gx < x1; gx += step)
+      for (var gy = y0; gy < y1; gy += step) ctx.fillRect(gx, gy, 1.2, 1.2);
+    clusters.forEach(function (cl) {
+      ctx.globalAlpha = cl.anomaly ? 0.09 : 0.05;
+      ctx.strokeStyle = cl.anomaly ? C.bad : C.text;
+      ctx.lineWidth = 1;
+      [0.52, 0.88].forEach(function (m3) {
+        ctx.beginPath(); ctx.arc(cl.cx, cl.cy, cl.R * m3, 0, 6.2832); ctx.stroke();
+      });
+      ctx.globalAlpha = 0.4; ctx.fillStyle = C.muted;
+      ctx.font = "600 10px " + C.mono; ctx.textAlign = "center";
+      ctx.fillText("подсеть " + cl.subnet, cl.cx, cl.cy - cl.R * 0.88 - 8);
+    });
+
+    /* линки */
+    for (i = 0; i < links.length; i++) {
+      L = links[i];
+      var dim = FILTER && !(matches(L.a) || matches(L.b));
+      var focus = hover && (hover === L.a || hover === L.b);
+      ctx.globalAlpha = dim ? 0.04 : (L.kind === "agent" ? (focus ? 0.85 : 0.4) : (focus ? 0.5 : 0.14));
+      ctx.strokeStyle = C[L.cls];
+      ctx.lineWidth = L.cls === "bad" ? 1.8 : L.kind === "agent" ? 1.2 : 0.8;
+      ctx.setLineDash(L.wifi ? [4, 4] : []);
+      ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
+      ctx.setLineDash([]);
+      /* пульс пакета: бежит к шлюзу; на плохом линке гибнет на полпути */
+      if (!reduceMotion && L.measured && !dim) {
+        var t = ((now / 2400) + L.idx * 0.37) % 1;
+        var die = L.cls === "bad" ? 0.55 : L.cls === "warn" ? 0.8 : 1.01;
+        if (t < die) {
+          var px = L.a.x + (L.b.x - L.a.x) * t, py = L.a.y + (L.b.y - L.a.y) * t;
+          ctx.globalAlpha = (focus ? 0.95 : 0.75) * (t > die - 0.12 ? (die - t) / 0.12 : 1);
+          ctx.fillStyle = C[L.cls];
+          ctx.beginPath(); ctx.arc(px, py, 2.1, 0, 6.2832); ctx.fill();
+        }
+      }
+    }
+
+    /* узлы: сначала точки, потом агенты, потом шлюзы */
+    var order = { other: 0, agent: 1, gw: 2 };
+    var sorted = nodes.slice().sort(function (a, b) { return order[a.type] - order[b.type]; });
+    for (i = 0; i < sorted.length; i++) {
+      n = sorted[i];
+      var dimN = FILTER && !matches(n);
+      ctx.globalAlpha = dimN ? 0.08 : 1;
+      var col = C[n.cls];
+      if (n.type === "gw") {
+        /* аномалия: расходящиеся кольца тревоги */
+        if (n.anomaly && !reduceMotion && !dimN) {
+          for (var k2 = 0; k2 < 2; k2++) {
+            var ph = ((now / 2800) + k2 / 2) % 1;
+            ctx.globalAlpha = (1 - ph) * 0.45;
+            ctx.strokeStyle = C.bad; ctx.lineWidth = 1.6;
+            ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 4 + ph * 46, 0, 6.2832); ctx.stroke();
+          }
+          ctx.globalAlpha = dimN ? 0.08 : 1;
+        }
+        ctx.save();
+        ctx.translate(n.x, n.y); ctx.rotate(Math.PI / 4);
+        ctx.shadowColor = col; ctx.shadowBlur = (hover === n ? 22 : 14) * view.k;
+        ctx.fillStyle = col; ctx.globalAlpha = (dimN ? 0.08 : 0.18);
+        ctx.fillRect(-n.r, -n.r, n.r * 2, n.r * 2);
+        ctx.globalAlpha = dimN ? 0.08 : 0.95;
+        ctx.lineWidth = 2; ctx.strokeStyle = col;
+        ctx.strokeRect(-n.r, -n.r, n.r * 2, n.r * 2);
+        ctx.restore();
+        ctx.globalAlpha = dimN ? 0.08 : 0.95;
+        ctx.fillStyle = C.text; ctx.font = "700 11px " + C.mono; ctx.textAlign = "center";
+        ctx.fillText(n.label, n.x, n.y + n.r + 17);
+        if (n.vendor) {
+          ctx.globalAlpha = dimN ? 0.06 : 0.6; ctx.fillStyle = C.muted;
+          ctx.font = "500 9.5px " + C.mono;
+          ctx.fillText(n.vendor, n.x, n.y + n.r + 29);
+        }
+      } else if (n.type === "agent") {
+        ctx.shadowColor = col;
+        ctx.shadowBlur = (n.cls === "bad" || n.cls === "warn" ? 12 : 0) * view.k;
+        ctx.fillStyle = col; ctx.globalAlpha = dimN ? 0.05 : 0.16;
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 6.2832); ctx.fill();
+        ctx.globalAlpha = dimN ? 0.08 : 0.95;
+        ctx.lineWidth = 2; ctx.strokeStyle = col;
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 6.2832); ctx.stroke();
+        ctx.shadowBlur = 0;
+        if (view.k > 0.62) {
+          var name = n.hostname || n.device_id;
+          if (name.length > 16) name = name.slice(0, 15) + "…";
+          ctx.globalAlpha = dimN ? 0.06 : 0.85;
+          ctx.fillStyle = C.text; ctx.font = "500 10.5px " + C.mono; ctx.textAlign = "center";
+          ctx.fillText(name, n.x, n.y + n.r + 13);
+        }
+      } else {
+        ctx.fillStyle = col; ctx.globalAlpha = dimN ? 0.04 : 0.75;
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 6.2832); ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    /* hover-кольцо */
+    if (hover) {
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = C.accent; ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 4]);
+      ctx.lineDashOffset = reduceMotion ? 0 : -now / 50;
+      ctx.beginPath(); ctx.arc(hover.x, hover.y, hover.r + 6, 0, 6.2832); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* — цикл: при reduce-motion рисуем кадр только на изменения — */
+  var running = false;
+  function loop(now) {
+    if (alpha > 0.02) tick();
+    draw(now || 0);
+    if (!reduceMotion || alpha > 0.02) requestAnimationFrame(loop);
+    else running = false;
+  }
+  function invalidate() {
+    if (running) return;
+    running = true;
+    requestAnimationFrame(loop);
+  }
+  new MutationObserver(function () { readTheme(); invalidate(); })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  /* — указатель: hover/тултип, drag узла, панорама, клик-переход — */
+  function toWorld(e) {
+    var b = cv.getBoundingClientRect();
+    return { x: (e.clientX - b.left - view.x) / view.k, y: (e.clientY - b.top - view.y) / view.k };
+  }
+  function pick(p) {
+    for (var i = nodes.length - 1, best = null, bd = 1e9; i >= 0; i--) {
+      var n = nodes[i];
+      var dx = n.x - p.x, dy = n.y - p.y, d = Math.sqrt(dx * dx + dy * dy);
+      var rr = n.r + (n.type === "other" ? 5 : 7);
+      if (d <= rr && d < bd) { best = n; bd = d; }
+      if (i === 0) return best;
+    }
+    return null;
+  }
+  function row(el, cls, t) {
+    var d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = t;
+    el.appendChild(d);
+  }
+  function fmtLoss(v) { return v == null ? "н/д" : Math.round(v) + "%"; }
+  function fmtLat(v) { return v == null ? "—" : Math.round(v) + " мс"; }
+  function kindName(k) { return k === "wifi" ? "Wi-Fi" : k === "ethernet" ? "Ethernet" : (k || "—"); }
+  function showTip(n, e) {
+    tip.textContent = "";
+    if (n.type === "agent") {
+      row(tip, "t-head", n.hostname || n.device_id);
+      if (n.hostname) row(tip, "t-muted", n.device_id);
+      row(tip, "", "IP: " + (n.ip || "—") + " · " + kindName(n.kind));
+      row(tip, "t-muted", "MAC: " + (n.mac || "—"));
+      row(tip, "t-" + n.cls, "потери до шлюза: " + fmtLoss(n.loss) + " · задержка: " + fmtLat(n.lat));
+      if (n.loss == null) row(tip, "t-muted", "проба не отвечала — возможно, ICMP закрыт");
+      row(tip, "t-muted", "клик — карточка устройства");
+    } else if (n.type === "gw") {
+      row(tip, "t-head", "Шлюз " + n.label);
+      row(tip, "t-muted", "подсеть " + n.subnet + (n.vendor ? " · " + n.vendor : ""));
+      if (n.mac) row(tip, "t-muted", "MAC: " + n.mac);
+      row(tip, "", "отчиталось машин: " + n.quality.reporting);
+      if (n.quality.median_loss_pct != null)
+        row(tip, "t-" + lossClass(n.quality.median_loss_pct),
+            "медиана потерь: " + Math.round(n.quality.median_loss_pct) + "%" +
+            (n.quality.median_latency_ms != null ? " · " + Math.round(n.quality.median_latency_ms) + " мс" : ""));
+      if (n.anomaly) row(tip, "t-bad", "⚠ " + n.anomaly_reason);
+    } else {
+      row(tip, "t-head", n.ip || n.mac || "устройство");
+      row(tip, "t-muted", "MAC: " + (n.mac || "—") + (n.vendor ? " · " + n.vendor : ""));
+      if (n.state) row(tip, "t-muted", "ARP: " + n.state);
+      row(tip, "", "видят агентов: " + (n.seen_by || 1));
+      row(tip, "t-muted", "агент SRP не установлен");
+    }
+    var sb = stage.getBoundingClientRect();
+    var x = e.clientX - sb.left + 16, y = e.clientY - sb.top + 14;
+    tip.hidden = false;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > sb.width - 8) x = e.clientX - sb.left - tw - 12;
+    if (y + th > sb.height - 8) y = e.clientY - sb.top - th - 10;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+
+  var dragNode = null, panning = false, downPt = null, moved = false;
+  cv.addEventListener("mousedown", function (e) {
+    var p = toWorld(e);
+    downPt = { x: e.clientX, y: e.clientY };
+    moved = false;
+    var n = pick(p);
+    if (n) { dragNode = n; n.fx = n.x; n.fy = n.y; alpha = Math.max(alpha, 0.25); }
+    else panning = true;
+    invalidate();
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (downPt && (Math.abs(e.clientX - downPt.x) > 4 || Math.abs(e.clientY - downPt.y) > 4)) moved = true;
+    if (dragNode) {
+      var p = toWorld(e);
+      dragNode.fx = p.x; dragNode.fy = p.y;
+      alpha = Math.max(alpha, 0.2);
+      tip.hidden = true;
+      invalidate();
+      return;
+    }
+    if (panning) {
+      view.x += e.movementX; view.y += e.movementY;
+      tip.hidden = true;
+      invalidate();
+      return;
+    }
+    if (e.target !== cv) { if (hover) { hover = null; tip.hidden = true; invalidate(); } return; }
+    var n = pick(toWorld(e));
+    if (n !== hover) { hover = n; invalidate(); }
+    if (n) showTip(n, e); else tip.hidden = true;
+    cv.style.cursor = n ? (n.type === "agent" ? "pointer" : "default") : "grab";
+  });
+  window.addEventListener("mouseup", function () {
+    if (dragNode) { dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15); }
+    if (dragNode && !moved && dragNode.type === "agent") {
+      window.location.href = "/device/" + encodeURIComponent(dragNode.device_id);
+    }
+    dragNode = null; panning = false; downPt = null;
+    invalidate();
+  });
+  cv.addEventListener("dblclick", function (e) { fit(); invalidate(); e.preventDefault(); });
+  cv.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var b = cv.getBoundingClientRect();
+    var mx = e.clientX - b.left, my = e.clientY - b.top;
+    var k2 = Math.max(0.35, Math.min(2.6, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    view.x = mx - ((mx - view.x) / view.k) * k2;
+    view.y = my - ((my - view.y) / view.k) * k2;
+    view.k = k2;
+    invalidate();
+  }, { passive: false });
+  cv.addEventListener("mouseleave", function () { hover = null; tip.hidden = true; invalidate(); });
+
+  var search = document.getElementById("net-search");
+  if (search) search.addEventListener("input", function () {
+    FILTER = search.value.trim().toLowerCase();
+    invalidate();
+  });
+
+  if (window.ResizeObserver) new ResizeObserver(function () { resize(); fit(); }).observe(stage);
+  resize();
+  fit();
+  invalidate();
 })();
 </script>
 {% endblock %}
