@@ -43,6 +43,13 @@ class Transport:
         self._cfg = cfg
         self._ingest_url = cfg.server_url.rstrip("/") + "/api/v1/ingest"
         self._buffer = cfg.resolved_buffer_path()
+        # Last delivery outcome, surfaced in status.json for the tray panel.
+        self.last_ok_ts: Optional[float] = None
+        self.last_error: str = ""
+
+    def buffer_depth(self) -> int:
+        """Number of envelopes waiting in the offline buffer."""
+        return len(self._read_buffer())
 
     # -- public API -------------------------------------------------------- #
     def send(
@@ -149,8 +156,11 @@ class Transport:
         try:
             # B310: scheme is the operator-configured server_url, not user input.
             with urllib.request.urlopen(req, timeout=self._cfg.http_timeout_sec):  # nosec B310
+                self.last_ok_ts = time.time()
+                self.last_error = ""
                 return "ok"  # urlopen only returns for 2xx/3xx
         except urllib.error.HTTPError as exc:  # subclass of URLError -> catch first
+            self.last_error = f"HTTP {exc.code}"
             if 400 <= exc.code < 500:
                 log.warning(
                     "server rejected %s (HTTP %d) -- dropping", envelope.get("msg_type"), exc.code
@@ -159,6 +169,7 @@ class Transport:
             log.warning("server error HTTP %d on %s", exc.code, envelope.get("msg_type"))
             return "retry"
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            self.last_error = str(exc)[:200]
             log.warning("network error sending %s: %s", envelope.get("msg_type"), exc)
             return "retry"
 
