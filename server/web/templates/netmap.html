@@ -299,14 +299,19 @@ table.net-agents th { position: static; }
     });
   });
 
+  /* отрисовка и hit-test ходят по одному порядку: точки → агенты → шлюзы,
+     верхний нарисованный узел выигрывает наведение/клик */
+  var order = { other: 0, agent: 1, gw: 2 };
+  var sortedNodes = nodes.slice().sort(function (a, b) { return order[a.type] - order[b.type]; });
+
   /* — раскладка кластеров: построчная упаковка по ширине сцены — */
   var W = Math.max(stage.clientWidth || 900, 640);
   var packW = Math.max(W, 760);
-  var cx = 0, cy = 0, rowH = 0, rows = 1, margin = 56;
+  var cx = 0, cy = 0, rowH = 0, margin = 56;
   cx = margin;
   clusters.forEach(function (cl) {
     if (cx + cl.R * 2 > packW - margin && cx > margin) {
-      cx = margin; cy += rowH + 88; rowH = 0; rows++;
+      cx = margin; cy += rowH + 88; rowH = 0;
     }
     cl.cx = cx + cl.R; cl.cy = cy + cl.R;
     cx += cl.R * 2 + 72;
@@ -363,7 +368,10 @@ table.net-agents th { position: static; }
     }
     alpha *= 0.984;
   }
-  for (var pre = 0; pre < 300 && alpha > 0.02; pre++) tick();
+  /* синхронная стабилизация: карта появляется уже собранной; на больших
+     графах тиков меньше, чтобы не блокировать главный поток надолго */
+  var preMax = nodes.length > 350 ? 140 : 300;
+  for (var pre = 0; pre < preMax && alpha > 0.02; pre++) tick();
 
   /* — вьюпорт: панорама/масштаб + вписывание содержимого — */
   var view = { x: 0, y: 0, k: 1 };
@@ -444,10 +452,8 @@ table.net-agents th { position: static; }
     }
 
     /* узлы: сначала точки, потом агенты, потом шлюзы */
-    var order = { other: 0, agent: 1, gw: 2 };
-    var sorted = nodes.slice().sort(function (a, b) { return order[a.type] - order[b.type]; });
-    for (i = 0; i < sorted.length; i++) {
-      n = sorted[i];
+    for (i = 0; i < sortedNodes.length; i++) {
+      n = sortedNodes[i];
       var dimN = FILTER && !matches(n);
       ctx.globalAlpha = dimN ? 0.08 : 1;
       var col = C[n.cls];
@@ -514,7 +520,8 @@ table.net-agents th { position: static; }
     ctx.globalAlpha = 1;
   }
 
-  /* — цикл: при reduce-motion рисуем кадр только на изменения — */
+  /* — цикл: обычно rAF крутится постоянно (пульсы); при reduce-motion рисуем
+       один кадр на изменение — loop сам гасит running, invalidate зажигает — */
   var running = false;
   function loop(now) {
     if (alpha > 0.02) tick();
@@ -536,15 +543,18 @@ table.net-agents th { position: static; }
     return { x: (e.clientX - b.left - view.x) / view.k, y: (e.clientY - b.top - view.y) / view.k };
   }
   function pick(p) {
-    for (var i = nodes.length - 1, best = null, bd = 1e9; i >= 0; i--) {
-      var n = nodes[i];
-      var dx = n.x - p.x, dy = n.y - p.y, d = Math.sqrt(dx * dx + dy * dy);
+    for (var i = sortedNodes.length - 1; i >= 0; i--) {
+      var n = sortedNodes[i];
+      var dx = n.x - p.x, dy = n.y - p.y;
       var rr = n.r + (n.type === "other" ? 5 : 7);
-      if (d <= rr && d < bd) { best = n; bd = d; }
-      if (i === 0) return best;
+      if (dx * dx + dy * dy <= rr * rr) return n;
     }
     return null;
   }
+  /* класс строки тултипа только из белого списка — данные не могут
+     протащить произвольное имя класса в DOM */
+  var SAFE_CLS = { good: 1, warn: 1, bad: 1, na: 1, accent: 1 };
+  function tipCls(c) { return SAFE_CLS[c] === 1 ? "t-" + c : "t-muted"; }
   function row(el, cls, t) {
     var d = document.createElement("div");
     if (cls) d.className = cls;
@@ -561,7 +571,7 @@ table.net-agents th { position: static; }
       if (n.hostname) row(tip, "t-muted", n.device_id);
       row(tip, "", "IP: " + (n.ip || "—") + " · " + kindName(n.kind));
       row(tip, "t-muted", "MAC: " + (n.mac || "—"));
-      row(tip, "t-" + n.cls, "потери до шлюза: " + fmtLoss(n.loss) + " · задержка: " + fmtLat(n.lat));
+      row(tip, tipCls(n.cls), "потери до шлюза: " + fmtLoss(n.loss) + " · задержка: " + fmtLat(n.lat));
       if (n.loss == null) row(tip, "t-muted", "проба не отвечала — возможно, ICMP закрыт");
       row(tip, "t-muted", "клик — карточка устройства");
     } else if (n.type === "gw") {
@@ -570,7 +580,7 @@ table.net-agents th { position: static; }
       if (n.mac) row(tip, "t-muted", "MAC: " + n.mac);
       row(tip, "", "отчиталось машин: " + n.quality.reporting);
       if (n.quality.median_loss_pct != null)
-        row(tip, "t-" + lossClass(n.quality.median_loss_pct),
+        row(tip, tipCls(lossClass(n.quality.median_loss_pct)),
             "медиана потерь: " + Math.round(n.quality.median_loss_pct) + "%" +
             (n.quality.median_latency_ms != null ? " · " + Math.round(n.quality.median_latency_ms) + " мс" : ""));
       if (n.anomaly) row(tip, "t-bad", "⚠ " + n.anomaly_reason);
