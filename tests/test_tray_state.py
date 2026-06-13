@@ -186,3 +186,31 @@ def test_load_gate_missing_or_broken_is_clean() -> None:
 def test_single_instance_exits_only_on_already_exists() -> None:
     assert st.single_instance_should_exit(183) is True  # ERROR_ALREADY_EXISTS
     assert st.single_instance_should_exit(0) is False
+
+
+# --------------------------------------------------------------------------- #
+# cert-nag state (spec §3): shares tray_state.json with the gate, never clobbers
+# --------------------------------------------------------------------------- #
+
+
+def test_cert_state_round_trips_and_preserves_gate(tmp_path: Path) -> None:
+    p = tmp_path / "tray_state.json"
+    st.save_gate(p, st.GateState(failed=1, locked_until=99.0))
+    st.save_cert_state(p, {"AA11": {"last_nag_date": "2026-06-13"}, "_missing": {}})
+    assert st.load_cert_state(p) == {"AA11": {"last_nag_date": "2026-06-13"}, "_missing": {}}
+    # a gate written by the separate password-prompt process survives a cert write
+    assert st.load_gate(p) == st.GateState(failed=1, locked_until=99.0)
+
+
+def test_gate_write_after_cert_state_keeps_certs(tmp_path: Path) -> None:
+    p = tmp_path / "tray_state.json"
+    st.save_cert_state(p, {"BB22": {"new_cert_announced": True}})
+    st.save_gate(p, st.GateState(failed=3, locked_until=0.0))
+    assert st.load_cert_state(p) == {"BB22": {"new_cert_announced": True}}
+
+
+def test_load_cert_state_missing_or_broken_is_empty(tmp_path: Path) -> None:
+    assert st.load_cert_state(tmp_path / "nope.json") == {}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert st.load_cert_state(bad) == {}

@@ -4,8 +4,8 @@ The tray icon (a Win32 message loop) and tkinter's ``mainloop`` cannot share a
 thread, so the panel and the password prompt are launched as a separate
 ``srp-tray --panel`` / ``--ask-password`` process: a crash here never drops the
 icon. All text is decided by :mod:`client.tray.state`; this module only places it
-into widgets. The certificate row is filled by stage 5 (``certs.py``); until then
-it shows a neutral placeholder.
+into widgets. The certificate row text is computed by the caller (a read-only
+``certs.py`` check in ``__main__``) and passed in as ``cert_text``.
 """
 
 from __future__ import annotations

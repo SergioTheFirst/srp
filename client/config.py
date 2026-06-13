@@ -61,6 +61,10 @@ class ClientConfig:
     dept_code: str = ""  # department/subdivision code; empty = not assigned
     comment: str = ""  # free-text label for this endpoint
     helpdesk_contact: str = ""  # shown in the tray panel; e.g. "IT: 1234 / it@org"
+    # Tray personal-certificate reminders (spec §3); additive, all optional.
+    tray_cert_warn_days: int = 14  # start warning this many days before expiry
+    tray_notify_hours: int = 4  # balloon cadence while in the warning window
+    tray_require_cert: bool = False  # nag daily when no signing cert is present at all
     ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
     # Operating mode: when True the agent collects but does NOT attempt server calls.
     offline_mode: bool = False
