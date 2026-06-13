@@ -13,8 +13,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from shared.schema import parse_version
 
-from server import db
+from server import db, org_directory
 from server.analytics.netmap import build_netmap, subnet_context_for
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
@@ -110,6 +111,10 @@ def _device_flags(d: dict) -> list[str]:
         flags.append("expiring")
     if d.get("device_trust") == "untrusted":
         flags.append("untrusted")
+    if d.get("version_outdated"):
+        flags.append("outdated")
+    if d.get("is_new"):
+        flags.append("new")
     return flags
 
 
@@ -123,6 +128,8 @@ def _fleet_summary(devices: list) -> dict:
         "stale": sum(1 for d in devices if d.get("stale")),
         "expiring": sum(1 for d in devices if d.get("cert_expiring")),
         "untrusted": sum(1 for d in devices if d.get("device_trust") == "untrusted"),
+        "new7d": sum(1 for d in devices if d.get("is_new")),
+        "outdated": sum(1 for d in devices if d.get("version_outdated")),
     }
 
 
@@ -138,9 +145,49 @@ def _group_by_site(devices: list) -> list:
     )
 
 
+def _identity_labels(d: dict) -> dict:
+    """Decode org/dept codes to display labels via the directory (render-time)."""
+    directory = org_directory.get_directory()
+    org = directory.org_display(d.get("org_code"))
+    dept = directory.dept_display(d.get("org_code"), d.get("dept_code"), d.get("department"))
+    return {
+        "org_label": {"text": org.text, "known": org.known},
+        "dept_label": {"text": dept.text, "known": dept.known},
+    }
+
+
+def _is_recent(iso: Optional[str], *, days: int) -> bool:
+    """True if *iso* falls within the last *days* (first_seen -> 'new' chip)."""
+    age = days_until(iso)  # negative = in the past
+    return age is not None and -days <= age <= 0
+
+
+def _enrich_fleet(devices: list) -> list:
+    """Decorate each device with decoded identity labels + version/new flags.
+
+    'Outdated' is data-driven: the highest agent_version present in the fleet is
+    treated as current, so a half-finished rollout is visible without the server
+    knowing the 'latest' version out of band.
+    """
+    parsed = [parse_version(d.get("agent_version")) for d in devices]
+    newest = max([v for v in parsed if v is not None], default=None)
+    enriched = []
+    for d, ver in zip(devices, parsed):
+        enriched.append(
+            {
+                **d,
+                **_identity_labels(d),
+                "version_outdated": bool(newest is not None and ver is not None and ver < newest),
+                "is_new": _is_recent(d.get("first_seen"), days=7),
+            }
+        )
+    return enriched
+
+
 def _fleet_context(devices: list) -> dict:
     # Build enriched copies (do not mutate db-owned dicts) -- immutable pattern.
-    enriched = [{**d, "flags": _device_flags(d)} for d in devices]
+    decorated = _enrich_fleet(devices)
+    enriched = [{**d, "flags": _device_flags(d)} for d in decorated]
     return {"summary": _fleet_summary(enriched), "groups": _group_by_site(enriched)}
 
 
@@ -176,6 +223,7 @@ def device(request: Request, device_id: str):
         **d,
         "last_seen_age_sec": age,
         "stale": age is not None and age > db.STALE_AFTER_SEC,
+        **_identity_labels(d),
     }
     # Phase 2 (D8): if the whole subnet degrades, tell the operator it is the
     # infrastructure, not this PC. Read-side fleet query — page views only.

@@ -224,6 +224,12 @@ h2::after, .section-label::after {
 .chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
 .chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
 .chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+/* "not in directory" chip — a typo'd org/dept code, surfaced not rejected (§7) */
+.chip-unk {
+  display: inline-block; font: 600 10px/1 var(--mono); vertical-align: middle;
+  padding: 2px 5px; border-radius: 3px;
+  background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.35);
+}
 
 /* ─── Score grid ─────────────────────────────────────────────────────── */
 .scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }

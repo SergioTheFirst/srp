@@ -221,10 +221,17 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
-def _print_env(device_id: str, pages: int, *, org_code: str, dept_code: str) -> dict:
+def _print_env(
+    device_id: str,
+    pages: int,
+    *,
+    org_code: str,
+    dept_code: str,
+    agent_version: str = "0.3.0",
+) -> dict:
     return {
         "device_id": device_id,
-        "agent_version": "0.3.0",
+        "agent_version": agent_version,
         "msg_type": "print_jobs",
         "org_code": org_code,
         "dept_code": dept_code,
@@ -326,3 +333,49 @@ def test_patch_meta_department_still_accepted_but_deprecated(
     assert r.status_code == 200
     dev = client.get("/api/v1/devices/dc2").json()
     assert dev["department"] == "Старый отдел"
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard SSR: decoded identity, unknown chip, agent-version observability
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.integration
+def test_fleet_page_decodes_identity_and_flags_unknown_code(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _activate_directory(tmp_path)
+    client.post("/api/v1/ingest", json=_print_env("f1", 1, org_code="101", dept_code="7"))
+    client.post("/api/v1/ingest", json=_print_env("f2", 1, org_code="101", dept_code="999"))
+    html = client.get("/").text
+    assert "ООО «Ромашка»" in html  # org name decoded
+    assert "Бухгалтерия" in html  # known dept decoded
+    assert "нет в спр." in html  # unknown code 999 -> chip, not rejected
+
+
+@pytest.mark.integration
+def test_fleet_page_marks_outdated_agent_version(client: TestClient, tmp_path: Path) -> None:
+    # Newest version in the fleet is treated as current; the older agent is flagged.
+    client.post(
+        "/api/v1/ingest",
+        json=_print_env("v_new", 1, org_code="101", dept_code="7", agent_version="0.3.0"),
+    )
+    client.post(
+        "/api/v1/ingest",
+        json=_print_env("v_old", 1, org_code="101", dept_code="7", agent_version="0.1.0"),
+    )
+    html = client.get("/").text
+    assert "устар." in html  # the 0.1.0 agent is behind the fleet's 0.3.0
+
+
+@pytest.mark.integration
+def test_device_page_header_decodes_identity_and_has_comment_field(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _activate_directory(tmp_path)
+    client.post("/api/v1/ingest", json=_print_env("dpage", 1, org_code="101", dept_code="12"))
+    html = client.get("/device/dpage").text
+    assert "ООО «Ромашка»" in html
+    assert "Склад" in html
+    assert "Комментарий" in html  # edit field relabeled from "Отдел"
+    assert 'id="comment-input"' in html

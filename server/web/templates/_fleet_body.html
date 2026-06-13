@@ -35,6 +35,14 @@
     <div class="kn {{ 'bad' if summary.untrusted else 'na' }}">{{ summary.untrusted }}</div>
     <div class="kl">untrusted</div>
   </div>
+  <div class="kpi" data-filter="outdated">
+    <div class="kn {{ 'warn' if summary.outdated else 'na' }}">{{ summary.outdated }}</div>
+    <div class="kl">устар. версия</div>
+  </div>
+  <div class="kpi" data-filter="new">
+    <div class="kn {{ 'good' if summary.new7d else 'na' }}">{{ summary.new7d }}</div>
+    <div class="kl">новых ≤7д</div>
+  </div>
 </div>
 
 {% if not groups %}
@@ -68,13 +76,18 @@
     {% for d in devs %}
     <tr class="devrow {{ 'stale-row' if d.stale else '' }}"
         data-flags="{{ d.flags|join(' ') }}"
-        data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id ~ ' ' ~ site)|lower }}"
+        data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id ~ ' ' ~ site ~ ' ' ~ (d.org_label.text or '') ~ ' ' ~ (d.dept_label.text or ''))|lower }}"
         data-id="{{ d.device_id }}"
         data-risk="{{ d.risk_exposure or 0 }}">
 
-      {# ── Device name — single line ───────────────────────────────────── #}
+      {# ── Device name + identity sub-line ─────────────────────────────── #}
       <td>
         <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
+        <div class="dev-sub2">
+          {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
+          {%- if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
+          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}
+        </div>
       </td>
 
       {# ── Status badges ────────────────────────────────────────────────── #}
