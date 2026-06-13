@@ -1,0 +1,2 @@
+# Tray icon assets are binary -- never apply CRLF/text normalization.
+*.ico binary

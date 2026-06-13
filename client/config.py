@@ -60,6 +60,7 @@ class ClientConfig:
     org_code: str = ""  # organisation code (e.g. "ACME"); empty = not assigned
     dept_code: str = ""  # department/subdivision code; empty = not assigned
     comment: str = ""  # free-text label for this endpoint
+    helpdesk_contact: str = ""  # shown in the tray panel; e.g. "IT: 1234 / it@org"
     ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
     # Operating mode: when True the agent collects but does NOT attempt server calls.
     offline_mode: bool = False
