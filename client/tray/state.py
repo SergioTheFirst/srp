@@ -45,6 +45,7 @@ _UPTIME_HINT_DAYS = 14.0
 _ERROR_ALREADY_EXISTS = 183
 
 _GATE_KEY = "_gate"
+_CERT_KEY = "_certs"
 
 
 # --------------------------------------------------------------------------- #
@@ -336,6 +337,24 @@ def load_gate(path: Path) -> GateState:
 def save_gate(path: Path, gate: GateState) -> None:
     state = load_tray_state(path)
     state[_GATE_KEY] = {"failed": gate.failed, "locked_until": gate.locked_until}
+    save_tray_state(path, state)
+
+
+def load_cert_state(path: Path) -> dict[str, Any]:
+    """The cert-nag anti-spam slice of tray_state.json (spec §3)."""
+    blob = load_tray_state(path).get(_CERT_KEY, {})
+    return blob if isinstance(blob, dict) else {}
+
+
+def save_cert_state(path: Path, cert_state: dict[str, Any]) -> None:
+    """Persist the cert-nag slice; merges so a *sequential* gate write survives.
+
+    Atomic replace, but no cross-process lock -- a concurrent gate write from the
+    password-prompt process could still race. The loss is benign (one stray nag),
+    so a lock is not worth it at PC-fleet scale.
+    """
+    state = load_tray_state(path)
+    state[_CERT_KEY] = cert_state
     save_tray_state(path, state)
 
 
