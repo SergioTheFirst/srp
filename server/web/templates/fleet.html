@@ -515,7 +515,7 @@ refreshPrint();
       var dTbody = document.querySelector("#fpt-devices-table tbody");
       devRows.forEach(function (r) {
         var tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + (r.hostname || r.device_id) + "</td>"
+        tr.innerHTML = "<td>" + srpEsc(r.hostname || r.device_id) + "</td>"
           + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
           + "<td>" + (r.jobs  || 0) + "</td>";
         dTbody.appendChild(tr);
@@ -524,7 +524,7 @@ refreshPrint();
       var pTbody = document.querySelector("#fpt-printers-table tbody");
       prnRows.forEach(function (r) {
         var tr = document.createElement("tr");
-        tr.innerHTML = "<td title=\"" + (r.name || "") + "\">" + (r.name || "(unknown)").substring(0,28) + "</td>"
+        tr.innerHTML = "<td title=\"" + srpEsc(r.name || "") + "\">" + srpEsc((r.name || "(unknown)").substring(0,28)) + "</td>"
           + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
           + "<td>" + (r.devices || 0) + "</td>";
         pTbody.appendChild(tr);

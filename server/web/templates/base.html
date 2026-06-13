@@ -557,6 +557,19 @@ code {
   var saved = localStorage.getItem("srp-theme");
   if (saved) document.documentElement.setAttribute("data-theme", saved);
 })();
+// XSS defense (one source of truth): HTML-escape any agent/operator-controlled
+// string before it reaches an innerHTML or Plotly pseudo-HTML sink. Plotly renders
+// a <b>/<a>/<span> tag subset inside tick + hover text, so an un-escaped value there
+// executes just like innerHTML would. Escaped entities still round-trip to the
+// correct glyph for display, so legitimate names render unchanged.
+// HTML-context only: safe for innerHTML / double-quoted attributes / Plotly text.
+// NOT sufficient for a JS-string, URL/href, or unquoted-attribute sink — those need
+// their own encoding.
+window.srpEsc = function (s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
 </script>
 </head>
 <body>

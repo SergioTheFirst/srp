@@ -336,6 +336,44 @@ def test_patch_meta_department_still_accepted_but_deprecated(
 
 
 # --------------------------------------------------------------------------- #
+# XSS: agent-controlled labels are output-encoded at every dashboard JS sink.
+#
+# The print + fleet charts pull names (dept_code, printer, user, hostname) from a
+# fetch() JSON response and feed them into Plotly tick/hover text and innerHTML.
+# Plotly renders a <b>/<a>/<span> tag subset inside that text, so an un-escaped
+# agent value executes there exactly as it would in innerHTML. The labels arrive
+# client-side (not SSR), so Jinja autoescape cannot reach them -- the mitigation is
+# the shared window.srpEsc() helper applied at each sink. These pins fail if any
+# sink loses its escape. Stage 3 repointed the /print department axis from operator
+# free-text to the agent's raw dept_code (stored-XSS, review C1); printer + hostname
+# names are agent-reported too (pre-existing, review C2).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.integration
+def test_base_ships_the_shared_escape_helper(client: TestClient) -> None:
+    # Defined once in base.html head -> available to every child template's script.
+    assert "window.srpEsc" in client.get("/print").text
+
+
+@pytest.mark.integration
+def test_print_chart_sinks_escape_agent_controlled_labels(client: TestClient) -> None:
+    body = client.get("/print").text
+    assert "srpEsc(r.dept)" in body  # CRITICAL (C1): department axis = raw dept_code
+    assert "srpEsc(r.name)" in body  # printers bar (C2)
+    assert "srpEsc(r.user_name)" in body  # users bar
+    assert "srpEsc(r.name.substring(" in body  # printer summary table cell
+    assert "srpEsc(err)" in body  # error path
+
+
+@pytest.mark.integration
+def test_fleet_overview_sinks_escape_agent_controlled_labels(client: TestClient) -> None:
+    body = client.get("/").text
+    assert "srpEsc(r.hostname" in body  # device row hostname (C2)
+    assert "srpEsc((r.name " in body  # printer row name (C2)
+
+
+# --------------------------------------------------------------------------- #
 # Dashboard SSR: decoded identity, unknown chip, agent-version observability
 # --------------------------------------------------------------------------- #
 
