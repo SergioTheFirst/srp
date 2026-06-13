@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS print_jobs (
   printer     TEXT,
   user_name   TEXT,
   pages       INTEGER,
-  size_bytes  INTEGER
+  size_bytes  INTEGER,
+  source      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup
@@ -251,6 +252,7 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("comment", "TEXT"),
         ("department", "TEXT"),
     ),
+    "print_jobs": (("source", "TEXT"),),
 }
 _BACKFILL: dict[str, str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
@@ -259,6 +261,8 @@ _BACKFILL: dict[str, str] = {
     "heartbeats": "UPDATE heartbeats SET received_at = ts WHERE received_at IS NULL",
     "events": "UPDATE events SET received_at = ts WHERE received_at IS NULL",
     "devices": "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL",
+    # Pre-fallback rows could only have come from the Event 307 collector.
+    "print_jobs": "UPDATE print_jobs SET source = 'events' WHERE source IS NULL",
 }
 
 
@@ -1234,8 +1238,9 @@ def store_print_jobs(
             try:
                 conn.execute(
                     """INSERT INTO print_jobs
-                         (device_id, job_id, ts, received_at, printer, user_name, pages, size_bytes)
-                       VALUES (?,?,?,?,?,?,?,?)""",
+                         (device_id, job_id, ts, received_at, printer, user_name, pages,
+                          size_bytes, source)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
                     (
                         device_id,
                         job.get("job_id"),
@@ -1245,6 +1250,7 @@ def store_print_jobs(
                         job.get("user_name"),
                         job.get("pages"),
                         job.get("size_bytes"),
+                        job.get("source"),
                     ),
                 )
                 inserted += 1
@@ -1455,7 +1461,8 @@ def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
             f" COALESCE(d.department, '') AS department,"
             f" COALESCE(p.printer, '') AS printer,"
             f" COALESCE(p.user_name, '') AS user_name,"
-            f" p.pages, p.size_bytes"
+            f" p.pages, p.size_bytes,"
+            f" COALESCE(p.source, '') AS source"
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {ts_f}"
             " ORDER BY p.ts DESC",

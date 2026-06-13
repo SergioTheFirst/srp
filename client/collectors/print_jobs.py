@@ -17,7 +17,17 @@ from typing import Any, Optional
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import PRINT_JOBS, CollectorResult, failed, field_status, health
 
-_VIRTUAL = ("pdf", "xps", "fax", "onenote", "microsoft print to", "send to", "adobe", "docuworks")
+_VIRTUAL = (
+    "pdf",
+    "xps",
+    "fax",
+    "onenote",
+    "evernote",  # "Print to Evernote" -- seen live, not caught by the other entries
+    "microsoft print to",
+    "send to",
+    "adobe",
+    "docuworks",
+)
 
 # ISO-8601 timestamp regexp — only characters safe to embed into a PS string literal.
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.+\-Z]+$")
@@ -47,7 +57,7 @@ $filter = @{LogName='Microsoft-Windows-PrintService/Operational'; Id=307}
 """
         + ts_filter
         + r"""
-$virtual = @('pdf','xps','fax','onenote','microsoft print to','send to','adobe','docuworks')
+$virtual = @('pdf','xps','fax','onenote','evernote','microsoft print to','send to','adobe','docuworks')
 function Test-Virtual([string]$n) {
     $ln = $n.ToLower()
     foreach ($v in $virtual) { if ($ln.Contains($v)) { return $true } }
@@ -178,23 +188,168 @@ def _parse_job(raw: Any) -> Optional[dict[str, Any]]:
         "pages": pages,
         "size_bytes": size,
         "user_name": (raw.get("user_name") or None),
+        "source": "events",
     }
 
 
-def collect_print_jobs(state_path: Path) -> CollectorResult:
-    state = _load_state(state_path)
-    last_ts = _safe_ts(state.get("last_sweep_ts"))
-    sweep_ts = datetime.now(timezone.utc).isoformat()
+# --------------------------------------------------------------------------- #
+# Mode detection + counter fallback (tray spec §5)
+# --------------------------------------------------------------------------- #
 
+# Locale-safe: a single boolean leaves PowerShell, never localized text.
+_MODE_SCRIPT = r"""
+$enabled = $true
+try {
+    $log = Get-WinEvent -ListLog 'Microsoft-Windows-PrintService/Operational' -ErrorAction Stop
+    $enabled = [bool]$log.IsEnabled
+} catch { $enabled = $false }
+[ordered]@{ enabled = $enabled } | ConvertTo-Json -Compress
+"""
+
+# CIM perf counter (project invariant: Win32_PerfFormattedData_*, not Get-Counter).
+# TotalPagesPrinted is cumulative since spooler start; the synthetic "_Total"
+# instance is the sum of all queues and must be skipped (double count).
+_COUNTER_SCRIPT = r"""
+$rows = @()
+try {
+    foreach ($q in Get-CimInstance Win32_PerfFormattedData_Spooler_PrintQueue -ErrorAction Stop) {
+        $n = "$($q.Name)"
+        if ($n -eq '_Total') { continue }
+        $p = [long]0
+        try { $p = [long]$q.TotalPagesPrinted } catch {}
+        $rows += [ordered]@{ name = $n; pages = $p }
+    }
+} catch {}
+[ordered]@{ queues = @($rows) } | ConvertTo-Json -Depth 3 -Compress
+"""
+
+
+def _detect_mode() -> str:
+    """Pick the sweep mode: "events" | "counter".
+
+    Counter only when the operational log is KNOWN to be disabled (or absent).
+    If the check itself fails (PS broken), keep the old events behavior -- its
+    own failure path reports the collector as blocked.
+    """
+    res = run_ps(_MODE_SCRIPT, timeout=30)
+    if res.status == "ok" and isinstance(res.data, dict) and res.data.get("enabled") is False:
+        return "counter"
+    return "events"
+
+
+def _counter_jobs(
+    queues: list[dict[str, Any]], baselines: dict[str, int], sweep_ts: str
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Pure: per-queue page deltas vs baselines -> (job rows, new baselines).
+
+    First sight of a queue seeds its baseline silently (its lifetime counter
+    must not be emitted as "printed now"). A counter that went backwards means
+    the spooler restarted: everything since the restart is real and uncounted,
+    so the delta equals the current value. Virtual queues and "_Total" skipped.
+    """
+    jobs: list[dict[str, Any]] = []
+    new_base: dict[str, int] = {}
+    for queue in queues:
+        name = str(queue.get("name") or "")
+        if not name or name == "_Total" or _is_virtual(name):
+            continue
+        try:
+            pages = int(queue.get("pages"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if pages < 0:
+            continue
+        new_base[name] = pages
+        if name not in baselines:
+            continue  # seed silently, no retro count
+        base = baselines[name]
+        delta = pages if pages < base else pages - base
+        if delta > 0:
+            jobs.append(
+                {
+                    "job_id": None,
+                    "ts": sweep_ts,
+                    "printer": name,
+                    "pages": delta,
+                    "size_bytes": None,
+                    "user_name": None,
+                    "source": "counter",
+                }
+            )
+    return jobs, new_base
+
+
+def _finish_sweep(
+    state_path: Path,
+    state: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    sweep_ts: str,
+    mode: str,
+) -> None:
+    """Accumulate daily counters and persist the post-sweep state."""
+    new_state = accumulate_daily(state, jobs, datetime.now().date().isoformat())
+    new_state["last_sweep_ts"] = sweep_ts
+    new_state["mode"] = mode
+    _store_state(state_path, new_state)
+
+
+def _collect_via_events(state_path: Path, state: dict[str, Any], sweep_ts: str) -> CollectorResult:
+    """Event 307 sweep (per-job detail). last_sweep_ts semantics make the
+    counter->events handoff naturally safe: 307 entries can only exist from
+    the moment the log was (re)enabled, and pages up to the last counter sweep
+    were already covered by deltas."""
+    last_ts = _safe_ts(state.get("last_sweep_ts"))
     result = run_ps(_build_script(last_ts), timeout=90)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
         return CollectorResult(None, failed([PRINT_JOBS], status))
 
     jobs = [j for j in (_parse_job(x) for x in as_list(result.data.get("jobs"))) if j]
-    new_state = accumulate_daily(state, jobs, datetime.now().date().isoformat())
-    new_state["last_sweep_ts"] = sweep_ts
-    _store_state(state_path, new_state)
-
+    _finish_sweep(state_path, state, jobs, sweep_ts, "events")
     payload = {"jobs": jobs, "window_from": last_ts or None}
     return CollectorResult(payload, {PRINT_JOBS: health(field_status(True))})
+
+
+def _collect_via_counter(
+    state_path: Path, state: dict[str, Any], sweep_ts: str, *, reseed: bool
+) -> CollectorResult:
+    """Spooler-counter sweep (page totals only, no user/document detail).
+
+    *reseed* (entering counter mode from events): stored baselines are stale --
+    pages printed during the events period were already counted via Event 307,
+    so a delta against them would double-count. Drop them; this sweep seeds.
+    """
+    result = run_ps(_COUNTER_SCRIPT, timeout=60)
+    if result.status != "ok" or not isinstance(result.data, dict):
+        status = result.status if result.status != "ok" else "partial"
+        return CollectorResult(None, failed([PRINT_JOBS], status))
+
+    queues = [q for q in as_list(result.data.get("queues")) if isinstance(q, dict)]
+    baselines: dict[str, int] = {}
+    if not reseed and isinstance(state.get("baselines"), dict):
+        for name, pages in state["baselines"].items():
+            try:
+                baselines[str(name)] = int(pages)
+            except (TypeError, ValueError):
+                continue
+    jobs, new_baselines = _counter_jobs(queues, baselines, sweep_ts)
+    state_with_base = {**state, "baselines": new_baselines}
+    _finish_sweep(state_path, state_with_base, jobs, sweep_ts, "counter")
+    payload = {"jobs": jobs, "window_from": None}
+    return CollectorResult(payload, {PRINT_JOBS: health(field_status(True))})
+
+
+def collect_print_jobs(state_path: Path) -> CollectorResult:
+    """Sweep printed pages; the mode is re-decided EVERY sweep (self-healing).
+
+    Log enabled -> events (rich per-job detail); disabled -> counter fallback.
+    An admin enabling the log later upgrades the very next sweep with no
+    double counting (see the transition notes on the helpers).
+    """
+    state = _load_state(state_path)
+    mode = _detect_mode()
+    sweep_ts = datetime.now(timezone.utc).isoformat()
+    if mode == "events":
+        return _collect_via_events(state_path, state, sweep_ts)
+    reseed = str(state.get("mode", "events")) != "counter"
+    return _collect_via_counter(state_path, state, sweep_ts, reseed=reseed)

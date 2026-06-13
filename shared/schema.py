@@ -290,6 +290,10 @@ class PrintJobRecord(_Base):
     pages: int
     size_bytes: Optional[int] = None
     user_name: Optional[str] = None
+    # Collection method: "events" (Event 307, per-job detail) | "counter"
+    # (spooler perf-counter deltas; job_id/user_name are None). Additive
+    # optional -- old agents send nothing -> None; no CONTRACT_VERSION bump.
+    source: Optional[str] = Field(default=None, max_length=16)
 
 
 class PrintJobsPayload(_Base):
