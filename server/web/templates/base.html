@@ -224,6 +224,12 @@ h2::after, .section-label::after {
 .chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
 .chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
 .chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+/* "not in directory" chip — a typo'd org/dept code, surfaced not rejected (§7) */
+.chip-unk {
+  display: inline-block; font: 600 10px/1 var(--mono); vertical-align: middle;
+  padding: 2px 5px; border-radius: 3px;
+  background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.35);
+}
 
 /* ─── Score grid ─────────────────────────────────────────────────────── */
 .scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
@@ -551,6 +557,19 @@ code {
   var saved = localStorage.getItem("srp-theme");
   if (saved) document.documentElement.setAttribute("data-theme", saved);
 })();
+// XSS defense (one source of truth): HTML-escape any agent/operator-controlled
+// string before it reaches an innerHTML or Plotly pseudo-HTML sink. Plotly renders
+// a <b>/<a>/<span> tag subset inside tick + hover text, so an un-escaped value there
+// executes just like innerHTML would. Escaped entities still round-trip to the
+// correct glyph for display, so legitimate names render unchanged.
+// HTML-context only: safe for innerHTML / double-quoted attributes / Plotly text.
+// NOT sufficient for a JS-string, URL/href, or unquoted-attribute sink — those need
+// their own encoding.
+window.srpEsc = function (s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
 </script>
 </head>
 <body>

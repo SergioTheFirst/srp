@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from server import db
+from server import db, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
 from server.web.dashboard import router as web_router
@@ -50,6 +50,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             retain_heartbeats=cfg.retain_heartbeats,
             retain_events=cfg.retain_events,
         )
+        org_directory.init_directory(cfg.resolved_org_directory_path())
         yield
 
     app = FastAPI(

@@ -234,7 +234,15 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     points the module-global connection at this test's temp file.
     """
     db_file = tmp_path / "test_srp.db"
-    app = create_app(ServerConfig(db_path=str(db_file)))
+    # Point the org directory at an absent file -> empty directory, so tests are
+    # isolated from the repo's example. A decode test writes this path then calls
+    # reload_if_changed() (tray spec §7 mtime reload).
+    app = create_app(
+        ServerConfig(
+            db_path=str(db_file),
+            org_directory_path=str(tmp_path / "org_directory.json"),
+        )
+    )
     with TestClient(app) as c:
         yield c
 

@@ -123,6 +123,8 @@
 <div class="small muted mono" style="margin-bottom:20px">
   {{ d.device_id }}
   {% if d.manufacturer or d.model %} · {{ d.manufacturer or "" }} {{ d.model or "" }}{% endif %}
+  {% if d.org_label.text %} · {{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
+  {% if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
   · агент {{ d.agent_version or "?" }}
   · контакт {{ fmt_age(d.last_seen_age_sec) }} назад
 </div>
@@ -680,14 +682,16 @@
 })();
 </script>
 
-{# ── Department assignment ──────────────────────────────────────────────── #}
-<div class="section-label" style="margin-top:22px">Отдел</div>
+{# ── Machine comment (free-text label) ──────────────────────────────────── #}
+{# Отдел теперь берётся из справочника по коду (заголовок выше); здесь —
+   произвольная метка машины. Поле «отдел» (department) устарело. #}
+<div class="section-label" style="margin-top:22px">Комментарий</div>
 <div class="dept-row">
-  <input id="dept-input" class="dept-input" type="text"
-         placeholder="Не назначен"
-         value="{{ d.department or '' }}">
-  <button id="dept-save" class="btn-small">Сохранить</button>
-  <span id="dept-status" class="small muted"></span>
+  <input id="comment-input" class="dept-input" type="text"
+         placeholder="Например: касса №3"
+         value="{{ d.comment or '' }}">
+  <button id="comment-save" class="btn-small">Сохранить</button>
+  <span id="comment-status" class="small muted"></span>
 </div>
 <style>
 .dept-row { display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap; }
@@ -710,15 +714,15 @@
 <script>
 (function () {
   var did = {{ d.device_id | tojson }};
-  var inp = document.getElementById("dept-input");
-  var btn = document.getElementById("dept-save");
-  var st  = document.getElementById("dept-status");
+  var inp = document.getElementById("comment-input");
+  var btn = document.getElementById("comment-save");
+  var st  = document.getElementById("comment-status");
   btn.addEventListener("click", function () {
     var val = inp.value.trim() || null;
     fetch("/api/v1/devices/" + encodeURIComponent(did) + "/meta", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ department: val }),
+      body: JSON.stringify({ comment: val }),
     })
       .then(function (r) { return r.json(); })
       .then(function () {

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 
 _CONFIG_PATH = Path(__file__).with_name("config.json")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Env override for the org/department directory path (tray spec §7).
+_ORG_DIRECTORY_ENV = "SRP_ORG_DIRECTORY"
 
 
 @dataclass
@@ -20,9 +24,16 @@ class ServerConfig:
     retain_events: int = 1000  # per device
     # B105: not a secret literal -- empty = ingest auth OFF; real token set via config.json/env.
     ingest_token: str = ""  # nosec B105
+    # Org/department directory (tray spec §7); relative -> resolved against root.
+    # Names are decoded render-time; nothing here is a secret.
+    org_directory_path: str = "org_directory.json"
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
+        return p if p.is_absolute() else (_PROJECT_ROOT / p)
+
+    def resolved_org_directory_path(self) -> Path:
+        p = Path(self.org_directory_path)
         return p if p.is_absolute() else (_PROJECT_ROOT / p)
 
 
@@ -34,4 +45,7 @@ def load_config(path: Path = _CONFIG_PATH) -> ServerConfig:
         for key, value in data.items():
             if key in known:
                 setattr(cfg, key, value)
+    env_dir = os.environ.get(_ORG_DIRECTORY_ENV)
+    if env_dir:
+        cfg.org_directory_path = env_dir
     return cfg

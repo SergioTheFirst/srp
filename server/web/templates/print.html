@@ -219,7 +219,7 @@
     var el = document.getElementById("chart-printers");
     if (!printers || printers.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
     var top   = printers.slice(0, 10);
-    var names = top.map(function (r) { return r.name; }).reverse();
+    var names = top.map(function (r) { return srpEsc(r.name); }).reverse();
     var pages = top.map(function (r) { return r.pages; }).reverse();
     Plotly.newPlot(el, [{
       x: pages, y: names, type: "bar", orientation: "h",
@@ -239,7 +239,7 @@
     var rows  = printers.slice(0, 12).map(function (r) {
       var avg = r.jobs > 0 ? (r.pages / r.jobs).toFixed(1) : "—";
       var pct = (100 * r.pages / total).toFixed(1);
-      return "<tr><td title=\"" + r.name + "\">" + r.name.substring(0, 24) + "</td>"
+      return "<tr><td title=\"" + srpEsc(r.name) + "\">" + srpEsc(r.name.substring(0, 24)) + "</td>"
         + "<td>" + r.pages.toLocaleString("ru") + "</td>"
         + "<td>" + r.jobs + "</td>"
         + "<td>" + avg + "</td>"
@@ -254,7 +254,7 @@
     var el = document.getElementById("chart-users");
     if (!users || users.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
     var top   = users.slice(0, 20);
-    var names = top.map(function (r) { return r.user_name; }).reverse();
+    var names = top.map(function (r) { return srpEsc(r.user_name); }).reverse();
     var pages = top.map(function (r) { return r.pages; }).reverse();
     Plotly.newPlot(el, [{
       x: pages, y: names, type: "bar", orientation: "h",
@@ -274,7 +274,7 @@
       return r.dept !== "Без отдела" && r.pages > 0;
     });
     if (!hasReal) { panel.style.display = "none"; return; }
-    var names = departments.map(function (r) { return r.dept; });
+    var names = departments.map(function (r) { return srpEsc(r.dept); });
     var pages = departments.map(function (r) { return r.pages; });
     Plotly.newPlot(el, [{
       x: names, y: pages, type: "bar",
@@ -299,7 +299,7 @@
     })
     .catch(function (err) {
       document.querySelector(".summary-cards").innerHTML =
-        "<div class=\"no-data\">Ошибка загрузки: " + err + "</div>";
+        "<div class=\"no-data\">Ошибка загрузки: " + srpEsc(err) + "</div>";
     });
 })();
 </script>
