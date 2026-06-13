@@ -1387,13 +1387,16 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
             " GROUP BY user_name ORDER BY pages DESC LIMIT 20",
             (),
         ).fetchall()
+        # Raw codes only -- names are decoded render-time from org_directory so
+        # a rename reflects across all history without a rewrite (tray spec §7).
         dept_rows = conn.execute(
-            f"SELECT COALESCE(d.department, 'Без отдела') AS dept,"  # nosec B608
+            f"SELECT d.org_code AS org_code, d.dept_code AS dept_code,"  # nosec B608
+            f" d.department AS department,"
             f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs,"
             f" COUNT(DISTINCT p.device_id) AS devices_count"
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
-            " GROUP BY dept ORDER BY pages DESC",
+            " GROUP BY d.org_code, d.dept_code, d.department ORDER BY pages DESC",
             (),
         ).fetchall()
         if days > 0:
@@ -1441,7 +1444,9 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
         ],
         "departments": [
             {
-                "dept": r["dept"],
+                "org_code": r["org_code"],
+                "dept_code": r["dept_code"],
+                "department": r["department"],
                 "pages": int(r["pages"]),
                 "jobs": int(r["jobs"]),
                 "devices_count": int(r["devices_count"]),
@@ -1458,6 +1463,8 @@ def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
         rows = conn.execute(
             f"SELECT p.ts, p.device_id,"  # nosec B608
             f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" COALESCE(d.org_code, '') AS org_code,"
+            f" COALESCE(d.dept_code, '') AS dept_code,"
             f" COALESCE(d.department, '') AS department,"
             f" COALESCE(p.printer, '') AS printer,"
             f" COALESCE(p.user_name, '') AS user_name,"
@@ -1472,10 +1479,22 @@ def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
 
 
 def set_device_department(device_id: str, department: Optional[str]) -> bool:
-    """Set the department label for a device. Returns True if the device existed."""
+    """Set the (deprecated) free-text department label. Returns True if the
+    device existed. Superseded by dept_code + org_directory (tray spec §7);
+    kept for the transition."""
     with _lock, _connect() as conn:
         n = conn.execute(
             "UPDATE devices SET department=? WHERE device_id=?",
             (department, device_id),
+        ).rowcount
+    return n > 0
+
+
+def set_device_comment(device_id: str, comment: Optional[str]) -> bool:
+    """Set the free-text machine comment. Returns True if the device existed."""
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            "UPDATE devices SET comment=? WHERE device_id=?",
+            (comment, device_id),
         ).rowcount
     return n > 0

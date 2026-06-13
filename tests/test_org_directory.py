@@ -211,3 +211,118 @@ def test_module_singleton_init_and_get(tmp_path: Path) -> None:
     _write(path, _SAMPLE)
     od.init_directory(path)
     assert od.get_directory().org_name("101") == "ООО «Ромашка»"
+
+
+# --------------------------------------------------------------------------- #
+# Render-time decode through the print API + CSV (integration)
+# --------------------------------------------------------------------------- #
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+
+def _print_env(device_id: str, pages: int, *, org_code: str, dept_code: str) -> dict:
+    return {
+        "device_id": device_id,
+        "agent_version": "0.3.0",
+        "msg_type": "print_jobs",
+        "org_code": org_code,
+        "dept_code": dept_code,
+        "payload": {
+            "jobs": [
+                {
+                    "job_id": 1,
+                    "ts": "2026-06-12T10:00:00+00:00",
+                    "printer": "HP LaserJet",
+                    "pages": pages,
+                    "source": "events",
+                }
+            ],
+            "window_from": None,
+        },
+    }
+
+
+def _activate_directory(tmp_path: Path) -> None:
+    """Write the sample directory at the client fixture's path + hot-reload it."""
+    _write(tmp_path / "org_directory.json", _SAMPLE)
+    od.get_directory().reload_if_changed()
+
+
+@pytest.mark.integration
+def test_analytics_decodes_known_department(client: TestClient, tmp_path: Path) -> None:
+    _activate_directory(tmp_path)
+    assert (
+        client.post(
+            "/api/v1/ingest", json=_print_env("d1", 5, org_code="101", dept_code="7")
+        ).status_code
+        == 200
+    )
+    body = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    acct = next(d for d in body["departments"] if d["dept"] == "Бухгалтерия")
+    assert acct["known"] is True
+    assert acct["pages"] == 5
+
+
+@pytest.mark.integration
+def test_analytics_unknown_code_is_flagged_not_rejected(client: TestClient, tmp_path: Path) -> None:
+    _activate_directory(tmp_path)
+    # dept_code 999 is not in the directory -> telemetry still stored, shown as code+chip.
+    assert (
+        client.post(
+            "/api/v1/ingest", json=_print_env("d2", 3, org_code="101", dept_code="999")
+        ).status_code
+        == 200
+    )
+    body = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    bucket = next(d for d in body["departments"] if d["dept"] == "999")
+    assert bucket["known"] is False
+    assert bucket["pages"] == 3
+
+
+@pytest.mark.integration
+def test_analytics_merges_same_label_across_devices(client: TestClient, tmp_path: Path) -> None:
+    _activate_directory(tmp_path)
+    client.post("/api/v1/ingest", json=_print_env("d3", 4, org_code="101", dept_code="7"))
+    client.post("/api/v1/ingest", json=_print_env("d4", 6, org_code="101", dept_code="7"))
+    body = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    accts = [d for d in body["departments"] if d["dept"] == "Бухгалтерия"]
+    assert len(accts) == 1  # one merged bucket
+    assert accts[0]["pages"] == 10
+    assert accts[0]["devices_count"] == 2
+
+
+@pytest.mark.integration
+def test_csv_export_carries_decoded_org_and_dept_names(client: TestClient, tmp_path: Path) -> None:
+    _activate_directory(tmp_path)
+    client.post("/api/v1/ingest", json=_print_env("d5", 7, org_code="101", dept_code="12"))
+    csv_text = client.get("/api/v1/fleet/print/export.csv?days=0").text
+    header = csv_text.splitlines()[0]
+    assert "org_name" in header and "dept_name" in header
+    assert "ООО «Ромашка»" in csv_text
+    assert "Склад" in csv_text
+
+
+# --------------------------------------------------------------------------- #
+# PATCH meta: comment supersedes the deprecated free-text department
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.integration
+def test_patch_meta_comment_is_stored_and_reflected(client: TestClient, tmp_path: Path) -> None:
+    client.post("/api/v1/ingest", json=_print_env("dc1", 1, org_code="101", dept_code="7"))
+    r = client.patch("/api/v1/devices/dc1/meta", json={"comment": "касса №3"})
+    assert r.status_code == 200
+    dev = client.get("/api/v1/devices/dc1").json()
+    assert dev["comment"] == "касса №3"
+
+
+@pytest.mark.integration
+def test_patch_meta_department_still_accepted_but_deprecated(
+    client: TestClient, tmp_path: Path
+) -> None:
+    client.post("/api/v1/ingest", json=_print_env("dc2", 1, org_code="101", dept_code="7"))
+    r = client.patch("/api/v1/devices/dc2/meta", json={"department": "Старый отдел"})
+    assert r.status_code == 200
+    dev = client.get("/api/v1/devices/dc2").json()
+    assert dev["department"] == "Старый отдел"

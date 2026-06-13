@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
-from server import db
+from server import db, org_directory
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
@@ -108,19 +108,56 @@ def device_print(device_id: str, days: int = 30) -> dict:
     return db.get_device_print(device_id, days=_clamp_days(days))
 
 
+def _decode_departments(raw: list[dict]) -> list[dict]:
+    """Decode raw (org_code, dept_code, department) buckets to display labels
+    and merge buckets that render to the same label (tray spec §7).
+
+    Each device maps to exactly one raw bucket, so summing ``devices_count``
+    across merged buckets stays correct. ``known=False`` carries the
+    "not in directory" chip through to the chart.
+    """
+    directory = org_directory.get_directory()
+    merged: dict[tuple, dict] = {}
+    for row in raw:
+        label = directory.dept_display(
+            row.get("org_code"), row.get("dept_code"), row.get("department")
+        )
+        key = (label.text, label.known)
+        bucket = merged.setdefault(
+            key,
+            {"dept": label.text, "known": label.known, "pages": 0, "jobs": 0, "devices_count": 0},
+        )
+        bucket["pages"] += int(row.get("pages") or 0)
+        bucket["jobs"] += int(row.get("jobs") or 0)
+        bucket["devices_count"] += int(row.get("devices_count") or 0)
+    return sorted(merged.values(), key=lambda b: b["pages"], reverse=True)
+
+
 @router.get("/fleet/print/analytics")
 def fleet_print_analytics(days: int = 30) -> dict:
-    return db.get_print_analytics(days=_clamp_days(days))
+    data = db.get_print_analytics(days=_clamp_days(days))
+    data["departments"] = _decode_departments(data["departments"])
+    return data
 
 
 @router.get("/fleet/print/export.csv")
 def fleet_print_export(days: int = 30) -> StreamingResponse:
     rows = db.export_print_rows(days=_clamp_days(days))
+    directory = org_directory.get_directory()
+    for row in rows:
+        # Decode names render-time; the legacy free-text `department` column is
+        # kept for the transition (tray spec §7).
+        row["org_name"] = directory.org_display(row.get("org_code")).text
+        row["dept_name"] = directory.dept_display(
+            row.get("org_code"), row.get("dept_code"), row.get("department")
+        ).text
     buf = io.StringIO()
     fieldnames = [
         "ts",
         "device_id",
         "hostname",
+        "org_name",
+        "dept_name",
         "printer",
         "pages",
         "size_bytes",
@@ -145,7 +182,11 @@ def fleet_print(days: int = 30) -> dict:
 
 
 class MetaPatch(BaseModel):
+    # `department` is DEPRECATED (superseded by dept_code + org_directory, tray
+    # spec §7) but still accepted for the transition. `comment` is the device's
+    # free-text label going forward.
     department: Optional[str] = Field(default=None, max_length=200)
+    comment: Optional[str] = Field(default=None, max_length=200)
 
 
 @router.patch("/devices/{device_id}/meta")
@@ -153,5 +194,7 @@ def patch_device_meta(device_id: str, body: MetaPatch) -> dict:
     if db.get_device(device_id) is None:
         raise HTTPException(status_code=404, detail="device not found")
     if body.department is not None:
-        db.set_device_department(device_id, body.department)
+        db.set_device_department(device_id, body.department)  # deprecated path
+    if body.comment is not None:
+        db.set_device_comment(device_id, body.comment)
     return {"status": "ok"}
