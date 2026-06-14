@@ -176,7 +176,9 @@ build.bat                      REM собрать dist\share\ (agent + tray + se
 `config.json` (UTF-8 без BOM, `device_id` сохраняется), ставит SYSTEM-задачу из
 `task_template.xml` и трей-иконку, проверяет связь одним проходом. Коды возврата
 `0/2/3/4/5` для RMM/GPO, протокол в `C:\SRP\install.log`, удаление —
-`setup.exe --uninstall [--purge]`. Подробно: [docs/deploy-share-README.md](docs/deploy-share-README.md).
+`setup.exe --uninstall [--purge]`. Полная инструкция (сборка, локальный запуск,
+все ключи): [docs/agent-install.md](docs/agent-install.md) · раскладка шары:
+[docs/deploy-share-README.md](docs/deploy-share-README.md).
 
 ---
 
