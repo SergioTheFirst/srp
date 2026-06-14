@@ -232,8 +232,10 @@ def test_icacls_closes_user_write() -> None:
     assert cmd[0] == "icacls" and r"C:\SRP" in cmd
     assert "/inheritance:r" in cmd  # drop the inherited C:\ ACL (Users can write by default)
     joined = " ".join(cmd)
-    assert "SYSTEM:" in joined and "Administrators:" in joined
-    users = [a for a in cmd if a.startswith("Users:")][0]
+    # well-known SIDs, not English names (localised Windows wouldn't resolve names)
+    assert "*S-1-5-18:" in joined  # SYSTEM
+    assert "*S-1-5-32-544:" in joined  # Administrators
+    users = [a for a in cmd if a.startswith("*S-1-5-32-545:")][0]  # Users
     assert "RX" in users and "F" not in users and "W" not in users and "M" not in users
 
 
@@ -244,6 +246,20 @@ def test_icacls_spool_grants_authenticated_users_write_on_subdir_only() -> None:
     assert "/grant" in cmd and "/grant:r" not in cmd  # ADD an ACE, don't replace the root's
     assert any("S-1-5-11" in a for a in cmd)  # Authenticated Users SID
     assert any("(OI)(CI)M" in a for a in cmd)  # Modify, inheritable
+
+
+def test_reencode_task_xml_flips_declaration_to_utf16() -> None:
+    out = su.reencode_task_xml_utf16('<?xml version="1.0" encoding="UTF-8"?><Task/>')
+    assert 'encoding="UTF-16"' in out and "UTF-8" not in out
+
+
+def test_write_task_xml_utf16_has_bom(tmp_path: Path) -> None:
+    # schtasks /create /xml rejects UTF-8 ("failed to switch encoding"); needs UTF-16.
+    p = tmp_path / "task_template.xml"
+    p.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<Task>—</Task>', encoding="utf-8")
+    su._write_task_xml_utf16(p)
+    assert p.read_bytes()[:2] == b"\xff\xfe"  # UTF-16 LE BOM
+    assert p.read_text(encoding="utf-16").startswith('<?xml version="1.0" encoding="UTF-16"?>')
 
 
 def test_robocopy_does_not_mirror_delete_config() -> None:

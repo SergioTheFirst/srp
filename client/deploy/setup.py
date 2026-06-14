@@ -197,14 +197,19 @@ def icacls_cmd(dest: str = DEST) -> list[str]:
     # The C:\ default ACL grants ordinary Users WRITE; drop inheritance and grant
     # explicit ACEs so only SYSTEM/Admins can write -- the real protection for
     # config.json (the tray password is only a UI-layer guard).
+    #
+    # Use well-known SIDs, NOT English names: on a localised Windows (e.g. Russian)
+    # "Administrators"/"Users" don't resolve and icacls fails (-> exit 4). SIDs are
+    # language-independent. SYSTEM=S-1-5-18, Administrators=S-1-5-32-544,
+    # Users=S-1-5-32-545.
     return [
         "icacls",
         dest,
         "/inheritance:r",
         "/grant:r",
-        "SYSTEM:(OI)(CI)F",
-        "Administrators:(OI)(CI)F",
-        "Users:(OI)(CI)RX",
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-5-32-544:(OI)(CI)F",
+        "*S-1-5-32-545:(OI)(CI)RX",
     ]
 
 
@@ -308,6 +313,19 @@ def _config_loadable(path: Path) -> bool:
     return isinstance(data, dict) and bool(str(data.get("server_url", "")).strip())
 
 
+def reencode_task_xml_utf16(text: str) -> str:
+    """schtasks /create /xml needs UTF-16; flip the shipped UTF-8 declaration.
+
+    Pure: callers write the result with a UTF-16 codec (BOM). Without this,
+    schtasks fails with "failed to switch encoding" on a UTF-8 task file.
+    """
+    return text.replace('encoding="UTF-8"', 'encoding="UTF-16"', 1)
+
+
+def _write_task_xml_utf16(path: Path) -> None:
+    path.write_text(reencode_task_xml_utf16(path.read_text(encoding="utf-8")), encoding="utf-16")
+
+
 def _payload_dir() -> Path:
     base = (
         Path(sys.executable).parent
@@ -366,6 +384,10 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
         _log(dest, "config.json has no server_url -- autostart not registered")
         return EXIT_BAD_PARAMS
 
+    try:
+        _write_task_xml_utf16(destp / TASK_XML)  # schtasks /xml requires UTF-16
+    except OSError as exc:
+        _log(dest, f"task XML re-encode failed: {exc}")
     if _run(schtasks_create_cmd(destp / TASK_XML)) != 0:
         _log(dest, "schtasks create failed")
         return EXIT_TASK_AUTOSTART
