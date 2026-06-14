@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from client.tray import certs as cz
-from client.tray import panel
+from client.tray import panel, spool
 from client.tray import state as st
 
 log = logging.getLogger("client.tray")
@@ -176,8 +176,9 @@ class _TrayApp:
         self._next_cert_check = now + _CERT_INTERVAL_SEC
         try:
             prior = st.load_cert_state(self.tray_state_path)
+            certs = cz.query_certs()
             result = cz.evaluate(
-                cz.query_certs(),
+                certs,
                 prior,
                 now=now,
                 warn_days=self._warn_days,
@@ -190,6 +191,9 @@ class _TrayApp:
                 st.save_cert_state(self.tray_state_path, result.state)
             for b in result.balloons:
                 self.icon.balloon(b.title, b.message, b.level)
+            # stage 8: spool these personal certs so the SYSTEM agent (which can't see
+            # CurrentUser\My) can surface them in the fleet. None = PS failed -> skipped.
+            spool.publish_user_certs(certs)
         except Exception:  # a cert hiccup must never drop the icon
             log.exception("certificate check failed")
 
