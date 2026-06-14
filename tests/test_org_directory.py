@@ -68,6 +68,23 @@ def test_codes_are_matched_after_stripping(tmp_path: Path) -> None:
     assert d.dept_name("101", " 7 ") == "Бухгалтерия"
 
 
+def test_as_picker_structure_sorted_by_code(tmp_path: Path) -> None:
+    # Feeds the /deploy generator: orgs + their depts, JSON-ready, sorted by code.
+    path = tmp_path / "org_directory.json"
+    _write(path, _SAMPLE)
+    picker = od.OrgDirectory(path).as_picker()
+    assert [o["code"] for o in picker] == ["101", "202"]
+    o101 = picker[0]
+    assert o101["name"] == "ООО «Ромашка»"
+    assert [dep["code"] for dep in o101["departments"]] == ["12", "7"]  # lexicographic
+    assert o101["departments"][1] == {"code": "7", "name": "Бухгалтерия"}
+    assert picker[1]["departments"] == []  # 202 has no departments
+
+
+def test_as_picker_empty_when_no_directory() -> None:
+    assert od.OrgDirectory(None).as_picker() == []
+
+
 # --------------------------------------------------------------------------- #
 # Display policy (code+chip vs legacy free-text fallback)
 # --------------------------------------------------------------------------- #

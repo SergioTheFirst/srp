@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Развёртывание — SRP{% endblock %}
+{% block subtitle %}генератор команды установки{% endblock %}
+
+{% block extra_head %}
+<style>
+  .deploy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 6px 0 16px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label {
+    font: 600 12px/1 var(--mono); letter-spacing: .5px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  [data-theme="meta"] .field label,
+  [data-theme="vercel"] .field label { font-family: var(--font-body); }
+  .field input[type=text], .field select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: var(--r-btn); padding: 9px 11px; font: 14px/1.3 var(--font-body); width: 100%;
+  }
+  .field input[type=text]:focus, .field select:focus { outline: none; border-color: var(--accent); }
+  .opts { display: flex; gap: 20px; flex-wrap: wrap; margin: 4px 0 18px; font-size: 14px; color: var(--text); }
+  .opts label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  textarea#bat {
+    width: 100%; min-height: 110px; resize: vertical;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line-2);
+    border-radius: var(--r-card); padding: 14px 16px; font: 13px/1.6 var(--mono);
+    white-space: pre; overflow-x: auto;
+  }
+  textarea#bat:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    cursor: pointer; border: 1px solid var(--accent); background: var(--accent-dim); color: var(--accent);
+    font: 700 13px/1 var(--font-body); padding: 9px 16px; border-radius: var(--r-btn); letter-spacing: .2px;
+  }
+  .btn:hover { background: var(--accent); color: #fff; }
+  .copied { color: var(--good); font-size: 13px; margin-left: 10px; opacity: 0; transition: opacity .2s; }
+  .copied.show { opacity: 1; }
+  .org-warn { color: var(--warn); font-size: 13px; margin-left: 12px; }
+  .hint { color: var(--muted); font-size: 14px; margin: 4px 0 18px; max-width: 760px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="section-label">Развёртывание агента</div>
+<p class="hint">
+  Выберите организацию и отдел — получите готовую команду установки с правильными
+  кодами и адресом сервера. Пароль и токен остаются плейсхолдерами
+  <code>&lt;ПАРОЛЬ&gt;</code> / <code>&lt;ТОКЕН&gt;</code>: впишите их в BAT вручную
+  и положите файл в скрытую папку-шару под правами «только ИТ» (дашборд секреты не хранит).
+</p>
+
+<div class="deploy-grid">
+  <div class="field">
+    <label for="f-org">Организация</label>
+    <select id="f-org">
+      <option value="">— выберите организацию —</option>
+      {% for o in orgs %}
+      <option value="{{ o.code }}">{{ o.code }}{% if o.name %} — {{ o.name }}{% endif %}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-dept">Отдел (необязательно)</label>
+    <select id="f-dept"><option value="">— без отдела —</option></select>
+  </div>
+  <div class="field">
+    <label for="f-server">Адрес сервера</label>
+    <input type="text" id="f-server" value="{{ default_server }}" placeholder="http://192.168.1.10:8000">
+  </div>
+  <div class="field">
+    <label for="f-share">Папка-шара (UNC)</label>
+    <input type="text" id="f-share" value="\\SERVER\srp$" placeholder="\\SERVER\srp$">
+  </div>
+</div>
+
+<div class="opts">
+  <label><input type="checkbox" id="o-password" checked> добавить --password «&lt;ПАРОЛЬ&gt;»</label>
+  <label><input type="checkbox" id="o-token" checked> добавить --token «&lt;ТОКЕН&gt;»</label>
+  <label><input type="checkbox" id="o-notray"> без трея (--no-tray)</label>
+  <label><input type="checkbox" id="o-offline"> можно офлайн (--allow-offline)</label>
+</div>
+
+<div class="section-label">Команда (BAT)</div>
+<textarea id="bat" readonly spellcheck="false"></textarea>
+<div style="margin-top:10px;">
+  <button class="btn" id="copy-btn" type="button">Скопировать</button>
+  <span class="copied" id="copied">скопировано ✓</span>
+  <span class="org-warn" id="org-warn"></span>
+</div>
+
+<script id="deploy-data" type="application/json">{{ orgs|tojson }}</script>
+<script>
+(function () {
+  var ORGS = JSON.parse(document.getElementById("deploy-data").textContent || "[]");
+  var byCode = {};
+  ORGS.forEach(function (o) { byCode[o.code] = o; });
+
+  var el = function (id) { return document.getElementById(id); };
+  var elOrg = el("f-org"), elDept = el("f-dept"), elServer = el("f-server"), elShare = el("f-share");
+  var elBat = el("bat"), elPwd = el("o-password"), elTok = el("o-token");
+  var elNoTray = el("o-notray"), elOffline = el("o-offline"), elWarn = el("org-warn");
+
+  function fillDepts() {
+    // Rebuild via Option() (sets textContent) -> codes/names can never inject HTML.
+    elDept.length = 0;
+    elDept.add(new Option("— без отдела —", ""));
+    var org = byCode[elOrg.value];
+    if (org) org.departments.forEach(function (d) {
+      elDept.add(new Option(d.code + (d.name ? " — " + d.name : ""), d.code));
+    });
+  }
+
+  // Quote dynamic values so a code/URL/path with a space stays ONE cmd argument
+  // (a bad code then fails setup.exe validation cleanly, never mis-parsed); drop
+  // embedded quotes so a stray " can't break the BAT quoting.
+  function q(s) { return '"' + String(s).replace(/"/g, "") + '"'; }
+
+  function build() {
+    var server = (elServer.value || "").trim() || "http://СЕРВЕР:8000";
+    var share = (elShare.value || "").trim().replace(/[\\\/]+$/, "") || "\\\\SERVER\\srp$";
+    var parts = [q(share + "\\setup.exe"), "--server " + q(server), "--org " + q(elOrg.value || "<КОД-ОРГ>")];
+    if (elDept.value) parts.push("--dept " + q(elDept.value));
+    if (elNoTray.checked) parts.push("--no-tray");
+    if (elOffline.checked) parts.push("--allow-offline");
+    if (elPwd.checked) parts.push('--password "<ПАРОЛЬ>"');
+    if (elTok.checked) parts.push('--token "<ТОКЕН>"');
+    elBat.value = "@echo off\r\n" + parts.join(" ");
+    elWarn.textContent = elOrg.value ? "" : "выберите организацию";
+  }
+
+  elOrg.addEventListener("change", function () { fillDepts(); build(); });
+  [elDept, elServer, elShare, elPwd, elTok, elNoTray, elOffline].forEach(function (e) {
+    e.addEventListener("input", build);
+    e.addEventListener("change", build);
+  });
+
+  function flashCopied() {
+    var c = el("copied");
+    c.classList.add("show");
+    setTimeout(function () { c.classList.remove("show"); }, 1500);
+  }
+  function copyViaExec() {
+    try { elBat.focus(); elBat.select(); return document.execCommand("copy"); } catch (e) { return false; }
+  }
+  el("copy-btn").addEventListener("click", function () {
+    // Clipboard API first (secure context); fall back to execCommand on a LAN over
+    // http://. Flash "скопировано" only on real success, never on a silent failure.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(elBat.value).then(flashCopied, function () {
+        if (copyViaExec()) flashCopied();
+      });
+    } else if (copyViaExec()) {
+      flashCopied();
+    }
+  });
+
+  fillDepts();
+  build();
+})();
+</script>
+{% endblock %}
