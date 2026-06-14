@@ -36,6 +36,16 @@ srp.db-shm
 # Agent offline spool
 buffer.jsonl
 client/buffer.jsonl
+# Tray status snapshot + print counters (written by the running agent)
+status.json
+client/status.json
+print_state.json
+client/print_state.json
+# Agent / installer run logs (generated; scoped to known names, not all *.log)
+agent.log
+srp-agent.log
+tray.log
+install.log
 # Local helpers left behind by manual E2E runs
 .srv.pid
 client/config.json.bak

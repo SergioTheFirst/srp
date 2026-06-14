@@ -160,6 +160,24 @@ powershell -ExecutionPolicy Bypass -File client\deploy\uninstall-service.ps1
 Encrypt), проксируйте на `127.0.0.1:8000`, а в `server_url` укажите `https://…`.
 Агент (stdlib `urllib`) по умолчанию проверяет сертификат сервера.
 
+### Установка одной командой (массовый раскат)
+
+Для боевого раската на множество ПК — самодостаточные exe (PyInstaller, **только
+для сборки**, `requirements-build.txt`; `client/` остаётся чистым stdlib) и
+установщик одной командой:
+
+```bat
+build.bat                      REM собрать dist\share\ (agent + tray + setup)
+\\server\srp$\setup.exe --server http://192.168.1.10:8000 --org 101 --dept 7
+```
+
+`setup.exe` (манифест UAC-admin) копирует в `C:\SRP`, **закрывает ACL** (запись
+только SYSTEM/администраторам — настоящая защита `config.json`), мержит
+`config.json` (UTF-8 без BOM, `device_id` сохраняется), ставит SYSTEM-задачу из
+`task_template.xml` и трей-иконку, проверяет связь одним проходом. Коды возврата
+`0/2/3/4/5` для RMM/GPO, протокол в `C:\SRP\install.log`, удаление —
+`setup.exe --uninstall [--purge]`. Подробно: [docs/deploy-share-README.md](docs/deploy-share-README.md).
+
 ---
 
 ## Безопасность

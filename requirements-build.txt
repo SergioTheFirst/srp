@@ -1,0 +1,4 @@
+# BUILD-ONLY dependency -- used by build.bat / packaging/srp.spec to produce the
+# srp-agent / srp-tray / srp-setup executables. It is NOT a runtime dependency:
+# the agent and tray code in client/ stays pure stdlib (zero-deps invariant).
+pyinstaller>=6.3
