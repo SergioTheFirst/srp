@@ -246,3 +246,19 @@ def print_analytics(request: Request, days: int = 30):
     """Print analytics page — fleet-wide charts (Plotly.js)."""
     days = max(days, 0)
     return _TEMPLATES.TemplateResponse(request, "print.html", {"days": days})
+
+
+@router.get("/deploy", response_class=HTMLResponse)
+def deploy(request: Request):
+    """Deploy-command generator (tray spec §7).
+
+    Pick an org/dept from the directory and get a ready ``setup.exe`` command with
+    the right codes + server URL; the password/token stay ``<ПАРОЛЬ>``/``<ТОКЕН>``
+    placeholders (the open, auth-less dashboard never holds real secrets).
+    Read-only: reflects the directory + the request host, writes nothing.
+    """
+    orgs = org_directory.get_directory().as_picker()
+    default_server = str(request.base_url).rstrip("/")
+    return _TEMPLATES.TemplateResponse(
+        request, "deploy.html", {"orgs": orgs, "default_server": default_server}
+    )

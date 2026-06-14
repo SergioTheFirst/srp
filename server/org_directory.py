@@ -113,6 +113,28 @@ class OrgDirectory:
             return None
         return org.departments.get(_coerce_code(dept_code))
 
+    def as_picker(self) -> list[dict[str, Any]]:
+        """JSON-ready org+dept list for the /deploy command generator (tray §7).
+
+        Codes only travel in telemetry; this exposes the code->name map so the
+        deploy page can offer a typo-proof picker. Sorted by code for a stable
+        render; never includes secrets (the directory has none).
+        """
+        self.reload_if_changed()
+        with self._lock:
+            items = sorted(self._orgs.items())
+            return [
+                {
+                    "code": code,
+                    "name": org.name or "",
+                    "departments": [
+                        {"code": dcode, "name": dname}
+                        for dcode, dname in sorted(org.departments.items())
+                    ],
+                }
+                for code, org in items
+            ]
+
     def org_display(self, code: Optional[str]) -> Label:
         coerced = _coerce_code(code)
         if not coerced:
