@@ -15,16 +15,19 @@ dependency (requirements-build.txt); client/ stays pure stdlib at runtime.
 
 import os
 
-ROOT = os.path.abspath(os.getcwd())
+# Paths in a spec resolve relative to the spec's own dir (packaging/), but the
+# entry scripts and assets live at the repo root -- anchor everything on ROOT so
+# the build works regardless of the invoking CWD. SPECPATH is PyInstaller-injected.
+ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))  # noqa: F821
 ASSETS = os.path.join("client", "tray", "assets")
 _icons = [
-    (os.path.join(ASSETS, name), ASSETS)
+    (os.path.join(ROOT, ASSETS, name), ASSETS)
     for name in ("srp_ok.ico", "srp_warn.ico", "srp_alert.ico")
 ]
 
 # --- agent: onedir, console ------------------------------------------------ #
 agent_a = Analysis(  # noqa: F821
-    ["srp_agent_main.py"],
+    [os.path.join(ROOT, "srp_agent_main.py")],
     pathex=[ROOT],
     hiddenimports=[
         "client",
@@ -48,7 +51,7 @@ agent_coll = COLLECT(agent_exe, agent_a.binaries, agent_a.datas, name="agent")  
 
 # --- tray: onedir, windowed ------------------------------------------------ #
 tray_a = Analysis(  # noqa: F821
-    ["srp_tray_main.py"], pathex=[ROOT], datas=_icons, hiddenimports=["client"]
+    [os.path.join(ROOT, "srp_tray_main.py")], pathex=[ROOT], datas=_icons, hiddenimports=["client"]
 )
 tray_pyz = PYZ(tray_a.pure)  # noqa: F821
 tray_exe = EXE(  # noqa: F821
@@ -62,7 +65,9 @@ tray_exe = EXE(  # noqa: F821
 tray_coll = COLLECT(tray_exe, tray_a.binaries, tray_a.datas, name="tray")  # noqa: F821
 
 # --- setup: onefile, console, UAC-admin ------------------------------------ #
-setup_a = Analysis(["srp_setup_main.py"], pathex=[ROOT], hiddenimports=["client"])  # noqa: F821
+setup_a = Analysis(  # noqa: F821
+    [os.path.join(ROOT, "srp_setup_main.py")], pathex=[ROOT], hiddenimports=["client"]
+)
 setup_pyz = PYZ(setup_a.pure)  # noqa: F821
 setup_exe = EXE(  # noqa: F821
     setup_pyz,
