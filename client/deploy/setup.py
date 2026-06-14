@@ -38,6 +38,7 @@ EXIT_COPY_ACL = 4
 EXIT_TASK_AUTOSTART = 5
 
 DEST = r"C:\SRP"
+SPOOL_DIR = "spool"  # user-writable subdir for the tray's personal-cert spool (stage 8)
 TASK_NAME = "SRP Agent"
 RUN_KEY = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "SRP-Tray"
@@ -207,6 +208,15 @@ def icacls_cmd(dest: str = DEST) -> list[str]:
     ]
 
 
+def icacls_spool_cmd(dest: str = DEST) -> list[str]:
+    # Stage 8: the per-user tray (non-admin) must write its personal-cert spool into
+    # C:\SRP\spool, which inherits Users:RX from the locked-down root. ADD (not /grant:r)
+    # an Authenticated-Users Modify ACE on this ONE subdir so the tray can write; the
+    # rest of C:\SRP stays read-only to users. The agent treats the spool as hostile
+    # input and strictly validates it (client/collectors/user_certs.py).
+    return ["icacls", str(Path(dest) / SPOOL_DIR), "/grant", "*S-1-5-11:(OI)(CI)M"]
+
+
 def schtasks_create_cmd(xml_path: Path, task_name: str = TASK_NAME) -> list[str]:
     return ["schtasks", "/create", "/tn", task_name, "/xml", str(xml_path), "/f"]
 
@@ -318,6 +328,14 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     if _run(icacls_cmd(dest)) != 0:
         _log(dest, "icacls failed")
         return EXIT_COPY_ACL
+
+    # Stage 8 spool dir: best-effort (supplementary feature must not fail the install).
+    try:
+        (destp / SPOOL_DIR).mkdir(parents=True, exist_ok=True)
+        if _run(icacls_spool_cmd(dest)) != 0:
+            _log(dest, "spool ACL grant failed (personal-cert spool disabled)")
+    except OSError as exc:
+        _log(dest, f"spool dir create failed: {exc}")
 
     # config.template.json sits at the share root (next to setup.exe), so a
     # technician can edit org policy without rebuilding; payload.parent = that root.

@@ -22,6 +22,7 @@ from client.collectors.sources import (
     field_status,
     health,
 )
+from client.collectors.user_certs import collect_user_certs
 
 _SCRIPT = r"""
 $start = (Get-Date).AddDays(-30)
@@ -164,6 +165,11 @@ def collect_historical() -> CollectorResult:
         raw["certificates"] = []
         err_status = cert_res.status if cert_res.status != "ok" else "empty"
         sh[CERTIFICATES] = health(err_status)
+
+    # Personal certs spooled by per-user trays (stage 8): the SYSTEM agent can't see
+    # CurrentUser\My, so the tray drops metadata into C:\SRP\spool. Untrusted, user-
+    # writable input -> strictly validated in user_certs; informational, not a trust domain.
+    raw["user_certificates"] = collect_user_certs()
 
     # Network metadata: separate script, separate error domain (certificates-style).
     net = collect_network()

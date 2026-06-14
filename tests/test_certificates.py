@@ -103,6 +103,37 @@ def test_historical_payload_certificates_default_empty():
     assert payload.certificates == []
 
 
+def test_historical_payload_user_certificates_roundtrip():
+    payload = HistoricalPayload(
+        user_certificates=[
+            {
+                "subject": "CN=Иван",
+                "thumbprint": "U1",
+                "not_after": "2027-06-01T00:00:00+00:00",
+                "owner": "jdoe",
+            }
+        ]
+    )
+    assert len(payload.user_certificates) == 1
+    assert payload.user_certificates[0].owner == "jdoe"
+    assert HistoricalPayload().user_certificates == []  # additive-optional default
+
+
+def test_historical_payload_user_certificates_cap_rejected():
+    from shared.schema import USER_CERTS_MAX
+
+    too_many = [
+        {"thumbprint": f"T{i}", "not_after": "2027-01-01T00:00:00+00:00"}
+        for i in range(USER_CERTS_MAX + 1)
+    ]
+    raised = False
+    try:
+        HistoricalPayload(user_certificates=too_many)
+    except Exception:
+        raised = True
+    assert raised, "user_certificates over USER_CERTS_MAX must be rejected at the boundary"
+
+
 # ---------------------------------------------------------------------------
 # 2. Collector: cert script succeeds
 # ---------------------------------------------------------------------------
@@ -292,3 +323,28 @@ def test_device_page_no_certs_shows_placeholder(client):
     resp = client.get(f"/device/{CERT_DEVICE}")
     assert resp.status_code == 200
     assert "Действующих личных сертификатов нет" in resp.text
+
+
+def _user_cert_payload() -> dict:
+    base = healthy("historical")
+    base["user_certificates"] = [
+        {
+            "subject": "CN=Иван Петров",
+            "issuer": "CN=УЦ",
+            "thumbprint": "USR1",
+            "not_after": _FUTURE_10,
+            "not_before": "2025-01-01T00:00:00+00:00",
+            "owner": "ivan",
+        }
+    ]
+    return base
+
+
+def test_device_page_shows_user_cert_with_owner(client):
+    """Stage 8: a tray-spooled personal cert shows on the device page WITH its owner."""
+    client.post("/api/v1/ingest", json=envelope(CERT_DEVICE, "historical", _user_cert_payload()))
+    resp = client.get(f"/device/{CERT_DEVICE}")
+    assert resp.status_code == 200
+    assert "Личные сертификаты пользователей" in resp.text
+    assert "ivan" in resp.text  # owner attribution -- the point of stage 8
+    assert "Иван Петров" in resp.text

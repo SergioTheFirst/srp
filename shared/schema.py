@@ -128,16 +128,21 @@ class BatteryInfo(_Base):
 
 
 class CertInfo(_Base):
-    subject: Optional[str] = None
-    issuer: Optional[str] = None
-    thumbprint: Optional[str] = None
-    not_after: Optional[str] = None
-    not_before: Optional[str] = None
+    # max_length backstops the agent-side clips for a direct (token-authed) poster;
+    # generous so a real machine-cert DN is never rejected -- only absurd bloat.
+    subject: Optional[str] = Field(default=None, max_length=1024)
+    issuer: Optional[str] = Field(default=None, max_length=1024)
+    thumbprint: Optional[str] = Field(default=None, max_length=128)
+    not_after: Optional[str] = Field(default=None, max_length=64)
+    not_before: Optional[str] = Field(default=None, max_length=64)
+    # Windows user; set for tray-spooled personal certs, None for machine certs.
+    owner: Optional[str] = Field(default=None, max_length=128)
 
 
 # Boundary caps on the Phase-1 network lists: one inflated payload is rejected
 # at validation instead of stored. Agent caps stay strictly <= these (a
 # compliant agent can never be rejected); read-side caps remain as depth.
+USER_CERTS_MAX = 64  # cap on tray-spooled personal certs per historical payload
 NET_ADAPTERS_MAX = 64
 NET_NEIGHBORS_MAX = 512
 NET_CONNECTIONS_MAX = 512
@@ -195,6 +200,7 @@ class HistoricalPayload(_Base):
     battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)
+    user_certificates: list[CertInfo] = Field(default_factory=list, max_length=USER_CERTS_MAX)
     network_adapters: list[NetAdapter] = Field(default_factory=list, max_length=NET_ADAPTERS_MAX)
     network_neighbors: list[NetNeighbor] = Field(default_factory=list, max_length=NET_NEIGHBORS_MAX)
     network_connections: list[NetConnection] = Field(

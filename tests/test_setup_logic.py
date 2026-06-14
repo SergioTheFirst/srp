@@ -237,6 +237,15 @@ def test_icacls_closes_user_write() -> None:
     assert "RX" in users and "F" not in users and "W" not in users and "M" not in users
 
 
+def test_icacls_spool_grants_authenticated_users_write_on_subdir_only() -> None:
+    cmd = su.icacls_spool_cmd(r"C:\SRP")
+    assert cmd[0] == "icacls"
+    assert cmd[1].endswith("spool") and cmd[1] != r"C:\SRP"  # the subdir, not the locked root
+    assert "/grant" in cmd and "/grant:r" not in cmd  # ADD an ACE, don't replace the root's
+    assert any("S-1-5-11" in a for a in cmd)  # Authenticated Users SID
+    assert any("(OI)(CI)M" in a for a in cmd)  # Modify, inheritable
+
+
 def test_robocopy_does_not_mirror_delete_config() -> None:
     cmd = su.robocopy_cmd(r"\\srv\srp$\payload", r"C:\SRP")
     assert cmd[0] == "robocopy"
