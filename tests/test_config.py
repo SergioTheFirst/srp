@@ -63,22 +63,27 @@ def test_validate_accepts_public_url() -> None:
 
 
 def test_device_id_differs_for_clones_with_same_machine_guid() -> None:
-    # Core fix: two machines cloned from one image share MachineGuid but have
-    # distinct hostnames -> distinct device_id (no more silent row collision).
+    # Two machines cloned from one image share MachineGuid but have distinct
+    # hostnames -> distinct device_id (no silent row collision).
     guid = "11111111-2222-3333-4444-555555555555"
     id_a = resolve_device_id(guid, "WS-ACME-01")
     id_b = resolve_device_id(guid, "WS-ACME-02")
     assert id_a != id_b
 
 
-def test_device_id_is_stable_for_same_machine() -> None:
+def test_device_id_differs_for_clones_with_same_guid_and_hostname() -> None:
+    # Worst case: mass-imaged clones share BOTH MachineGuid and the (not-yet-
+    # renamed) hostname. The per-install nonce must still keep ids unique --
+    # device_id is the server PRIMARY KEY, uniqueness is the hard requirement.
     guid = "11111111-2222-3333-4444-555555555555"
-    assert resolve_device_id(guid, "WS-ACME-01") == resolve_device_id(guid, "WS-ACME-01")
+    ids = {resolve_device_id(guid, "WS-DEFAULT") for _ in range(1000)}
+    assert len(ids) == 1000
 
 
-def test_device_id_is_case_insensitive_on_hostname() -> None:
-    guid = "11111111-2222-3333-4444-555555555555"
-    assert resolve_device_id(guid, "WS-ACME-01") == resolve_device_id(guid, "ws-acme-01")
+def test_device_id_without_guid_is_unique_per_install() -> None:
+    # Random fallback id must also never repeat across machines.
+    ids = {resolve_device_id(None, "WS-DEFAULT") for _ in range(1000)}
+    assert len(ids) == 1000
 
 
 def test_device_id_is_opaque_not_raw_guid() -> None:
@@ -98,8 +103,12 @@ def test_device_id_falls_back_to_uuid_without_machine_guid() -> None:
 def test_load_config_resolves_device_id_from_guid_and_host(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(config_mod, "_machine_guid", lambda: "AAAA-BBBB")
     monkeypatch.setattr(config_mod, "_hostname", lambda: "WS-ACME-09")
-    cfg = load_config(tmp_path / "config.json")
-    assert cfg.device_id == resolve_device_id("AAAA-BBBB", "WS-ACME-09")
+    path = tmp_path / "config.json"
+    cfg = load_config(path)
+    # Derived on first run (opaque, hashed) and then persisted, so a reload
+    # returns the SAME id -- stable across restarts despite the random nonce.
+    assert cfg.device_id.startswith("dev-")
+    assert load_config(path).device_id == cfg.device_id
 
 
 def test_load_config_keeps_persisted_device_id(tmp_path) -> None:

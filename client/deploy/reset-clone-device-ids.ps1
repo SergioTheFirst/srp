@@ -9,9 +9,10 @@
     share that GUID, and device_id is the server PRIMARY KEY, so clones overwrote
     each other -- the fleet showed fewer devices than were really connected.
 
-    The fixed agent derives device_id from MachineGuid + hostname, so a one-time
-    reset (clear device_id; the agent regenerates it on next start) splits the
-    collided clones into separate, stable rows.
+    The fixed agent derives device_id from MachineGuid + hostname + a random
+    per-install nonce, so a one-time reset (clear device_id; the agent
+    regenerates it on next start) splits the collided clones into separate rows
+    -- guaranteed unique even when the clones also share a hostname.
 
     This script is SURGICAL: it scans the range, groups hosts by MachineGuid, and
     only touches hosts whose GUID is shared by 2+ machines. Unique machines keep
