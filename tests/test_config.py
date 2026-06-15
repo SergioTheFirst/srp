@@ -13,7 +13,14 @@ import json
 
 import pytest
 from client import agent as agent_mod
-from client.config import ClientConfig, ConfigError, load_config, validate_runtime_config
+from client import config as config_mod
+from client.config import (
+    ClientConfig,
+    ConfigError,
+    load_config,
+    resolve_device_id,
+    validate_runtime_config,
+)
 
 
 def test_default_config_has_no_server_url() -> None:
@@ -53,6 +60,53 @@ def test_validate_accepts_lan_url() -> None:
 def test_validate_accepts_public_url() -> None:
     # A public IP is still a valid explicit choice -- only the silent default went away.
     validate_runtime_config(ClientConfig(server_url="http://212.42.56.189:8000"))  # no raise
+
+
+def test_device_id_differs_for_clones_with_same_machine_guid() -> None:
+    # Core fix: two machines cloned from one image share MachineGuid but have
+    # distinct hostnames -> distinct device_id (no more silent row collision).
+    guid = "11111111-2222-3333-4444-555555555555"
+    id_a = resolve_device_id(guid, "WS-ACME-01")
+    id_b = resolve_device_id(guid, "WS-ACME-02")
+    assert id_a != id_b
+
+
+def test_device_id_is_stable_for_same_machine() -> None:
+    guid = "11111111-2222-3333-4444-555555555555"
+    assert resolve_device_id(guid, "WS-ACME-01") == resolve_device_id(guid, "WS-ACME-01")
+
+
+def test_device_id_is_case_insensitive_on_hostname() -> None:
+    guid = "11111111-2222-3333-4444-555555555555"
+    assert resolve_device_id(guid, "WS-ACME-01") == resolve_device_id(guid, "ws-acme-01")
+
+
+def test_device_id_is_opaque_not_raw_guid() -> None:
+    # The registry GUID must not leak verbatim in the id sent to the server.
+    guid = "11111111-2222-3333-4444-555555555555"
+    did = resolve_device_id(guid, "WS-ACME-01")
+    assert guid not in did
+    assert did.startswith("dev-")
+
+
+def test_device_id_falls_back_to_uuid_without_machine_guid() -> None:
+    # Non-Windows / unreadable registry -> random per-install id, still unique.
+    did = resolve_device_id(None, "WS-ACME-01")
+    assert did.startswith("agent-")
+
+
+def test_load_config_resolves_device_id_from_guid_and_host(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod, "_machine_guid", lambda: "AAAA-BBBB")
+    monkeypatch.setattr(config_mod, "_hostname", lambda: "WS-ACME-09")
+    cfg = load_config(tmp_path / "config.json")
+    assert cfg.device_id == resolve_device_id("AAAA-BBBB", "WS-ACME-09")
+
+
+def test_load_config_keeps_persisted_device_id(tmp_path) -> None:
+    # Stable identity: an already-persisted id is never re-derived (no fleet churn).
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"device_id": "legacy-fixed-id"}), encoding="utf-8")
+    assert load_config(path).device_id == "legacy-fixed-id"
 
 
 def test_agent_exits_without_server_url(monkeypatch) -> None:
