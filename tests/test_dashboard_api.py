@@ -61,6 +61,41 @@ def test_fleet_row_no_certs_not_expiring(client):
     assert row["cert_min_days"] is None
 
 
+def test_fleet_row_uses_personal_user_certificate(client):
+    # A personal cert spooled by the tray (user_certificates) with NO machine cert
+    # must still surface its expiry in the fleet "Сертификат" column, matching the
+    # personal-cert block shown on the device card.
+    soon = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+    payload = {
+        **healthy("historical"),
+        "user_certificates": [
+            {"subject": "CN=user", "owner": "CORP\\\\user", "not_after": soon},
+        ],
+    }
+    client.post("/api/v1/ingest", json=_env("dE", "historical", payload))
+    row = _row(client, "dE")
+    assert row["cert_min_days"] is not None and row["cert_min_days"] <= 11
+    assert row["cert_expiring"] is True
+
+
+def test_fleet_row_cert_takes_soonest_of_machine_and_personal(client):
+    # When both machine and personal certs exist, the column shows the soonest
+    # expiry (early-warning: never hide the nearer risk behind the farther one).
+    machine_far = (datetime.now(timezone.utc) + timedelta(days=300)).isoformat()
+    personal_soon = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    payload = {
+        **healthy("historical"),
+        "certificates": [{"subject": "CN=machine", "not_after": machine_far}],
+        "user_certificates": [
+            {"subject": "CN=user", "owner": "CORP\\\\user", "not_after": personal_soon},
+        ],
+    }
+    client.post("/api/v1/ingest", json=_env("dF", "historical", payload))
+    row = _row(client, "dF")
+    assert row["cert_min_days"] is not None and row["cert_min_days"] <= 6
+    assert row["cert_expiring"] is True
+
+
 def test_ack_endpoint_persists_and_appears(client):
     client.post("/api/v1/ingest", json=_env("dD", "inventory", healthy("inventory")))
     resp = client.post("/api/v1/devices/dD/ack", json={"note": "investigating"})
