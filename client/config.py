@@ -119,6 +119,36 @@ def _machine_guid() -> Optional[str]:
         return None
 
 
+def _hostname() -> str:
+    """Machine name -- the discriminator that splits disk-image clones apart."""
+    import platform
+
+    return platform.node().strip()
+
+
+# Namespace tag: domain-separates SRP ids and versions the derivation scheme, so
+# a future change to the recipe can be told apart from this one.
+_DEVICE_ID_NS = "srp-device-v1"
+
+
+def resolve_device_id(machine_guid: Optional[str], hostname: str) -> str:
+    """Derive a stable, clone-safe device id.
+
+    ``MachineGuid`` alone is NOT unique: machines cloned from one disk image
+    (Sysprep skipped) share it, so they used to collapse onto a single row on
+    the server (``device_id`` is the PRIMARY KEY). We fold in the hostname so
+    clones with distinct names get distinct ids, and hash the pair so the raw
+    registry GUID never leaves the agent. Same machine -> same id (stable
+    identity across restarts); no ``MachineGuid`` (non-Windows / unreadable
+    registry) -> a random per-install id.
+    """
+    if not machine_guid:
+        return f"agent-{uuid.uuid4().hex[:16]}"
+    material = f"{_DEVICE_ID_NS}|{machine_guid.strip().lower()}|{hostname.strip().lower()}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return f"dev-{digest[:24]}"
+
+
 def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
     cfg = ClientConfig()
     if path.exists():
@@ -129,7 +159,7 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
                 setattr(cfg, key, value)
 
     if not cfg.device_id:
-        cfg.device_id = _machine_guid() or f"agent-{uuid.uuid4().hex[:16]}"
+        cfg.device_id = resolve_device_id(_machine_guid(), _hostname())
         _persist(cfg, path)
     return cfg
 
