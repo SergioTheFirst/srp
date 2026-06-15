@@ -585,11 +585,17 @@ def _risk_alerts(risk: dict[str, Any]) -> tuple[Optional[str], int, int]:
 
 
 def _cert_summary(hist_payload: Optional[str]) -> tuple[Optional[int], bool]:
-    """(min days-to-expiry across active personal certs, is any expiring < 30d)."""
+    """(min days-to-expiry across active machine + personal certs, any expiring < 30d).
+
+    Folds both machine certs (``certificates``, seen by the SYSTEM agent) and the
+    tray-spooled personal certs (``user_certificates``) so the fleet column matches
+    the per-cert blocks on the device card; the soonest expiry wins.
+    """
     if not hist_payload:
         return None, False
     try:
-        certs = json.loads(hist_payload).get("certificates") or []
+        payload = json.loads(hist_payload)
+        certs = (payload.get("certificates") or []) + (payload.get("user_certificates") or [])
     except (ValueError, AttributeError):
         return None, False
     # Only active (not-yet-expired) certs; expired ones are excluded from the fleet column.
