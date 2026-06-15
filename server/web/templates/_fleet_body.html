@@ -67,7 +67,7 @@
         <th class="sortable" data-col="5"><span>Риск</span><span class="sort-icon"></span></th>
         <th title="ухудшающиеся траектории">Тренд</th>
         <th>Сертификат</th>
-        <th title="страниц за 30 дней">Печать</th>
+        <th title="страниц за сегодня">Печать</th>
         <th>Связь</th>
         <th></th>
       </tr>
@@ -139,7 +139,7 @@
         {% endif %}
       </td>
 
-      {# ── Print pages (30d) — populated async by JS ────────────────────── #}
+      {# ── Print pages (today) — populated async by JS ──────────────────── #}
       <td class="pprint" data-dev="{{ d.device_id }}">
         <span class="chip na">…</span>
       </td>

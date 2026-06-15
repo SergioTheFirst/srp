@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import envelope
@@ -125,6 +127,35 @@ def test_fleet_print_aggregates_across_devices(client: TestClient) -> None:
     body = r.json()
     assert body["total_pages"] == 17
     assert body["total_jobs"] == 2
+
+
+def test_fleet_print_today_empty(client: TestClient) -> None:
+    body = client.get("/api/v1/fleet/print?today=1").json()
+    assert body["today"] is True
+    assert body["period_days"] == 0
+    assert body["total_pages"] == 0
+    assert body["total_jobs"] == 0
+
+
+def test_fleet_print_today_counts_only_current_day(client: TestClient) -> None:
+    # One job stamped "now" (today) and one stamped two days ago: the today view
+    # counts only the first; the 30-day window still counts both.
+    today_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    jobs = [
+        {**_job(pages=4), "job_id": 301, "ts": today_ts},
+        {**_job(pages=9), "job_id": 302, "ts": old_ts},
+    ]
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-today", jobs))
+
+    today = client.get("/api/v1/fleet/print?today=1").json()
+    assert today["today"] is True
+    assert today["total_pages"] == 4
+    assert today["total_jobs"] == 1
+
+    window = client.get("/api/v1/fleet/print?days=30").json()
+    assert window["total_pages"] == 13
+    assert window["total_jobs"] == 2
 
 
 # ---------------------------------------------------------------------------
