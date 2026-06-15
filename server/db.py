@@ -1314,15 +1314,38 @@ def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
     }
 
 
-def get_fleet_print(days: int = 30) -> dict[str, Any]:
-    """Fleet-level print totals over the last *days* days (0 = all time)."""
-    ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
-    pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+def _local_day_start_utc() -> str:
+    """Start of the current local calendar day, expressed as a UTC ISO string.
+
+    Print-job ``ts`` values are UTC ISO8601 (the agent stamps them with
+    ``ToUniversalTime``). Comparing them lexically against this cutoff yields
+    "printed today" in the server's local timezone (the office timezone),
+    without depending on SQLite parsing the stored 'Z' suffix.
+    """
+    local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
+    """Fleet-level print totals.
+
+    ``today=True`` counts only the current local calendar day; otherwise the
+    last *days* days (0 = all time).
+    """
+    params: tuple[Any, ...] = ()
+    if today:
+        params = (_local_day_start_utc(),)
+        ts_f, pts_f = "AND ts >= ?", "AND p.ts >= ?"
+    elif days > 0:
+        ts_f = f"AND ts >= datetime('now', '-{days} days')"
+        pts_f = f"AND p.ts >= datetime('now', '-{days} days')"
+    else:
+        ts_f = pts_f = ""
     with _connect() as conn:
         total_row = conn.execute(
             f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE 1=1 {ts_f}",
-            (),
+            params,
         ).fetchone()
         device_rows = conn.execute(
             f"SELECT p.device_id, COALESCE(d.hostname, p.device_id) AS hostname,"  # nosec B608
@@ -1330,17 +1353,18 @@ def get_fleet_print(days: int = 30) -> dict[str, Any]:
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
             " GROUP BY p.device_id ORDER BY pages DESC",
-            (),
+            params,
         ).fetchall()
         printer_rows = conn.execute(
             f"SELECT printer, COALESCE(SUM(pages),0) AS pages,"  # nosec B608
             f" COUNT(DISTINCT device_id) AS devices"
             f" FROM print_jobs WHERE 1=1 {ts_f}"
             " GROUP BY printer ORDER BY pages DESC",
-            (),
+            params,
         ).fetchall()
     return {
-        "period_days": days,
+        "period_days": 0 if today else days,
+        "today": today,
         "total_pages": int(total_row["pages"]),
         "total_jobs": int(total_row["jobs"]),
         "printer_count": len(printer_rows),

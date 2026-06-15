@@ -177,7 +177,9 @@ def fleet_print_export(days: int = 30) -> StreamingResponse:
 
 
 @router.get("/fleet/print")
-def fleet_print(days: int = 30) -> dict:
+def fleet_print(days: int = 30, today: bool = False) -> dict:
+    if today:
+        return db.get_fleet_print(today=True)
     return db.get_fleet_print(days=_clamp_days(days))
 
 

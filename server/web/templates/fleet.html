@@ -379,7 +379,7 @@ function makeSortable() {
 
 // ── Print column (one fetch → all rows) ──────────────────────────────────
 function refreshPrint() {
-  fetch("/api/v1/fleet/print?days=30")
+  fetch("/api/v1/fleet/print?today=1")
     .then(function (r) { return r.json(); })
     .then(function (p) {
       var map = {};
@@ -455,7 +455,7 @@ refreshPrint();
 
 {# ── Print overview ─────────────────────────────────────────────────────── #}
 <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:30px;margin-bottom:6px">
-  <span class="section-label" style="margin:0">Печать (30 дней)</span>
+  <span class="section-label" style="margin:0">Печать сегодня</span>
   <a href="/print" style="font:600 12px/1 var(--mono);color:var(--accent);text-decoration:none">→ полная аналитика</a>
 </div>
 <div class="cards" id="fleet-print-kpi" style="margin-bottom:14px">
@@ -498,7 +498,7 @@ refreshPrint();
 </style>
 <script>
 (function () {
-  fetch("/api/v1/fleet/print?days=30")
+  fetch("/api/v1/fleet/print?today=1")
     .then(function (r) { return r.json(); })
     .then(function (p) {
       document.getElementById("fpt-pages").textContent    = (p.total_pages    || 0).toLocaleString("ru");
