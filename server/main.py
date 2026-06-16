@@ -8,6 +8,9 @@ fleet can reach it). The DB is initialized once on startup from the same config.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -40,6 +43,40 @@ class _IngestBodySizeMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_log = logging.getLogger("srp.retention")
+
+
+def _run_retention_sweep(cfg: ServerConfig) -> None:
+    """Delete devices silent past the retention window (server-stamped last_seen).
+
+    Transient errors (e.g. a momentarily locked DB) are swallowed and logged: a
+    failed sweep must never crash startup or kill the periodic loop -- the next
+    run retries.
+    """
+    if cfg.device_retention_days <= 0:
+        return
+    try:
+        result = db.purge_devices_silent_for(cfg.device_retention_days)
+    except Exception:  # never let a transient sweep error crash the caller
+        _log.exception("retention sweep failed")
+        return
+    if result["count"]:
+        _log.info(
+            "retention sweep deleted %d silent device(s) (>%d days): %s",
+            result["count"],
+            cfg.device_retention_days,
+            ", ".join(result["device_ids"]),
+        )
+
+
+async def _retention_loop(cfg: ServerConfig) -> None:
+    """Re-run the retention sweep every purge_interval_hours until cancelled."""
+    interval_sec = cfg.purge_interval_hours * 3600
+    while True:
+        await asyncio.sleep(interval_sec)
+        _run_retention_sweep(cfg)  # self-guards transient errors (see above)
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -51,7 +88,19 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             retain_events=cfg.retain_events,
         )
         org_directory.init_directory(cfg.resolved_org_directory_path())
-        yield
+        _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
+        sweeper = (
+            asyncio.create_task(_retention_loop(cfg))
+            if cfg.device_retention_days > 0 and cfg.purge_interval_hours > 0
+            else None
+        )
+        try:
+            yield
+        finally:
+            if sweeper is not None:
+                sweeper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sweeper
 
     app = FastAPI(
         title="SRP — раннее предупреждение отказов",

@@ -156,6 +156,10 @@
                 title="{{ d.ack.note if d.ack else 'квитировать' }}">
           {{ '✓' if d.ack else '·' }}
         </button>
+        <button class="delbtn"
+                data-id="{{ d.device_id }}"
+                data-name="{{ d.hostname or d.device_id }}"
+                title="удалить запись и все её данные из базы">✕</button>
       </td>
     </tr>
     {% endfor %}

@@ -22,6 +22,10 @@ class ServerConfig:
     db_path: str = "srp.db"  # relative -> resolved against project root
     retain_heartbeats: int = 500  # per device, keep last N (MVP cap)
     retain_events: int = 1000  # per device
+    # Device-ghost hygiene (2026-06-16): auto-delete a device after this many days
+    # of silence (judged on the server-stamped last_seen). 0 disables auto-purge.
+    device_retention_days: int = 30
+    purge_interval_hours: int = 24  # cadence of the background retention sweep
     # B105: not a secret literal -- empty = ingest auth OFF; real token set via config.json/env.
     ingest_token: str = ""  # nosec B105
     # Org/department directory (tray spec §7); relative -> resolved against root.

@@ -118,6 +118,22 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .ackbtn:hover { border-color: var(--accent); color: var(--accent); }
 .ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
 
+/* ── Delete + purge controls (ghost cleanup) ───────────────────────────── */
+.delbtn {
+  font: 600 12px/1 inherit; padding: 5px 9px; margin-left: 4px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.delbtn:hover { border-color: var(--bad); color: var(--bad); background: var(--bad-dim); }
+.toolbtn {
+  font: 600 13px/1 inherit; padding: 8px 13px; white-space: nowrap;
+  border-radius: 4px; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.toolbtn:hover { border-color: var(--bad); color: var(--bad); }
+
 /* ── Compact table rows ─────────────────────────────────────────────────── */
 table th { padding: 5px 8px; }
 table td { padding: 4px 8px; }
@@ -293,6 +309,8 @@ tbody td .trend-none { font-size: 15px; }
     <span class="dot" id="livedot"></span>
     <span id="liveinfo" class="muted small">обновлено только что</span>
   </div>
+  <button id="purgebtn" class="toolbtn" type="button"
+          title="удалить из базы машины, давно не выходившие на связь">Очистить офлайн…</button>
 </div>
 
 <div id="fleet">{% include "_fleet_body.html" %}</div>
@@ -423,6 +441,16 @@ fleet.addEventListener("click", function (e) {
     applyFilter();
     return;
   }
+  var del = e.target.closest(".delbtn");
+  if (del) {
+    e.preventDefault();
+    var did   = del.getAttribute("data-id");
+    var dname = del.getAttribute("data-name") || did;
+    if (!window.confirm("Удалить «" + dname + "» и все его данные из базы?\nЭто действие необратимо.")) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/delete", { method: "POST" })
+      .then(refresh).catch(function () {});
+    return;
+  }
   var ack = e.target.closest(".ackbtn");
   if (ack) {
     e.preventDefault();
@@ -435,6 +463,32 @@ fleet.addEventListener("click", function (e) {
       body: JSON.stringify({ note: note })
     }).then(refresh).catch(function () {});
   }
+});
+
+// ── Bulk purge of long-silent ghosts (toolbar; outside the polled #fleet) ──
+var purgeBtn = document.getElementById("purgebtn");
+if (purgeBtn) purgeBtn.addEventListener("click", function () {
+  var ans = window.prompt(
+    "Удалить машины, не выходившие на связь дольше N дней.\nВведите N (минимум 1):", "30");
+  if (ans === null) return;
+  var days = parseInt(ans, 10);
+  if (!(days >= 1)) { window.alert("Нужно целое число дней ≥ 1."); return; }
+  var body = function (dry) {
+    return { method: "POST", headers: { "Content-Type": "application/json" },
+             body: JSON.stringify({ days: days, dry_run: dry }) };
+  };
+  fetch("/api/v1/devices/purge", body(true))
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var n = p.count || 0;
+      if (n === 0) { window.alert("Нет машин, молчащих дольше " + days + " дн."); return; }
+      if (!window.confirm("Будет удалено машин: " + n + " (молчат дольше " + days + " дн.).\nУдалить безвозвратно?")) return;
+      fetch("/api/v1/devices/purge", body(false))
+        .then(function (r) { return r.json(); })
+        .then(function (res) { window.alert("Удалено машин: " + (res.count || 0) + "."); refresh(); })
+        .catch(function () {});
+    })
+    .catch(function () {});
 });
 
 q.addEventListener("input", applyFilter);

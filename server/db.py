@@ -522,6 +522,76 @@ def store_scores(device_id: str, ts: str, scores: dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Deletes / cleanup (device-ghost hygiene, 2026-06-16)
+# --------------------------------------------------------------------------- #
+# Every table that carries a device_id. delete_device MUST clear all of them, or
+# an orphan shard is left behind = a new kind of garbage. The introspection test
+# in tests/test_device_cleanup.py fails if a future per-device table is added but
+# not registered here.
+_DEVICE_TABLES: tuple[str, ...] = (
+    "inventory",
+    "historical",
+    "heartbeats",
+    "events",
+    "scores",
+    "source_last_good",
+    "trust",
+    "acknowledgements",
+    "device_source_trust",
+    "print_jobs",
+    "devices",
+)
+
+_SECONDS_PER_DAY = 86_400
+
+
+def _delete_device_rows(conn: sqlite3.Connection, device_id: str) -> None:
+    """Delete every row for *device_id* across all per-device tables."""
+    for table in _DEVICE_TABLES:
+        # B608: table names are fixed module literals, never user input.
+        conn.execute(f"DELETE FROM {table} WHERE device_id=?", (device_id,))  # nosec B608
+
+
+def delete_device(device_id: str) -> bool:
+    """Remove a device and ALL its data in one transaction.
+
+    Returns True if the device existed (so a route can answer 404 otherwise).
+    """
+    with _lock, _connect() as conn:
+        existed = (
+            conn.execute("SELECT 1 FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            is not None
+        )
+        _delete_device_rows(conn, device_id)
+    return existed
+
+
+def purge_devices_silent_for(days: int, *, dry_run: bool = False) -> dict[str, Any]:
+    """Delete devices whose server-stamped ``last_seen`` is older than *days*.
+
+    ``last_seen`` is the server receipt time (W0.2), so silence is judged on the
+    server clock, never the client's. ``dry_run=True`` returns the candidate ids
+    without deleting (preview for the dashboard / for logging). A device whose
+    ``last_seen`` is absent or unparseable is left untouched -- we never delete
+    what we cannot age-judge.
+    """
+    if days < 0:
+        raise ValueError("days must be >= 0")
+    cutoff_sec = days * _SECONDS_PER_DAY
+    with _lock, _connect() as conn:
+        rows = conn.execute("SELECT device_id, last_seen FROM devices").fetchall()
+        ids = [
+            r["device_id"]
+            for r in rows
+            if (age := _age_seconds(r["last_seen"])) is not None and age >= cutoff_sec
+        ]
+        if not dry_run:
+            for device_id in ids:
+                _delete_device_rows(conn, device_id)
+    return {"count": len(ids), "device_ids": ids, "deleted": not dry_run}
+
+
+# --------------------------------------------------------------------------- #
 # Reads
 # --------------------------------------------------------------------------- #
 def _load(conn: sqlite3.Connection, table: str, device_id: str) -> Optional[dict]:
