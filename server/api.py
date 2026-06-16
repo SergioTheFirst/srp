@@ -200,3 +200,27 @@ def patch_device_meta(device_id: str, body: MetaPatch) -> dict:
     if body.comment is not None:
         db.set_device_comment(device_id, body.comment)
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Device cleanup (ghost hygiene, 2026-06-16)
+# ---------------------------------------------------------------------------
+class PurgeBody(BaseModel):
+    # Delete devices silent for at least this many days (server-stamped last_seen).
+    # Minimum 1 so a stray days=0 can never wipe the whole fleet.
+    days: int = Field(default=30, ge=1, le=3650)
+    dry_run: bool = False
+
+
+@router.post("/devices/{device_id}/delete")
+def delete_device(device_id: str) -> dict:
+    """Remove a device and ALL its data. POST-only so a stray GET never deletes."""
+    if not db.delete_device(device_id):
+        raise HTTPException(status_code=404, detail="device not found")
+    return {"status": "ok", "deleted": True}
+
+
+@router.post("/devices/purge")
+def purge_devices(body: PurgeBody) -> dict:
+    """Bulk-clear ghosts: delete (or, with dry_run, preview) devices silent past *days*."""
+    return db.purge_devices_silent_for(body.days, dry_run=body.dry_run)
