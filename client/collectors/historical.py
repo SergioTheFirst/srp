@@ -9,6 +9,7 @@ or missing counter yields a neutral gap, not a crash.
 from __future__ import annotations
 
 from client.collectors.network import collect_network
+from client.collectors.printer_ports import collect_printer_ports
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import (
     BATTERY,
@@ -181,5 +182,10 @@ def collect_historical() -> CollectorResult:
         raw["network_connections"] = []
         raw["network_quality"] = []
     sh.update(net.source_health)
+
+    # Printer-port discovery hints: reads local spooler config (silent, not a scan).
+    # Informational only -> no source_health, never a trust domain (spec §12).
+    ports = collect_printer_ports()
+    raw["printer_ports"] = ports.payload["printer_ports"] if ports.payload else []
 
     return CollectorResult(raw, sh)

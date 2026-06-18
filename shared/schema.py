@@ -147,6 +147,7 @@ NET_ADAPTERS_MAX = 64
 NET_NEIGHBORS_MAX = 512
 NET_CONNECTIONS_MAX = 512
 NET_QUALITY_MAX = 16
+PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers phase 3)
 
 
 class NetAdapter(_Base):
@@ -188,6 +189,16 @@ class NetQuality(_Base):
     samples: Optional[int] = None
 
 
+class PrinterPortHint(_Base):
+    """A network-printer the agent prints to, learned from its own spooler config
+    (Get-Printer/Get-PrinterPort). A discovery seed, NOT trust/scoring telemetry.
+    ``ip`` is an RFC1918 literal (the agent drops hostnames/public IPs); ``name``
+    is an opaque label. ``max_length`` backstops a direct (token-authed) poster."""
+
+    name: Optional[str] = Field(default=None, max_length=256)
+    ip: Optional[str] = Field(default=None, max_length=64)
+
+
 class HistoricalPayload(_Base):
     reliability_stability_index: Optional[float] = None  # 0..10, latest sample
     kernel_power_41_30d: Optional[int] = None  # unexpected power loss / hang
@@ -207,6 +218,9 @@ class HistoricalPayload(_Base):
         default_factory=list, max_length=NET_CONNECTIONS_MAX
     )
     network_quality: list[NetQuality] = Field(default_factory=list, max_length=NET_QUALITY_MAX)
+    # Silent printer-discovery hints from the agent's spooler config (phase 3);
+    # informational, not a trust source. Additive/optional -> no CONTRACT_VERSION bump.
+    printer_ports: list[PrinterPortHint] = Field(default_factory=list, max_length=PRINTER_PORTS_MAX)
 
 
 # --------------------------------------------------------------------------- #
