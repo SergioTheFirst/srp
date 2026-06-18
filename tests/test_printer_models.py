@@ -5,9 +5,12 @@ from server.printers import models
 
 
 def test_supply_percent_from_level_and_max():
-    s = models.Supply.from_snmp(name="Black", type="toner", level=750, max=1000, unit=4)
+    s = models.Supply.from_snmp(
+        name="Black", type="toner", level=750, max=1000, unit=4, class_="consumed"
+    )
     assert s.percent == 75
     assert s.level == 750 and s.max == 1000
+    assert s.class_ == "consumed"
 
 
 def test_supply_sentinels_become_none():
@@ -41,3 +44,5 @@ def test_printer_reading_frozen_with_defaults():
 def test_printer_error_holds_code_and_description():
     e = models.PrinterError(code=1, description="нет бумаги")
     assert e.code == 1 and e.description == "нет бумаги"
+    e2 = models.PrinterError(code=None, description="замятие")  # код может отсутствовать
+    assert e2.code is None

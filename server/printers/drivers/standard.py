@@ -57,6 +57,15 @@ def _supply_type(raw: Optional[int]) -> str:
     return _SUPPLY_TYPE.get(raw, "other")
 
 
+# prtMarkerSuppliesClass: supplyThatIsConsumed(3) / receptacleThatIsFilled(4).
+# Различает «остаток тонера» (низкий = плохо) и «заполнение отработки» (высокий = плохо).
+_SUPPLY_CLASS = {3: "consumed", 4: "receptacle"}
+
+
+def _supply_class(raw: Optional[int]) -> Optional[str]:
+    return _SUPPLY_CLASS.get(raw) if raw is not None else None
+
+
 def _by_index(walked: Dict[str, object], base: str) -> Dict[str, object]:
     """{полный_OID: значение} → {суффикс-индекс: значение}."""
     prefix = base + "."
@@ -67,12 +76,16 @@ def _sorted_indices(*tables: Dict[str, object]) -> List[str]:
     keys = set()
     for table in tables:
         keys |= set(table.keys())
-    return sorted(keys, key=lambda s: tuple(int(p) for p in s.split(".")))
+    # Только числовые суффиксы-индексы: битый/пустой ключ от кривого агента не
+    # должен ронять read() через int() (review HIGH).
+    valid = [k for k in keys if k and all(p.isdigit() for p in k.split("."))]
+    return sorted(valid, key=lambda s: tuple(int(p) for p in s.split(".")))
 
 
 def _read_supplies(session: Session) -> Tuple[Supply, ...]:
     desc = _by_index(session.walk(TABLES["supply_desc"]), TABLES["supply_desc"])
     typ = _by_index(session.walk(TABLES["supply_type"]), TABLES["supply_type"])
+    cls = _by_index(session.walk(TABLES["supply_class"]), TABLES["supply_class"])
     lvl = _by_index(session.walk(TABLES["supply_level"]), TABLES["supply_level"])
     mx = _by_index(session.walk(TABLES["supply_max"]), TABLES["supply_max"])
     unit = _by_index(session.walk(TABLES["supply_unit"]), TABLES["supply_unit"])
@@ -80,6 +93,7 @@ def _read_supplies(session: Session) -> Tuple[Supply, ...]:
         Supply.from_snmp(
             name=_s(desc.get(idx)) or f"supply {idx}",
             type=_supply_type(_i(typ.get(idx))),
+            class_=_supply_class(_i(cls.get(idx))),
             level=_i(lvl.get(idx)),
             max=_i(mx.get(idx)),
             unit=_i(unit.get(idx)),
@@ -117,11 +131,13 @@ def _read_errors(session: Session) -> Tuple[PrinterError, ...]:
         num = _i(code.get(idx))
         if text is None and num is None:
             continue
-        out.append(PrinterError(code=num or 0, description=text or ""))
+        out.append(PrinterError(code=num, description=text or ""))  # code None = отсутствовал
     return tuple(out)
 
 
 def _read_status(session: Session) -> Optional[str]:
+    # Берём первый валидный hrPrinterStatus (низший hrDeviceIndex); для тандемных/
+    # многомоторных принтеров это статус первого мотора — упрощение для v1.
     for val in session.walk(TABLES["hr_printer_status"]).values():
         code = _i(val)
         if code is not None:

@@ -28,6 +28,7 @@ class Supply:
 
     name: str
     type: str
+    class_: Optional[str]  # consumed (тонер/чернила) vs receptacle (отработка) vs None
     level: Optional[int]
     max: Optional[int]
     percent: Optional[int]
@@ -42,10 +43,19 @@ class Supply:
         level: Optional[int],
         max: Optional[int],
         unit: Optional[int] = None,
+        class_: Optional[str] = None,
     ) -> "Supply":
         lvl = _clean(level)
         mx = _clean(max)
-        return cls(name=name, type=type, level=lvl, max=mx, percent=_percent(lvl, mx), unit=unit)
+        return cls(
+            name=name,
+            type=type,
+            class_=class_,
+            level=lvl,
+            max=mx,
+            percent=_percent(lvl, mx),
+            unit=unit,
+        )
 
 
 @dataclass(frozen=True)
@@ -75,7 +85,7 @@ class Tray:
 class PrinterError:
     """Активная ошибка/предупреждение принтера (из prtAlert / hrPrinterDetectedError)."""
 
-    code: int
+    code: Optional[int]  # None, если prtAlertCode отсутствовал
     description: str
 
 

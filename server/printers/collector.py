@@ -11,11 +11,11 @@ from server.printers import classify, snmp
 from server.printers.drivers import get_driver
 from server.printers.drivers.standard import Session
 from server.printers.models import PrinterReading
-from server.printers.oids import STANDARD
+from server.printers.oids import STANDARD, TABLES
 
 # Дешёвый классификационный набор: серийник (ветка Printer-MIB .43) + sysObjectID
-# + sys_descr + один инстанс hrDeviceType.
-_HR_DEVICE_TYPE_1 = "1.3.6.1.2.1.25.3.2.1.2.1"
+# + sys_descr + один инстанс hrDeviceType (из oids, не дублируем OID).
+_HR_DEVICE_TYPE_1 = TABLES["hr_device_type"] + ".1"
 _CLASSIFY_OIDS = [
     STANDARD["prt_serial"],
     STANDARD["sys_object_id"],

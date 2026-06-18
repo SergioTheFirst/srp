@@ -33,6 +33,7 @@ def _full_printer_session() -> FakeSession:
     tables = {
         O_TAB["supply_desc"]: {O_TAB["supply_desc"] + ".1.1": "Black Cartridge"},
         O_TAB["supply_type"]: {O_TAB["supply_type"] + ".1.1": 3},
+        O_TAB["supply_class"]: {O_TAB["supply_class"] + ".1.1": 3},  # consumed
         O_TAB["supply_level"]: {O_TAB["supply_level"] + ".1.1": 200},
         O_TAB["supply_max"]: {O_TAB["supply_max"] + ".1.1": 1000},
         O_TAB["supply_unit"]: {O_TAB["supply_unit"] + ".1.1": 4},
@@ -61,6 +62,7 @@ def test_standard_read_assembles_full_reading():
     assert len(r.supplies) == 1
     s = r.supplies[0]
     assert s.name == "Black Cartridge" and s.type == "toner" and s.percent == 20
+    assert s.class_ == "consumed"
     assert len(r.trays) == 1 and r.trays[0].media == "A4" and r.trays[0].level == 250
     assert len(r.errors) == 1
     assert r.errors[0].code == 1101 and "Toner" in r.errors[0].description
