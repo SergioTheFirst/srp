@@ -948,6 +948,34 @@ def get_network_snapshots() -> list[dict[str, Any]]:
     return out
 
 
+def get_printer_port_hints() -> list[dict[str, Any]]:
+    """Latest spooler printer-port hints across the fleet (read side for discovery).
+
+    Mirrors get_network_snapshots: one fleet query (latest-by-id), extract the
+    additive ``printer_ports`` list from each device's newest historical payload.
+    Returns a flat list of ``{name, ip}``; cross-device duplicates are expected
+    (many agents print to one printer) and are deduped later in discovery.merge.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT h.payload AS hist_payload
+            FROM devices d
+            JOIN historical h ON h.device_id = d.device_id
+              AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        # Read-side cap mirrors the contract max_length (shared.schema
+        # PRINTER_PORTS_MAX): one bloated payload must not slow discovery.
+        for p in (payload.get("printer_ports") or [])[:256]:
+            if isinstance(p, dict) and p.get("ip"):
+                out.append({"name": p.get("name"), "ip": p.get("ip")})
+    return out
+
+
 def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
     """Recent event rows (newest-first) for analytics that match on provider+id.
 
