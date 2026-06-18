@@ -1,5 +1,6 @@
 """Phase 1 — SNMP v1/v2c: сборка запроса, разбор ответа, транспорт, walk."""
 
+import os
 import socket
 import threading
 
@@ -102,7 +103,32 @@ def test_parse_response_garbage_returns_empty():
     assert snmp.parse_response(b"") == {}
 
 
-def _udp_echo_server(reply: bytes) -> socket.socket:
+def _request_id_of(pkt: bytes) -> int:
+    """Извлечь request-id из запроса — стаб эхает его, как реальный агент."""
+    _t, msg, _ = ber.decode_tlv(pkt, 0)
+    items = ber.decode_sequence(msg)
+    pdu_items = ber.decode_sequence(items[2][1])
+    return int.from_bytes(pdu_items[0][1], "big", signed=True)
+
+
+def _udp_echo_server(varbind: bytes) -> socket.socket:
+    """Однократно отвечает GetResponse с варбайндом, эхом request-id запроса."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+
+    def serve() -> None:
+        try:
+            data, addr = srv.recvfrom(65535)
+            srv.sendto(_build_response(varbind, request_id=_request_id_of(data)), addr)
+        except OSError:
+            pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    return srv
+
+
+def _udp_fixed_server(reply: bytes) -> socket.socket:
+    """Однократно отвечает фиксированным пакетом (игнорируя запрос)."""
     srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     srv.bind(("127.0.0.1", 0))
 
@@ -120,7 +146,7 @@ def _udp_echo_server(reply: bytes) -> socket.socket:
 def test_snmp_get_round_trip_over_udp():
     name = "1.3.6.1.2.1.1.5.0"
     vb = ber.encode_tlv(0x30, ber.encode_oid(name) + ber.encode_octet_string(b"PRN-9"))
-    srv = _udp_echo_server(_build_response(vb))
+    srv = _udp_echo_server(vb)
     try:
         port = srv.getsockname()[1]
         result = snmp.snmp_get("127.0.0.1", [name], port=port, timeout=2.0)
@@ -156,7 +182,7 @@ def _udp_walk_server(replies: list) -> socket.socket:
     def serve() -> None:
         while True:
             try:
-                _data, addr = srv.recvfrom(65535)
+                data, addr = srv.recvfrom(65535)
             except OSError:
                 return
             i = state["i"]
@@ -165,7 +191,7 @@ def _udp_walk_server(replies: list) -> socket.socket:
             state["i"] += 1
             oid_str, valtlv = replies[i]
             vb = ber.encode_tlv(0x30, ber.encode_oid(oid_str) + valtlv)
-            srv.sendto(_build_response(vb), addr)
+            srv.sendto(_build_response(vb, request_id=_request_id_of(data)), addr)
 
     threading.Thread(target=serve, daemon=True).start()
     return srv
@@ -197,3 +223,22 @@ def test_snmp_walk_stops_on_no_progress():
         assert result == {base + ".1.1": "X"}  # не зациклился
     finally:
         srv.close()
+
+
+def test_snmp_get_rejects_mismatched_request_id():
+    # Ответ с чужим request_id (подделка/устаревший) → отброшен → {} (HIGH-1).
+    name = "1.3.6.1.2.1.1.5.0"
+    vb = ber.encode_tlv(0x30, ber.encode_oid(name) + ber.encode_octet_string(b"FAKE"))
+    srv = _udp_fixed_server(_build_response(vb, request_id=999999))
+    try:
+        port = srv.getsockname()[1]
+        result = snmp.snmp_get("127.0.0.1", [name], port=port, timeout=0.5, retries=0)
+        assert result == {}
+    finally:
+        srv.close()
+
+
+def test_parse_response_fuzz_never_raises():
+    # Внешняя сетевая граница: любой случайный мусор → dict, без исключений/зависаний.
+    for n in range(0, 80):
+        assert isinstance(snmp.parse_response(os.urandom(n)), dict)

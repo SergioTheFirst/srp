@@ -5,8 +5,9 @@
 наружу и без зависаний (жёсткий таймаут на сокете).
 """
 
+import secrets
 import socket
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from server.printers import ber
 
@@ -72,19 +73,27 @@ def _find_first(items: List[Tuple[int, bytes]], wanted: Set[int]) -> bytes:
     return b""
 
 
-def parse_response(data: bytes) -> Dict[str, object]:
-    """Разобрать SNMP-сообщение в {oid: значение}. Мусор → {} (без исключений)."""
+def _parse_message(data: bytes) -> Tuple[Optional[int], Dict[str, object]]:
+    """Разобрать SNMP-сообщение → (request_id, {oid: значение}).
+
+    request_id = None, если PDU/поле не разобралось. Внешняя сетевая граница:
+    ЛЮБОЙ сбой на недоверенном вводе → (None, {}), наружу не бросает.
+    """
     result: Dict[str, object] = {}
     try:
         tag, msg_body, _ = ber.decode_tlv(data, 0)
         if tag != _SEQUENCE:
-            return result
+            return None, result
         pdu_body = _find_first(ber.decode_sequence(msg_body), {GET, GETNEXT, GETRESPONSE, GETBULK})
         if not pdu_body:
-            return result
-        varbinds_seq = _find_first(ber.decode_sequence(pdu_body), {_SEQUENCE})
+            return None, result
+        pdu_items = ber.decode_sequence(pdu_body)
+        request_id: Optional[int] = None
+        if pdu_items and pdu_items[0][0] == 0x02:
+            request_id = int.from_bytes(pdu_items[0][1], "big", signed=True)
+        varbinds_seq = _find_first(pdu_items, {_SEQUENCE})
         if not varbinds_seq:
-            return result
+            return request_id, result
         for vbtag, vbval in ber.decode_sequence(varbinds_seq):
             if vbtag != _SEQUENCE:
                 continue
@@ -92,29 +101,59 @@ def parse_response(data: bytes) -> Dict[str, object]:
             if len(fields) < 2 or fields[0][0] != 0x06:
                 continue
             oid = ber.decode_oid(fields[0][1])
+            if not oid:  # пустой/враждебно-длинный OID → отбрасываем варбайнд
+                continue
             result[oid] = _decode_value(fields[1][0], fields[1][1])
-    except (IndexError, ValueError):
+        return request_id, result
+    except Exception:  # noqa: BLE001
+        # Defense-in-depth: парсер недоверенной сети не должен ронять поллер ни на
+        # каком вводе (security review LOW-4). Любой сбой → пусто = UNKNOWN.
+        return None, {}
+
+
+def parse_response(data: bytes) -> Dict[str, object]:
+    """Разобрать SNMP-сообщение в {oid: значение}. Мусор → {} (без исключений)."""
+    return _parse_message(data)[1]
+
+
+def _transact(
+    host: str, port: int, pkt: bytes, timeout: float, retries: int, request_id: int
+) -> Dict[str, object]:
+    """Отправить пакет, вернуть разобранный ответ. Любой сбой → {}, не виснет.
+
+    Принимает ответ ТОЛЬКО от целевого IP и ТОЛЬКО с совпадающим request_id —
+    отбрасывает подделанные/устаревшие UDP-датаграммы (security review HIGH-1).
+    """
+    try:
+        target_ip = socket.gethostbyname(host)
+    except OSError:
         return {}
-    return result
-
-
-def _transact(host: str, port: int, pkt: bytes, timeout: float, retries: int) -> Dict[str, object]:
-    """Отправить один пакет, вернуть разобранный ответ. Любой сбой → {}, не виснет."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     try:
         for _ in range(retries + 1):
             try:
-                sock.sendto(pkt, (host, port))
-                data, _addr = sock.recvfrom(65535)
-                return parse_response(data)
+                sock.sendto(pkt, (target_ip, port))
+                data, addr = sock.recvfrom(65535)
             except OSError:
                 # timeout / ICMP port-unreachable (WinError 10054) / битый хост —
                 # любой транспортный сбой = «нет ответа» → UNKNOWN, не краш.
                 continue
+            if addr[0] != target_ip:
+                continue  # чужой источник — спуф/устаревшая датаграмма
+            rid, parsed = _parse_message(data)
+            if rid is not None and rid != request_id:
+                continue  # не наш request-id — устаревший/подделка
+            return parsed
         return {}
     finally:
         sock.close()
+
+
+def _new_request_id() -> int:
+    """Случайный 31-битный request-id: рассинхронизирует устаревшие/подделанные
+    ответы (security review HIGH-1). secrets, не random → без шума bandit B311."""
+    return secrets.randbelow(0x7FFFFFFF) + 1
 
 
 def snmp_get(
@@ -126,11 +165,11 @@ def snmp_get(
     port: int = 161,
     timeout: float = 1.0,
     retries: int = 1,
-    request_id: int = 1,
 ) -> Dict[str, object]:
     """GET к host:port. Нет ответа в срок → {} (не виснет). Только чтение."""
+    request_id = _new_request_id()
     pkt = build_request(GET, oids, community=community, version=version, request_id=request_id)
-    return _transact(host, port, pkt, timeout, retries)
+    return _transact(host, port, pkt, timeout, retries, request_id)
 
 
 def snmp_walk(
@@ -154,11 +193,16 @@ def snmp_walk(
     result: Dict[str, object] = {}
     current = base_oid
     prefix = base_oid + "."
-    for rid in range(1, max_rows + 1):
+    for _ in range(max_rows):
+        request_id = _new_request_id()
         pkt = build_request(
-            GETNEXT, [current], community=community, version=version, request_id=rid
+            GETNEXT,
+            [current],
+            community=community,
+            version=version,
+            request_id=request_id,
         )
-        parsed = _transact(host, port, pkt, timeout, retries)
+        parsed = _transact(host, port, pkt, timeout, retries, request_id)
         if not parsed:
             break
         next_current = None

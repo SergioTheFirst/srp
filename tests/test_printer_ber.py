@@ -1,5 +1,6 @@
 """Phase 1 — BER/ASN.1-кодек под SNMP v1/v2c: длина, TLV, примитивы, OID."""
 
+import pytest
 from server.printers import ber
 
 
@@ -50,3 +51,13 @@ def test_decode_sequence_splits_items():
     body = ber.encode_integer(1) + ber.encode_octet_string(b"x")
     items = ber.decode_sequence(body)
     assert items == [(0x02, b"\x01"), (0x04, b"x")]
+
+
+def test_decode_oid_rejects_oversized_and_empty_body():
+    assert ber.decode_oid(b"") == ""
+    assert ber.decode_oid(b"\xff" * 200) == ""  # враждебно-длинный → "" (не O(n^2))
+
+
+def test_decode_length_raises_on_truncated_long_form():
+    with pytest.raises(ValueError):
+        ber.decode_length(b"\x82\x01", 0)  # объявлено 2 байта длины, присутствует 1
