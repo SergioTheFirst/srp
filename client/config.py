@@ -45,11 +45,11 @@ class ConfigError(ValueError):
 class ClientConfig:
     server_url: str = ""  # required: operator sets this per deployment (no default)
     device_id: str = ""  # resolved on first run, then persisted
-    inventory_interval_sec: int = 86400  # identity changes slowly -> daily
-    historical_interval_sec: int = 86400  # 30-day rollups -> daily is plenty
-    heartbeat_interval_sec: int = 300  # live vitals -> every 5 min
-    events_interval_sec: int = 900  # event-log sweep -> every 15 min
-    print_interval_sec: int = 900  # print-job sweep -> every 15 min
+    inventory_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    historical_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    heartbeat_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    events_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    print_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
     http_timeout_sec: int = 15
     buffer_path: str = "buffer.jsonl"  # offline spool, relative to config dir
     # Site/org identity.  Empty string means "not assigned"; server COALESCE keeps
