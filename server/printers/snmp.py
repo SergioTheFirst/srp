@@ -220,3 +220,46 @@ def snmp_walk(
             break
         current = next_current
     return result
+
+
+class SnmpSession:
+    """Привязанная к хосту SNMP-сессия для драйверов (.get/.walk). Только чтение."""
+
+    def __init__(
+        self,
+        host: str,
+        *,
+        community: str = "public",
+        version: int = 1,
+        port: int = 161,
+        timeout: float = 1.0,
+        retries: int = 1,
+    ) -> None:
+        self.host = host
+        self.community = community
+        self.version = version
+        self.port = port
+        self.timeout = timeout
+        self.retries = retries
+
+    def get(self, oids: List[str]) -> Dict[str, object]:
+        return snmp_get(
+            self.host,
+            oids,
+            community=self.community,
+            version=self.version,
+            port=self.port,
+            timeout=self.timeout,
+            retries=self.retries,
+        )
+
+    def walk(self, base_oid: str) -> Dict[str, object]:
+        return snmp_walk(
+            self.host,
+            base_oid,
+            community=self.community,
+            version=self.version,
+            port=self.port,
+            timeout=self.timeout,
+            retries=self.retries,
+        )

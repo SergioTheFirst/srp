@@ -242,3 +242,30 @@ def test_parse_response_fuzz_never_raises():
     # Внешняя сетевая граница: любой случайный мусор → dict, без исключений/зависаний.
     for n in range(0, 80):
         assert isinstance(snmp.parse_response(os.urandom(n)), dict)
+
+
+def test_snmp_session_get_over_udp():
+    name = "1.3.6.1.2.1.1.5.0"
+    vb = ber.encode_tlv(0x30, ber.encode_oid(name) + ber.encode_octet_string(b"PRN"))
+    srv = _udp_echo_server(vb)
+    try:
+        port = srv.getsockname()[1]
+        sess = snmp.SnmpSession("127.0.0.1", port=port, timeout=2.0)
+        assert sess.get([name])[name] == "PRN"
+    finally:
+        srv.close()
+
+
+def test_snmp_session_walk_over_udp():
+    base = "1.3.6.1.2.1.43.11.1.1.6"
+    replies = [
+        (base + ".1.1", ber.encode_octet_string(b"Black")),
+        ("1.3.6.1.2.1.43.11.1.1.7.1.1", ber.encode_octet_string(b"u")),  # вне поддерева
+    ]
+    srv = _udp_walk_server(replies)
+    try:
+        port = srv.getsockname()[1]
+        sess = snmp.SnmpSession("127.0.0.1", port=port, timeout=2.0)
+        assert sess.walk(base) == {base + ".1.1": "Black"}
+    finally:
+        srv.close()
