@@ -32,7 +32,8 @@ STANDARD: Dict[str, str] = {
 # --- Таблицы (WALK): расходники, лотки, ошибки, крышки, консоль, интерфейсы --
 TABLES: Dict[str, str] = {
     # prtMarkerSupplies  (1.3.6.1.2.1.43.11.1.1) — тонеры/картриджи/барабаны
-    "supply_class": "1.3.6.1.2.1.43.11.1.1.4",  # supply(4) vs receptacle(3)
+    # prtMarkerSuppliesClass: supplyThatIsConsumed(3) / receptacleThatIsFilled(4)
+    "supply_class": "1.3.6.1.2.1.43.11.1.1.4",
     "supply_type": "1.3.6.1.2.1.43.11.1.1.5",  # toner/ink/drum/...
     "supply_desc": "1.3.6.1.2.1.43.11.1.1.6",
     "supply_unit": "1.3.6.1.2.1.43.11.1.1.7",
