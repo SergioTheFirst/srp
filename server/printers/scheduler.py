@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Sequence
 
 from server import db
-from server.printers import collector, discovery
+from server.printers import collector, discovery, scan
 from server.printers.config import PrinterConfig
 from server.printers.discovery import PrinterCandidate
 from server.printers.models import PrinterReading, printer_identity
@@ -135,10 +135,13 @@ def poll_now(
     probe: ProbeFn = collector.probe,
     store: StoreFn = db.store_printer_reading,
     now: Optional[str] = None,
+    scan_fn: Callable[[PrinterConfig], list[str]] = scan.scan,
 ) -> dict[str, int]:
-    """Build the candidate list from silent discovery, then run one poll cycle.
+    """Build the candidate list from discovery (+ active scan when enabled), then
+    run one poll cycle. Used by the lifespan loop and the dashboard force button.
 
-    Used by the lifespan loop and the dashboard force button. Never scans ranges.
+    Active range scanning runs ONLY when PrinterConfig.active_scan is True
+    (authorized 2026-06-19); otherwise this is silent discovery only.
     """
     # Serialize cycles: a second concurrent poll (button mashed, or the lifespan
     # loop firing while a manual poll runs) returns "busy" instead of launching
@@ -146,10 +149,12 @@ def poll_now(
     if not _poll_lock.acquire(blocking=False):
         return {"polled": 0, "online": 0, "unreachable": 0, "errors": 0, "busy": True}
     try:
+        scan_ips = tuple(scan_fn(printer_cfg)) if printer_cfg.active_scan else ()
         candidates = discovery.merge(
             agent_hints=get_hints(),
             arp_snapshots=get_snapshots(),
             static_ips=printer_cfg.static_ips,
+            scan_ips=scan_ips,
         )
         return run_poll_cycle(candidates, printer_cfg, probe=probe, store=store, now=now)
     finally:

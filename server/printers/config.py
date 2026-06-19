@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
-from server.printers.discovery import is_rfc1918
+from server.printers.discovery import is_rfc1918, is_rfc1918_cidr
 
 _MIN_INTERVAL_SEC = 60  # never hammer the network, whatever the config says
 _DEFAULT_INTERVAL_SEC = 900
@@ -25,6 +25,8 @@ class PrinterConfig:
     snmp_version: int = 1  # on-wire code: 0=v1, 1=v2c (default v2c)
     static_ips: tuple[str, ...] = ()
     active_scan: bool = False  # OFF until explicit True (security stop-gate)
+    scan_cidrs: tuple[str, ...] = ()  # RFC1918 ranges to scan; empty = auto local /24
+    scan_max_hosts: int = 4096  # hard cap on hosts enumerated per scan (anti-blast)
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -49,10 +51,14 @@ def load_printer_config(data: Optional[Mapping[str, Any]]) -> PrinterConfig:
     version = _as_int(d.get("snmp_version"), 1)
     version = version if version in (0, 1) else 1
     static = tuple(ip for ip in _as_str_list(d.get("static_ips")) if is_rfc1918(ip))
+    scan_cidrs = tuple(c for c in _as_str_list(d.get("scan_cidrs")) if is_rfc1918_cidr(c))
+    scan_max_hosts = max(0, _as_int(d.get("scan_max_hosts"), 4096))
     return PrinterConfig(
         poll_interval_sec=interval,
         snmp_community=community,
         snmp_version=version,
         static_ips=static,
         active_scan=d.get("active_scan") is True,
+        scan_cidrs=scan_cidrs,
+        scan_max_hosts=scan_max_hosts,
     )
