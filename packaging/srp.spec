@@ -2,7 +2,7 @@
 """PyInstaller spec for the SRP deploy share (tray spec §6).
 
 Three artifacts:
-  * srp-agent  -- onedir, console   (the collector; runs as SYSTEM via schtasks)
+  * srp-agent  -- onedir, windowed  (silent collector; runs as SYSTEM via schtasks)
   * srp-tray   -- onedir, windowed  (per-user status icon; same payload dir)
   * srp-setup  -- onefile, console, UAC-admin manifest (the installer)
 
@@ -25,7 +25,7 @@ _icons = [
     for name in ("srp_ok.ico", "srp_warn.ico", "srp_alert.ico")
 ]
 
-# --- agent: onedir, console ------------------------------------------------ #
+# --- agent: onedir, windowed (silent -- no console window flashes) --------- #
 agent_a = Analysis(  # noqa: F821
     [os.path.join(ROOT, "srp_agent_main.py")],
     pathex=[ROOT],
@@ -45,7 +45,7 @@ agent_exe = EXE(  # noqa: F821
     [],
     exclude_binaries=True,
     name="srp-agent",
-    console=True,
+    console=False,  # silent background collector -- no console window
 )
 agent_coll = COLLECT(agent_exe, agent_a.binaries, agent_a.datas, name="agent")  # noqa: F821
 

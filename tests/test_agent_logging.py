@@ -50,6 +50,21 @@ def test_setup_logging_console_only_by_default() -> None:
     assert _file_handlers() == []
 
 
+def test_setup_logging_skips_console_when_no_stderr(monkeypatch, tmp_path) -> None:
+    """A windowed (no-console) PyInstaller build has sys.stderr is None; a plain
+    StreamHandler there raises on every log line. With no stderr we add only the
+    rotating file handler -- never a broken console handler.
+    """
+    monkeypatch.setattr(agent_mod.sys, "stderr", None)
+    log = tmp_path / "headless.log"
+    agent_mod.setup_logging(verbose=False, log_file=str(log))
+    handlers = logging.getLogger().handlers
+    assert not any(type(h) is logging.StreamHandler for h in handlers)
+    assert len(_file_handlers()) == 1
+    logging.getLogger("srp.agent").info("headless-line")  # must not raise / be swallowed
+    assert "headless-line" in log.read_text(encoding="utf-8")
+
+
 def test_setup_logging_adds_rotating_file_handler(tmp_path) -> None:
     log = tmp_path / "srp-agent.log"
     agent_mod.setup_logging(verbose=True, log_file=str(log))

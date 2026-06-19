@@ -38,6 +38,28 @@ def test_fleet_row_has_alert_and_staleness_fields(client):
     assert row["last_seen_age_sec"] is not None
 
 
+def test_stale_threshold_tolerates_one_4h_cadence() -> None:
+    """A device between its 14400s (4h) beats must NOT read as stale; only one
+    silent past ~2 cycles does. Pins the dashboard threshold to the agent cadence
+    so it cannot silently revert to the old 15-minute value -- which at the 4h
+    cadence would mark the whole fleet offline. Mirrors the age>threshold test the
+    fleet list applies (db.get_devices / dashboard).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from server import db
+
+    now = datetime.now(timezone.utc)
+    one_cadence = db.age_seconds((now - timedelta(seconds=db._AGENT_CADENCE_SEC + 60)).isoformat())
+    long_dead = db.age_seconds(
+        (now - timedelta(seconds=db._AGENT_CADENCE_SEC * 2 + 3600)).isoformat()
+    )
+    assert one_cadence is not None and long_dead is not None
+    assert one_cadence > db._AGENT_CADENCE_SEC  # genuinely one full cadence old
+    assert not (one_cadence > db.STALE_AFTER_SEC)  # ...yet NOT flagged stale
+    assert long_dead > db.STALE_AFTER_SEC  # missed ~2 cycles -> stale
+
+
 def test_fleet_row_flags_expiring_cert(client):
     soon = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
     far = (datetime.now(timezone.utc) + timedelta(days=400)).isoformat()

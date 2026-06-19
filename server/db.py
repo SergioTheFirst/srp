@@ -616,7 +616,13 @@ def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dic
     return {"ts": row["ts"], **json.loads(row["payload"])}
 
 
-_STALE_AFTER_SEC = 900  # no contact for >15 min -> "stale" (agent silent / box off)
+# The agent reports on a 14400s (4h) full-cycle cadence, so a device only counts
+# as "stale" once it has missed ~2 cycles -- a normal gap between beats must not
+# read as offline. This is a dashboard-only signal (fleet "stale" flag + KPI); it
+# does NOT feed trust gating (the "stale" *trust* state is a separate per-source
+# verdict set by server/trust, unrelated to this wall-clock threshold).
+_AGENT_CADENCE_SEC = 14400
+_STALE_AFTER_SEC = _AGENT_CADENCE_SEC * 2 + 900  # ~8.25h silent -> "stale"
 STALE_AFTER_SEC = _STALE_AFTER_SEC  # public alias for dashboard
 _CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
 
