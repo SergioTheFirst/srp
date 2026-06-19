@@ -110,3 +110,32 @@ class PrinterReading:
     trays: Tuple[Tray, ...] = ()
     errors: Tuple[PrinterError, ...] = ()
     source_protocol: str = "snmp"
+
+
+def _norm_serial(serial: str) -> str:
+    slug = "".join(c if c.isalnum() else "-" for c in serial.strip())
+    return slug.strip("-")[:48]
+
+
+def _norm_mac(mac: str) -> str:
+    return "".join(c for c in mac if c.isalnum()).upper()[:32]
+
+
+def printer_identity(*, serial: Optional[str], mac: Optional[str], ip: Optional[str]) -> str:
+    """Стабильная идентичность принтера: серийник > MAC > IP.
+
+    Совпадает с приоритетом дедупликации discovery. Серийник переживает смену IP
+    (DHCP); MAC нормализуется (регистр/разделители), чтобы один сетевой адаптер
+    всегда давал один id. Ничего не совпало → 'prn-unknown'.
+    """
+    if serial and serial.strip():
+        norm = _norm_serial(serial)
+        if norm:
+            return "prn-sn-" + norm
+    if mac and mac.strip():
+        norm = _norm_mac(mac)
+        if norm:
+            return "prn-mac-" + norm
+    if ip and ip.strip():
+        return "prn-ip-" + ip.strip()
+    return "prn-unknown"

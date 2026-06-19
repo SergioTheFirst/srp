@@ -46,3 +46,39 @@ def test_printer_error_holds_code_and_description():
     assert e.code == 1 and e.description == "нет бумаги"
     e2 = models.PrinterError(code=None, description="замятие")  # код может отсутствовать
     assert e2.code is None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — стабильная идентичность принтера (serial > MAC > IP)
+# --------------------------------------------------------------------------- #
+
+
+def test_printer_identity_precedence_serial_over_mac_over_ip():
+    assert models.printer_identity(
+        serial="CNX123", mac="AA-BB-CC-DD-EE-01", ip="192.168.1.5"
+    ).startswith("prn-sn-")
+    assert models.printer_identity(
+        serial=None, mac="AA-BB-CC-DD-EE-01", ip="192.168.1.5"
+    ).startswith("prn-mac-")
+    assert models.printer_identity(serial=None, mac=None, ip="192.168.1.5") == "prn-ip-192.168.1.5"
+
+
+def test_printer_identity_serial_stable_across_ip_change():
+    # Один принтер сменил IP (DHCP) → серийник держит ту же идентичность.
+    a = models.printer_identity(serial="CNX123", mac=None, ip="192.168.1.5")
+    b = models.printer_identity(serial="CNX123", mac=None, ip="192.168.1.9")
+    assert a == b
+
+
+def test_printer_identity_mac_normalized_case_and_separators():
+    a = models.printer_identity(serial=None, mac="aa-bb-cc-dd-ee-01", ip="192.168.1.5")
+    b = models.printer_identity(serial=None, mac="AA:BB:CC:DD:EE:01", ip="192.168.1.9")
+    assert a == b == "prn-mac-AABBCCDDEE01"
+
+
+def test_printer_identity_blank_serial_falls_through_to_ip():
+    assert models.printer_identity(serial="   ", mac=None, ip="192.168.1.5") == "prn-ip-192.168.1.5"
+
+
+def test_printer_identity_none_everything_is_unknown():
+    assert models.printer_identity(serial=None, mac=None, ip=None) == "prn-unknown"

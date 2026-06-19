@@ -24,6 +24,7 @@ _retain_hb = 500
 _retain_ev = 1000
 _retain_hist = 2000  # historical readings kept per device (W0.1; downsample TBD)
 _retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample TBD)
+_retain_prn = 2000  # printer readings kept per printer (phase 4; downsample TBD)
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 _lock = threading.Lock()
 
@@ -140,6 +141,32 @@ CREATE TABLE IF NOT EXISTS print_jobs (
 CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup
   ON print_jobs(device_id, job_id) WHERE job_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS printers (
+  printer_id   TEXT PRIMARY KEY,
+  ip           TEXT,
+  hostname     TEXT,
+  mac          TEXT,
+  vendor       TEXT,
+  model        TEXT,
+  serial       TEXT,
+  status       TEXT,
+  total_pages  INTEGER,
+  first_seen   TEXT,
+  last_seen    TEXT
+);
+CREATE TABLE IF NOT EXISTS printer_readings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  printer_id   TEXT,
+  ip           TEXT,
+  received_at  TEXT,
+  status       TEXT,
+  total_pages  INTEGER,
+  color_pages  INTEGER,
+  mono_pages   INTEGER,
+  duplex_pages INTEGER,
+  detail       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_prn_readings ON printer_readings(printer_id, id);
 """
 
 
@@ -149,13 +176,15 @@ def init_db(
     retain_events: int = 1000,
     retain_historical: int = 2000,
     retain_scores: int = 5000,
+    retain_printer_readings: int = 2000,
 ) -> None:
-    global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores
+    global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores, _retain_prn
     _db_path = Path(db_path)
     _retain_hb = retain_heartbeats
     _retain_ev = retain_events
     _retain_hist = retain_historical
     _retain_scores = retain_scores
+    _retain_prn = retain_printer_readings
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         _migrate_legacy_latest_wins(conn)
@@ -518,6 +547,82 @@ def store_scores(device_id: str, ts: str, scores: dict[str, Any]) -> None:
             """DELETE FROM scores WHERE device_id=? AND id NOT IN (
                  SELECT id FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
             (device_id, device_id, _retain_scores),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Network printers (phase 4): latest inventory + append-only readings.
+# Keyed by a stable printer identity (serial > MAC > IP), NOT device_id, so these
+# tables are deliberately absent from _DEVICE_TABLES (printers are shared infra,
+# not owned by one PC). All SQL parameterized; ``detail`` is a JSON blob.
+# --------------------------------------------------------------------------- #
+def store_printer_reading(
+    printer_id: str,
+    reading: dict[str, Any],
+    received_at: Optional[str] = None,
+) -> None:
+    """Append one printer reading and refresh the latest-inventory row.
+
+    Identity fields (vendor/model/serial/mac/hostname) and the page counter are
+    COALESCEd so a transient unreachable poll never wipes a known value; ``status``
+    is latest-wins so a down printer reads "unreachable". ``first_seen`` is set on
+    insert and preserved; ``last_seen`` advances every poll.
+    """
+    recv = received_at or _now_iso()
+    detail = json.dumps(reading)
+    with _lock, _connect() as conn:
+        conn.execute(
+            """INSERT INTO printer_readings
+                 (printer_id, ip, received_at, status, total_pages,
+                  color_pages, mono_pages, duplex_pages, detail)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                printer_id,
+                reading.get("ip"),
+                recv,
+                reading.get("status"),
+                reading.get("total_pages"),
+                reading.get("color_pages"),
+                reading.get("mono_pages"),
+                reading.get("duplex_pages"),
+                detail,
+            ),
+        )
+        conn.execute(
+            """DELETE FROM printer_readings WHERE printer_id=? AND id NOT IN (
+                 SELECT id FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT ?)""",
+            (printer_id, printer_id, _retain_prn),
+        )
+        conn.execute(
+            """
+            INSERT INTO printers
+              (printer_id, ip, hostname, mac, vendor, model, serial, status,
+               total_pages, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(printer_id) DO UPDATE SET
+              ip          = COALESCE(excluded.ip, printers.ip),
+              hostname    = COALESCE(excluded.hostname, printers.hostname),
+              mac         = COALESCE(excluded.mac, printers.mac),
+              vendor      = COALESCE(excluded.vendor, printers.vendor),
+              model       = COALESCE(excluded.model, printers.model),
+              serial      = COALESCE(excluded.serial, printers.serial),
+              status      = excluded.status,
+              total_pages = COALESCE(excluded.total_pages, printers.total_pages),
+              last_seen   = excluded.last_seen
+            """,
+            (
+                printer_id,
+                reading.get("ip"),
+                reading.get("hostname"),
+                reading.get("mac"),
+                reading.get("vendor"),
+                reading.get("model"),
+                reading.get("serial"),
+                reading.get("status"),
+                reading.get("total_pages"),
+                recv,
+                recv,
+            ),
         )
 
 
@@ -980,6 +1085,127 @@ def get_printer_port_hints() -> list[dict[str, Any]]:
             if isinstance(p, dict) and p.get("ip"):
                 out.append({"name": p.get("name"), "ip": p.get("ip")})
     return out
+
+
+def _supply_low_pct(supplies: list[dict[str, Any]]) -> Optional[int]:
+    """Lowest consumed-supply percent (toner/ink running out); None if unknown."""
+    pcts = [
+        s["percent"]
+        for s in supplies
+        if isinstance(s, dict)
+        and s.get("class_") == "consumed"
+        and isinstance(s.get("percent"), int)
+    ]
+    return min(pcts) if pcts else None
+
+
+def get_printers() -> list[dict[str, Any]]:
+    """Latest inventory for every known printer + a small live summary.
+
+    One query (the printers row plus its newest reading detail, the same
+    latest-by-id shape as get_devices). ``online``/``error_count``/``low_supply_pct``
+    are derived from the newest reading's JSON detail.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.printer_id, p.ip, p.hostname, p.mac, p.vendor, p.model,
+                   p.serial, p.status, p.total_pages, p.first_seen, p.last_seen,
+                   r.detail AS detail
+            FROM printers p
+            LEFT JOIN printer_readings r ON r.printer_id = p.printer_id
+              AND r.id = (SELECT MAX(id) FROM printer_readings WHERE printer_id = p.printer_id)
+            ORDER BY COALESCE(p.hostname, p.ip, p.printer_id)
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        detail = json.loads(r["detail"]) if r["detail"] else {}
+        supplies = detail.get("supplies") or []
+        errors = detail.get("errors") or []
+        out.append(
+            {
+                "printer_id": r["printer_id"],
+                "ip": r["ip"],
+                "hostname": r["hostname"],
+                "mac": r["mac"],
+                "vendor": r["vendor"],
+                "model": r["model"],
+                "serial": r["serial"],
+                "status": r["status"],
+                "total_pages": r["total_pages"],
+                "first_seen": r["first_seen"],
+                "last_seen": r["last_seen"],
+                "online": bool(detail.get("online")),
+                "error_count": len(errors),
+                "low_supply_pct": _supply_low_pct(supplies),
+                "sources": detail.get("sources") or [],
+            }
+        )
+    return out
+
+
+def get_printer(printer_id: str) -> Optional[dict[str, Any]]:
+    """Full latest snapshot for one printer (inventory row + newest reading detail).
+
+    Scalar inventory (status/total_pages/vendor/...) comes from the COALESCEd
+    printers row (survives a transient unreachable poll); supplies/trays/errors
+    and ``online`` come from the newest reading's detail.
+    """
+    with _connect() as conn:
+        prow = conn.execute("SELECT * FROM printers WHERE printer_id=?", (printer_id,)).fetchone()
+        if prow is None:
+            return None
+        drow = conn.execute(
+            "SELECT detail FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT 1",
+            (printer_id,),
+        ).fetchone()
+    detail = json.loads(drow["detail"]) if drow and drow["detail"] else {}
+    return {
+        "printer_id": prow["printer_id"],
+        "ip": prow["ip"],
+        "hostname": prow["hostname"],
+        "mac": prow["mac"],
+        "vendor": prow["vendor"],
+        "model": prow["model"],
+        "serial": prow["serial"],
+        "status": prow["status"],
+        "total_pages": prow["total_pages"],
+        "first_seen": prow["first_seen"],
+        "last_seen": prow["last_seen"],
+        "online": bool(detail.get("online")),
+        "firmware": detail.get("firmware"),
+        "uptime": detail.get("uptime"),
+        "color_pages": detail.get("color_pages"),
+        "mono_pages": detail.get("mono_pages"),
+        "duplex_pages": detail.get("duplex_pages"),
+        "supplies": detail.get("supplies") or [],
+        "trays": detail.get("trays") or [],
+        "errors": detail.get("errors") or [],
+        "sources": detail.get("sources") or [],
+        "source_protocol": detail.get("source_protocol"),
+    }
+
+
+def get_printer_series(printer_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Scalar reading time series for one printer, newest-first (counter charts)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT received_at, status, total_pages, color_pages, mono_pages, duplex_pages
+               FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT ?""",
+            (printer_id, limit),
+        ).fetchall()
+    return [
+        {
+            "received_at": r["received_at"],
+            "status": r["status"],
+            "total_pages": r["total_pages"],
+            "color_pages": r["color_pages"],
+            "mono_pages": r["mono_pages"],
+            "duplex_pages": r["duplex_pages"],
+        }
+        for r in rows
+    ]
 
 
 def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:

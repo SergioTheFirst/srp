@@ -3,5 +3,13 @@
   "port": 8000,
   "db_path": "srp.db",
   "retain_heartbeats": 500,
-  "retain_events": 1000
+  "retain_events": 1000,
+  "printer_poll_enabled": true,
+  "printers": {
+    "poll_interval_sec": 900,
+    "snmp_community": "public",
+    "snmp_version": 1,
+    "static_ips": [],
+    "active_scan": false
+  }
 }
