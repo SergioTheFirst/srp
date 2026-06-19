@@ -41,6 +41,15 @@ def test_config_active_scan_only_true_when_explicit():
 
 
 @pytest.mark.unit
+def test_config_scan_cidrs_rfc1918_filtered():
+    cfg = load_printer_config(
+        {"scan_cidrs": ["192.168.0.0/16", "8.8.8.0/24", "garbage"], "scan_max_hosts": 50}
+    )
+    assert cfg.scan_cidrs == ("192.168.0.0/16",)  # public/garbage dropped
+    assert cfg.scan_max_hosts == 50
+
+
+@pytest.mark.unit
 def test_config_interval_and_version_clamped():
     cfg = load_printer_config({"poll_interval_sec": 1, "snmp_version": 9})
     assert cfg.poll_interval_sec >= 60  # never hammer
@@ -95,6 +104,21 @@ def test_same_mac_different_ip_collapses_to_one():
 @pytest.mark.unit
 def test_empty_sources_give_empty_list():
     assert discovery.merge(agent_hints=[], arp_snapshots=[], static_ips=[]) == []
+
+
+@pytest.mark.unit
+def test_merge_includes_scan_ips_as_source():
+    out = discovery.merge(
+        agent_hints=[], arp_snapshots=[], static_ips=(), scan_ips=("192.168.1.7",)
+    )
+    assert len(out) == 1 and out[0].ip == "192.168.1.7"
+    assert "scan" in out[0].sources
+
+
+@pytest.mark.unit
+def test_merge_scan_ip_rfc1918_filtered():
+    out = discovery.merge(agent_hints=[], arp_snapshots=[], static_ips=(), scan_ips=("8.8.8.8",))
+    assert out == []
 
 
 @pytest.mark.unit

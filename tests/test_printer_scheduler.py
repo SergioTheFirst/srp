@@ -92,6 +92,35 @@ def test_poll_cycle_empty_candidates_is_noop():
     assert res == {"polled": 0, "online": 0, "unreachable": 0, "errors": 0}
 
 
+def test_poll_now_runs_scan_when_active():
+    cfg = PrinterConfig(active_scan=True, scan_cidrs=("192.168.9.0/30",))
+    stored: list[tuple[str, dict]] = []
+    res = scheduler.poll_now(
+        cfg,
+        get_hints=lambda: [],
+        get_snapshots=lambda: [],
+        probe=lambda ip, **kw: PrinterReading(ip=ip, serial=ip, status="idle"),
+        store=lambda pid, r, received_at=None: stored.append((pid, r)),
+        scan_fn=lambda c: ["192.168.9.5"],
+    )
+    assert res["polled"] == 1
+    assert [r["ip"] for _, r in stored] == ["192.168.9.5"]
+
+
+def test_poll_now_skips_scan_when_inactive():
+    cfg = PrinterConfig(active_scan=False)
+    called: list[str] = []
+    scheduler.poll_now(
+        cfg,
+        get_hints=lambda: [],
+        get_snapshots=lambda: [],
+        probe=lambda *a, **k: None,
+        store=lambda *a, **k: None,
+        scan_fn=lambda c: called.append("scanned") or ["x"],
+    )
+    assert called == []  # scan_fn must NOT run when active_scan is False
+
+
 def test_poll_now_wires_discovery_to_cycle():
     cfg = PrinterConfig(static_ips=("192.168.1.50",))
     stored: list[tuple[str, dict]] = []

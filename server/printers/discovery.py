@@ -43,6 +43,25 @@ def is_rfc1918(ip: Any) -> bool:
     return any(addr in net for net in _RFC1918)
 
 
+def is_rfc1918_cidr(cidr: Any) -> bool:
+    """True only for an IPv4 network fully contained in an RFC1918 block.
+
+    Guards the active-scan range (phase 7): a public or oversized CIDR can never
+    enter the scan set, no matter what the config says.
+    """
+    if not cidr or not isinstance(cidr, str):
+        return False
+    try:
+        net = ipaddress.ip_network(cidr.strip(), strict=False)
+    except ValueError:
+        return False
+    if not isinstance(net, ipaddress.IPv4Network):
+        return False
+    return any(
+        isinstance(block, ipaddress.IPv4Network) and net.subnet_of(block) for block in _RFC1918
+    )
+
+
 def _norm_mac(mac: Any) -> Optional[str]:
     if not mac or not isinstance(mac, str):
         return None
@@ -65,8 +84,9 @@ def merge(
     agent_hints: list[dict[str, Any]],
     arp_snapshots: list[dict[str, Any]],
     static_ips: tuple[str, ...],
+    scan_ips: tuple[str, ...] = (),
 ) -> list[PrinterCandidate]:
-    """Union + dedup the three discovery sources into sorted candidates."""
+    """Union + dedup the discovery sources (spooler/ARP/static/scan) into candidates."""
     by_ip: dict[str, dict[str, Any]] = {}
 
     def add(ip: Any, mac: Any, name: Any, source: str) -> None:
@@ -90,6 +110,8 @@ def merge(
                 add(neighbor.get("ip"), neighbor.get("mac"), None, "arp")
     for ip in static_ips:
         add(ip, None, None, "config")
+    for ip in scan_ips:
+        add(ip, None, None, "scan")
 
     return _collapse_by_mac(by_ip)
 

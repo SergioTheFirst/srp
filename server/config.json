@@ -10,6 +10,8 @@
     "snmp_community": "public",
     "snmp_version": 1,
     "static_ips": [],
-    "active_scan": false
+    "active_scan": true,
+    "scan_cidrs": [],
+    "scan_max_hosts": 4096
   }
 }
