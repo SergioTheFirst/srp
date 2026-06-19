@@ -1208,6 +1208,129 @@ def get_printer_series(printer_id: str, limit: int = 200) -> list[dict[str, Any]
     ]
 
 
+def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
+    """Per spooler printer-NAME software print totals + which PCs printed + last date.
+
+    Source = print_jobs (agent-reported spool data, phases 1-3 of print tracking).
+    Used to reconcile the software view ("who printed how much") against the
+    hardware SNMP counters. ``days`` MUST be a caller-clamped int (f-string).
+    """
+    ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    with _connect() as conn:
+        name_rows = conn.execute(
+            "SELECT printer AS name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            " COUNT(DISTINCT device_id) AS device_count, MAX(ts) AS last_ts"
+            f" FROM print_jobs WHERE printer IS NOT NULL {ts_filter}"
+            " GROUP BY printer ORDER BY pages DESC"
+        ).fetchall()
+        dev_rows = conn.execute(
+            "SELECT p.printer AS name, p.device_id AS device_id,"  # nosec B608
+            " COALESCE(d.hostname, p.device_id) AS hostname,"
+            " COALESCE(SUM(p.pages),0) AS pages, MAX(p.ts) AS last_ts"
+            " FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE p.printer IS NOT NULL {ts_filter}"
+            " GROUP BY p.printer, p.device_id ORDER BY pages DESC"
+        ).fetchall()
+    by_name: dict[str, dict[str, Any]] = {}
+    for r in name_rows:
+        by_name[r["name"]] = {
+            "name": r["name"],
+            "pages": r["pages"],
+            "jobs": r["jobs"],
+            "device_count": r["device_count"],
+            "last_ts": r["last_ts"],
+            "devices": [],
+        }
+    for r in dev_rows:
+        bucket = by_name.get(r["name"])
+        if bucket is not None:
+            bucket["devices"].append(
+                {
+                    "device_id": r["device_id"],
+                    "hostname": r["hostname"],
+                    "pages": r["pages"],
+                    "last_ts": r["last_ts"],
+                }
+            )
+    return list(by_name.values())
+
+
+def _ip_in_name(ip: str, raw: str) -> bool:
+    """True if *ip* appears in *raw* as a whole address, not as a digit prefix of a
+    longer one (192.168.1.5 must not match inside 192.168.1.50)."""
+    start, n = 0, len(ip)
+    while True:
+        idx = raw.find(ip, start)
+        if idx == -1:
+            return False
+        before = raw[idx - 1] if idx > 0 else ""
+        after = raw[idx + n] if idx + n < len(raw) else ""
+        # A boundary is anything that is NOT a digit or dot (empty = boundary too).
+        before_ok = not (before.isdigit() or before == ".")
+        after_ok = not (after.isdigit() or after == ".")
+        if before_ok and after_ok:
+            return True
+        start = idx + 1
+
+
+def _match_software(hw: dict[str, Any], software: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Best-effort link a hardware printer to a software print-name bucket.
+
+    The spooler name and the SNMP identity rarely match exactly, so we match on
+    IP-substring (the spooler port often embeds the IP) or a hostname/model name
+    overlap. Returns None when nothing matches (kept honest, not forced).
+    """
+    ip = (hw.get("ip") or "").strip()
+    host = (hw.get("hostname") or "").strip().lower()
+    model = (hw.get("model") or "").strip().lower()
+    for sw in software:
+        raw = sw.get("name") or ""
+        swname = raw.strip().lower()
+        if not swname:
+            continue
+        if ip and _ip_in_name(ip, raw):
+            return sw
+        if host and (swname == host or host in swname or swname in host):
+            return sw
+        if model and len(model) >= 4 and model in swname:
+            return sw
+    return None
+
+
+def get_printers_overview(days: int = 30) -> dict[str, Any]:
+    """Hardware printer inventory, each reconciled with its software print totals,
+    plus the software names that matched no discovered printer."""
+    hardware = get_printers()
+    software = get_printer_print_summary(days)
+    matched: set[str] = set()
+    for hw in hardware:
+        sw = _match_software(hw, software)
+        if sw is None:
+            hw["software"] = None
+            continue
+        matched.add(sw["name"])
+        hw["software"] = {
+            "pages": sw["pages"],
+            "jobs": sw["jobs"],
+            "device_count": sw["device_count"],
+            "last_ts": sw["last_ts"],
+            "devices": sw["devices"][:50],
+        }
+    unmatched = [sw for sw in software if sw["name"] not in matched]
+    return {"period_days": days, "printers": hardware, "unmatched_software": unmatched}
+
+
+def get_printer_detail(printer_id: str, days: int = 30) -> Optional[dict[str, Any]]:
+    """Full printer card: inventory + counter series + matched software source PCs."""
+    p = get_printer(printer_id)
+    if p is None:
+        return None
+    p["series"] = get_printer_series(printer_id, limit=500)
+    p["software"] = _match_software(p, get_printer_print_summary(days))
+    p["period_days"] = days
+    return p
+
+
 def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
     """Recent event rows (newest-first) for analytics that match on provider+id.
 

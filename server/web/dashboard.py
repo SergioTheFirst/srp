@@ -84,6 +84,32 @@ def fmt_age(sec: Optional[int]) -> str:
     return f"{sec // 86400}д"
 
 
+def printer_status_ru(status: Optional[str], online: Optional[bool]) -> tuple[str, str]:
+    """(chip-class, RU label) for a printer status. Stored value stays English;
+    this is display-only for the operator (Russian dashboard)."""
+    if not online or status == "unreachable":
+        return ("bad", "недоступен")
+    return {
+        "idle": ("good", "готов"),
+        "printing": ("accent", "печать"),
+        "warmup": ("warn", "разогрев"),
+        "stopped": ("bad", "остановлен"),
+        "other": ("na", "—"),
+        "unknown": ("na", "неизвестно"),
+    }.get(status or "", ("na", status or "—"))
+
+
+def supply_color(pct_left: Optional[int]) -> str:
+    """Chip color for a consumed-supply % remaining (toner/ink running out)."""
+    if pct_left is None:
+        return "na"
+    if pct_left < 10:
+        return "bad"
+    if pct_left < 25:
+        return "warn"
+    return "good"
+
+
 _TEMPLATES.env.globals.update(
     health_color=health_color,
     risk_color=risk_color,
@@ -91,7 +117,21 @@ _TEMPLATES.env.globals.update(
     pct=pct,
     days_until=days_until,
     fmt_age=fmt_age,
+    printer_status_ru=printer_status_ru,
+    supply_color=supply_color,
 )
+
+
+def _printer_kpis(printers: list) -> dict:
+    return {
+        "total": len(printers),
+        "online": sum(1 for p in printers if p.get("online")),
+        "pages": sum(p.get("total_pages") or 0 for p in printers),
+        "low_supply": sum(
+            1 for p in printers if p.get("low_supply_pct") is not None and p["low_supply_pct"] < 15
+        ),
+        "errors": sum(1 for p in printers if p.get("error_count")),
+    }
 
 
 def _device_flags(d: dict) -> list[str]:
@@ -191,6 +231,46 @@ def _fleet_context(devices: list) -> dict:
     return {"summary": _fleet_summary(enriched), "groups": _group_by_site(enriched)}
 
 
+def _printer_subnet(ip: Optional[str]) -> Optional[str]:
+    parts = (ip or "").split(".")
+    return ".".join(parts[:3]) + ".x" if len(parts) == 4 else None
+
+
+def _attach_printers_to_netmap(m: dict, printers: list) -> dict:
+    """Place discovered printers into their subnet cluster (by IP /24) so the map
+    shows them as nodes. A printer that duplicates an ARP 'other' node replaces it
+    (no double node); printers whose subnet has no cluster go to a loose list.
+    Pure over already-read inputs (mutates the fresh build_netmap result)."""
+    by_subnet: dict[str, list] = {}
+    for p in printers:
+        sub = _printer_subnet(p.get("ip"))
+        if not sub:
+            continue
+        by_subnet.setdefault(sub, []).append(
+            {
+                "ip": p.get("ip"),
+                "printer_id": p.get("printer_id"),
+                "label": p.get("model") or p.get("hostname") or p.get("ip"),
+                "vendor": p.get("vendor"),
+                "status": p.get("status"),
+                "online": p.get("online"),
+                "total_pages": p.get("total_pages"),
+            }
+        )
+    placed: set = set()
+    for c in m.get("clusters", []):
+        cps = by_subnet.get(c.get("subnet_hint"), [])
+        if cps:
+            ips = {n["ip"] for n in cps}
+            c["others"] = [o for o in c.get("others", []) if o.get("ip") not in ips]
+            placed.update(ips)
+        c["printers"] = cps
+    m["printers_unclustered"] = [
+        n for lst in by_subnet.values() for n in lst if n["ip"] not in placed
+    ]
+    return m
+
+
 router = APIRouter()
 
 
@@ -235,10 +315,11 @@ def device(request: Request, device_id: str):
 
 @router.get("/netmap", response_class=HTMLResponse)
 def network_map(request: Request):
-    """Phase-2 network map page (server-rendered, D1: no graph JS library)."""
-    return _TEMPLATES.TemplateResponse(
-        request, "netmap.html", {"m": build_netmap(db.get_network_snapshots())}
-    )
+    """Network map page (SSR + canvas). Discovered printers are placed into their
+    subnet cluster so they show on the map alongside agents and ARP devices."""
+    m = build_netmap(db.get_network_snapshots())
+    m = _attach_printers_to_netmap(m, db.get_printers())
+    return _TEMPLATES.TemplateResponse(request, "netmap.html", {"m": m})
 
 
 @router.get("/print", response_class=HTMLResponse)
@@ -246,6 +327,29 @@ def print_analytics(request: Request, days: int = 30):
     """Print analytics page — fleet-wide charts (Plotly.js)."""
     days = max(days, 0)
     return _TEMPLATES.TemplateResponse(request, "print.html", {"days": days})
+
+
+@router.get("/printers", response_class=HTMLResponse)
+def printers(request: Request, days: int = 30):
+    """Network-printer dashboard: hardware counters/supplies/errors + IP + dates +
+    reconcile with print_jobs (which PCs printed). SSR (autoescape) + a Plotly bar."""
+    days = min(max(days, 0), 365)
+    ov = db.get_printers_overview(days=days)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "printers.html",
+        {"days": days, "ov": ov, "kpis": _printer_kpis(ov["printers"])},
+    )
+
+
+@router.get("/printers/{printer_id}", response_class=HTMLResponse)
+def printer_card(request: Request, printer_id: str, days: int = 30):
+    """One printer: counter history + supplies/trays/errors + source PCs."""
+    days = min(max(days, 0), 365)
+    d = db.get_printer_detail(printer_id, days=days)
+    if d is None:
+        raise HTTPException(status_code=404, detail="printer not found")
+    return _TEMPLATES.TemplateResponse(request, "printer_detail.html", {"d": d, "days": days})
 
 
 @router.get("/deploy", response_class=HTMLResponse)
