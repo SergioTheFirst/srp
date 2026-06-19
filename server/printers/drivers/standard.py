@@ -47,8 +47,16 @@ def _s(value: object) -> Optional[str]:
     return value if isinstance(value, str) and value != "" else None
 
 
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
+
+
 def _i(value: object) -> Optional[int]:
-    return value if isinstance(value, int) else None
+    # Clamp to SQLite's signed-64-bit range: a hostile/buggy printer returning a
+    # Counter64 above 2**63-1 would else raise OverflowError on INSERT and silently
+    # drop the whole reading. Out-of-range -> None (UNKNOWN, never a fake number).
+    if isinstance(value, int) and _INT64_MIN <= value <= _INT64_MAX:
+        return value
+    return None
 
 
 def _supply_type(raw: Optional[int]) -> str:

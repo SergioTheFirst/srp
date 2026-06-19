@@ -21,6 +21,7 @@ from starlette.responses import Response
 from server import db, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
+from server.printers import scheduler
 from server.web.dashboard import router as web_router
 
 # Reject ingest bodies larger than this to prevent a single agent from
@@ -77,6 +78,38 @@ async def _retention_loop(cfg: ServerConfig) -> None:
         _run_retention_sweep(cfg)  # self-guards transient errors (see above)
 
 
+_plog = logging.getLogger("srp.printers")
+
+
+def _run_printer_poll(cfg: ServerConfig) -> None:
+    """Run one printer poll cycle (blocking SNMP fan-out; called via to_thread).
+
+    Self-guards: a transient network/DB error must never crash startup or kill the
+    periodic loop (the retention-sweep lesson).
+    """
+    try:
+        result = scheduler.poll_now(cfg.printer_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _plog.exception("printer poll cycle failed")
+        return
+    if result["polled"]:
+        _plog.info(
+            "printer poll: %d polled, %d online, %d unreachable, %d errors",
+            result["polled"],
+            result["online"],
+            result["unreachable"],
+            result["errors"],
+        )
+
+
+async def _printer_poll_loop(cfg: ServerConfig) -> None:
+    """Poll printers at startup, then every poll_interval_sec, until cancelled."""
+    interval_sec = max(60, cfg.printer_config().poll_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_printer_poll, cfg)
+        await asyncio.sleep(interval_sec)
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -86,21 +119,23 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             cfg.resolved_db_path(),
             retain_heartbeats=cfg.retain_heartbeats,
             retain_events=cfg.retain_events,
+            retain_printer_readings=cfg.retain_printer_readings,
         )
         org_directory.init_directory(cfg.resolved_org_directory_path())
         _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
-        sweeper = (
-            asyncio.create_task(_retention_loop(cfg))
-            if cfg.device_retention_days > 0 and cfg.purge_interval_hours > 0
-            else None
-        )
+        tasks: list[asyncio.Task[None]] = []
+        if cfg.device_retention_days > 0 and cfg.purge_interval_hours > 0:
+            tasks.append(asyncio.create_task(_retention_loop(cfg)))
+        if cfg.printer_poll_enabled:
+            tasks.append(asyncio.create_task(_printer_poll_loop(cfg)))
         try:
             yield
         finally:
-            if sweeper is not None:
-                sweeper.cancel()
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
-                    await sweeper
+                    await task
 
     app = FastAPI(
         title="SRP — раннее предупреждение отказов",

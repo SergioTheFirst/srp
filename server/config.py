@@ -6,6 +6,9 @@ import json
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any, Optional
+
+from server.printers.config import PrinterConfig, load_printer_config
 
 _CONFIG_PATH = Path(__file__).with_name("config.json")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +34,12 @@ class ServerConfig:
     # Org/department directory (tray spec §7); relative -> resolved against root.
     # Names are decoded render-time; nothing here is a secret.
     org_directory_path: str = "org_directory.json"
+    # Network-printer monitoring (phase 4). Polling is OFF by default (secure
+    # default, like ingest_token=""); the deployed config.json enables it. The
+    # ``printers`` block is parsed into a PrinterConfig via printer_config().
+    printer_poll_enabled: bool = False
+    printers: Optional[dict[str, Any]] = None
+    retain_printer_readings: int = 2000
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
@@ -39,6 +48,10 @@ class ServerConfig:
     def resolved_org_directory_path(self) -> Path:
         p = Path(self.org_directory_path)
         return p if p.is_absolute() else (_PROJECT_ROOT / p)
+
+    def printer_config(self) -> PrinterConfig:
+        """Parse the raw ``printers`` block into a validated PrinterConfig."""
+        return load_printer_config(self.printers)
 
 
 def load_config(path: Path = _CONFIG_PATH) -> ServerConfig:
