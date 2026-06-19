@@ -76,6 +76,9 @@ def test_standard_read_unreachable_is_empty_reading():
 
 
 def test_get_driver_falls_back_to_standard():
-    assert drivers.get_driver("1.3.6.1.4.1.11.2.3.9.1") is standard.read  # HP → пока standard
+    # Phase 5: a known vendor now resolves to its vendor driver; unknown/garbage
+    # still falls back to the generic standard reader.
+    assert drivers.get_driver("1.3.6.1.4.1.11.2.3.9.1") is not standard.read  # HP → vendor driver
+    assert drivers.get_driver("1.3.6.1.4.1.99999.1") is standard.read
     assert drivers.get_driver("garbage") is standard.read
     assert drivers.get_driver(None) is standard.read

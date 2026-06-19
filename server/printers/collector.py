@@ -1,13 +1,15 @@
-"""Оркестрация пробы одного IP → PrinterReading.
+"""Оркестрация пробы одного IP → PrinterReading (Phase 5 cascade).
 
-SNMP-проба → классификация (принтер?) → выбор драйвера по sysObjectID → read.
-Не принтер / недоступен → None (UNKNOWN, не выдумываем). IPP/HTTP-fallback
-подключаются в Phase 5. Источник пока всегда "snmp".
+Каскад источников: SNMP (generic Printer-MIB / vendor overlay) → IPP → HTTP.
+SNMP подтвердил принтер → читаем драйвером. Иначе пробуем IPP (порт 631), затем
+HTTP (порт 80) — оба RFC1918-only и с таймаутом. Первый опознавший источник
+побеждает; `source_protocol` проставляет каждый источник. Не принтер / нет
+ответа ни от одного источника → None (UNKNOWN, не выдумываем).
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
-from server.printers import classify, snmp
+from server.printers import classify, http_probe, ipp, snmp
 from server.printers.drivers import get_driver
 from server.printers.drivers.standard import Session
 from server.printers.models import PrinterReading
@@ -23,6 +25,8 @@ _CLASSIFY_OIDS = [
     _HR_DEVICE_TYPE_1,
 ]
 
+FallbackFn = Callable[..., Optional[PrinterReading]]
+
 
 def probe(
     ip: str,
@@ -33,8 +37,10 @@ def probe(
     timeout: float = 1.0,
     retries: int = 1,
     session: Optional[Session] = None,
+    ipp_fn: FallbackFn = ipp.probe,
+    http_fn: FallbackFn = http_probe.probe,
 ) -> Optional[PrinterReading]:
-    """Опросить IP. Принтер → PrinterReading; не принтер / нет ответа → None."""
+    """Опросить IP каскадом SNMP→IPP→HTTP. Принтер → PrinterReading; иначе None."""
     sess: Session = session or snmp.SnmpSession(
         ip,
         community=community,
@@ -44,9 +50,9 @@ def probe(
         retries=retries,
     )
     probe_result = sess.get(_CLASSIFY_OIDS)
-    if not classify.is_printer(probe_result):
-        return None
-    sys_object_id = probe_result.get(STANDARD["sys_object_id"])
-    sid = sys_object_id if isinstance(sys_object_id, str) else None
-    driver = get_driver(sid)
-    return driver(sess, ip=ip)
+    if classify.is_printer(probe_result):
+        sys_object_id = probe_result.get(STANDARD["sys_object_id"])
+        sid = sys_object_id if isinstance(sys_object_id, str) else None
+        return get_driver(sid)(sess, ip=ip)
+    # SNMP не подтвердил принтер → fallback IPP, затем HTTP (RFC1918+таймаут внутри).
+    return ipp_fn(ip, timeout=timeout) or http_fn(ip, timeout=timeout)

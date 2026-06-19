@@ -94,3 +94,22 @@ def vendor_for_sysobjectid(sysobjectid: str) -> Optional[str]:
         return None
     enterprise = sysobjectid[len(_ENTERPRISE_PREFIX) :].split(".", 1)[0]
     return _VENDOR_ENTERPRISE.get(enterprise)
+
+
+# --- Vendor-specific page-counter OIDs (Phase 5), SUPPLEMENTARY --------------
+# metric -> OID for color/mono/total page counts where the generic
+# prtMarkerLifeCount is silent or split. The standard total stays authoritative;
+# an absent OID -> None (UNKNOWN, never fabricated). Maps are intentionally empty
+# until verified against real hardware (project invariant: UNKNOWN over false
+# confidence) -- fill per model once confirmed. Keys match _VENDOR_ENTERPRISE
+# values; see drivers/vendor.py for how the overlay is applied.
+VENDOR: Dict[str, Dict[str, str]] = {
+    "hp": {},
+    "xerox": {},
+    "kyocera": {},
+    "canon": {},
+    "brother": {},
+    "lexmark": {},
+    "ricoh": {},
+    "epson": {},
+}
