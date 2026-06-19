@@ -142,6 +142,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
+    app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
     app.add_middleware(_IngestBodySizeMiddleware)
     app.include_router(api_router)
     app.include_router(web_router)

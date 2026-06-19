@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}{{ d.model or d.hostname or d.ip }} · Принтер · SRP{% endblock %}
+{% block subtitle %}принтер{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+.back { font:600 13px/1 var(--mono); color:var(--muted); }
+.kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:14px 0 24px; }
+.kv .stat .l { margin-bottom:4px; }
+.kv .stat .v { font:600 15px/1.3 var(--mono); word-break:break-word; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:16px 16px; margin-bottom:18px; }
+.panel .ch-title { font:600 11px/1 var(--mono); letter-spacing:1.4px; text-transform:uppercase; color:var(--muted); margin-bottom:12px; }
+.suprow { display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line); }
+.suprow:first-child { border-top:none; }
+.suprow .nm { flex:1; }
+.supbar2 { width:160px; height:8px; border-radius:4px; background:var(--line); overflow:hidden; }
+.supbar2 > i { display:block; height:100%; }
+.supbar2.good>i{background:var(--good);} .supbar2.warn>i{background:var(--warn);} .supbar2.bad>i{background:var(--bad);} .supbar2.na>i{background:var(--na);}
+td.r,th.r{text-align:right;}
+.no-data{ color:var(--muted); padding:14px 0; }
+</style>
+{% endblock %}
+
+{% block body %}
+<a class="back" href="/printers">← все принтеры</a>
+{% set st = printer_status_ru(d.status, d.online) %}
+<h2 style="margin-top:14px">{{ d.model or d.hostname or d.ip }} <span class="chip {{ st[0] }}">{{ st[1] }}</span></h2>
+
+<div class="kv">
+  <div class="stat"><div class="l">IP</div><div class="v">{{ d.ip or "—" }}</div></div>
+  <div class="stat"><div class="l">Имя</div><div class="v">{{ d.hostname or "—" }}</div></div>
+  <div class="stat"><div class="l">Вендор</div><div class="v">{{ d.vendor or "—" }}</div></div>
+  <div class="stat"><div class="l">Серийный №</div><div class="v">{{ d.serial or "—" }}</div></div>
+  <div class="stat"><div class="l">MAC</div><div class="v">{{ d.mac or "—" }}</div></div>
+  <div class="stat"><div class="l">Прошивка</div><div class="v">{{ d.firmware or "—" }}</div></div>
+  <div class="stat"><div class="l">Страниц (всего)</div><div class="v">{{ "{:,}".format(d.total_pages).replace(",", " ") if d.total_pages is not none else "—" }}</div></div>
+  <div class="stat"><div class="l">Первые данные</div><div class="v">{{ d.first_seen[:16] if d.first_seen else "—" }}</div></div>
+  <div class="stat"><div class="l">Последний опрос</div><div class="v">{{ d.last_seen[:16] if d.last_seen else "—" }}</div></div>
+  <div class="stat"><div class="l">Источник</div><div class="v">{{ d.sources|join(", ") if d.sources else "—" }}{% if d.source_protocol %} · {{ d.source_protocol }}{% endif %}</div></div>
+</div>
+
+{% if d.errors %}
+<div class="alert-banner alert-bad">Активные ошибки: {% for e in d.errors %}{{ e.description or e.code }}{% if not loop.last %}; {% endif %}{% endfor %}</div>
+{% endif %}
+
+<div class="panel">
+  <div class="ch-title">История счётчика страниц</div>
+  <div id="chart-counter" style="height:260px"></div>
+</div>
+
+<div class="panel">
+  <div class="ch-title">Расходники</div>
+  {% if d.supplies %}
+    {% for s in d.supplies %}
+    <div class="suprow">
+      <span class="nm">{{ s.name }}{% if s.type %} <span class="muted small">({{ s.type }})</span>{% endif %}</span>
+      {% if s.percent is not none %}
+        <span class="supbar2 {{ supply_color(s.percent) if s.class_ != 'receptacle' else ('bad' if s.percent >= 90 else 'good') }}"><i style="width:{{ s.percent }}%"></i></span>
+        <span class="mono">{{ s.percent }}%</span>
+      {% else %}<span class="muted">неизвестно</span>{% endif %}
+    </div>
+    {% endfor %}
+  {% else %}<div class="no-data">Нет данных о расходниках</div>{% endif %}
+</div>
+
+{% if d.trays %}
+<div class="panel">
+  <div class="ch-title">Лотки</div>
+  {% for t in d.trays %}
+  <div class="suprow"><span class="nm">{{ t.name }}{% if t.media %} <span class="muted small">{{ t.media }}</span>{% endif %}</span>
+   <span class="mono">{% if t.level is not none and t.max %}{{ t.level }}/{{ t.max }}{% elif t.level is not none %}{{ t.level }}{% else %}—{% endif %}</span></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <div class="ch-title">Печать с компьютеров{% if d.period_days %} (за {{ d.period_days }} дн){% else %} (всё время){% endif %}</div>
+  {% if d.software and d.software.devices %}
+  <p class="muted small" style="margin-bottom:10px">По журналам ПК: {{ "{:,}".format(d.software.pages).replace(",", " ") }} стр, {{ d.software.jobs }} заданий, {{ d.software.device_count }} ПК.</p>
+  <table>
+    <thead><tr><th>Компьютер</th><th class="r">Страниц</th><th>Последняя печать</th></tr></thead>
+    <tbody>
+    {% for dev in d.software.devices %}
+    <tr><td>{{ dev.hostname }}</td><td class="r mono">{{ "{:,}".format(dev.pages).replace(",", " ") }}</td><td class="small muted">{{ dev.last_ts[:16] if dev.last_ts else "—" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="no-data">Нет сопоставленных данных печати с ПК (имя принтера на ПК может отличаться от сетевого).</div>{% endif %}
+</div>
+
+<script id="series-data" type="application/json">{{ d.series|tojson }}</script>
+<script>
+(function () {
+  var el = document.getElementById("chart-counter");
+  if (!el || typeof Plotly === "undefined") return;
+  var s = JSON.parse(document.getElementById("series-data").textContent || "[]")
+            .filter(function (r) { return r.total_pages != null && r.received_at; })
+            .reverse();  // stored newest-first; chart oldest -> newest
+  if (s.length < 2) { el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>"; return; }
+  var x = s.map(function (r) { return r.received_at; });
+  var y = s.map(function (r) { return r.total_pages; });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    var grid = css.getPropertyValue("--line").trim() || "#132030";
+    Plotly.newPlot(el, [{
+      x: x, y: y, type: "scatter", mode: "lines+markers",
+      line: { color: acc, width: 2 }, marker: { color: acc, size: 4 },
+      hovertemplate: "%{x}<br><b>%{y}</b> стр<extra></extra>",
+    }], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+      margin: { t: 8, r: 14, b: 40, l: 60 },
+      xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "стр", font: { size: 11 } } },
+      showlegend: false, autosize: true,
+    }, { responsive: true, displayModeBar: false });
+  }
+  draw();
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
+{% endblock %}

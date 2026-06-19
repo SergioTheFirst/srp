@@ -33,6 +33,8 @@
 }
 .node .v { color: var(--muted); }
 .node.gw-node { border-color: rgba(14,165,233,.4); }
+.node.printer-node { border-color: rgba(14,165,233,.5); color: var(--text); text-decoration: none; }
+.node.printer-node:hover { border-color: var(--accent); text-decoration: none; }
 table.net-agents td { padding: 7px 10px; font-size: 14px; }
 table.net-agents th { position: static; }
 
@@ -109,6 +111,7 @@ table.net-agents th { position: static; }
     <span class="nm-key"><i class="nm-dot na"></i>нет данных</span>
     <span class="nm-key"><i class="nm-dia"></i>шлюз</span>
     <span class="nm-key"><i class="nm-mini"></i>без агента</span>
+    <span class="nm-key">🖨 принтер</span>
   </div>
   <div class="netmap-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по ПК — карточка</div>
 </div>
@@ -176,12 +179,32 @@ table.net-agents th { position: static; }
     {% endfor %}
   </div>
   {% endif %}
+
+  {% if c.printers %}
+  <div class="node-grid">
+    {% for pr in c.printers %}
+    <a class="node printer-node" href="/printers/{{ pr.printer_id }}"
+       data-filter="{{ pr.ip or '' }} {{ (pr.label or '')|lower }} {{ (pr.vendor or '')|lower }} принтер printer"
+       title="Сетевой принтер{% if pr.status %} · {{ pr.status }}{% endif %}">
+      <span>🖨 {{ pr.label }}</span>
+      <span class="v">{{ pr.ip or "—" }}</span>
+      {% if pr.total_pages is not none %}<span class="pill">{{ pr.total_pages }} стр</span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 {% endfor %}
 
 {% if m.unclustered %}
 <p class="muted small">Без шлюза (не попали в подсети):
   {% for u in m.unclustered %}<a href="/device/{{ u.device_id }}">{{ u.hostname or u.device_id }}</a>{% if not loop.last %} · {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+{% if m.printers_unclustered %}
+<p class="muted small">Принтеры вне известных подсетей:
+  {% for pr in m.printers_unclustered %}<a href="/printers/{{ pr.printer_id }}">🖨 {{ pr.label }}</a>{% if not loop.last %} · {% endif %}{% endfor %}
 </p>
 {% endif %}
 
@@ -297,11 +320,25 @@ table.net-agents th { position: static; }
       links.push({ a: n, b: gw, kind: "other", cls: "na", wifi: false,
                    measured: false, idx: links.length });
     });
+    (c.printers || []).forEach(function (pr, i) {
+      var ang = rnd() * 6.283 + (c.agents.length + c.others.length + i) * 2.399963;
+      var pcls = (!pr.online || pr.status === "unreachable") ? "bad" : "accent";
+      var n = {
+        type: "printer", r: 7, cls: pcls, cluster: cluster,
+        printer_id: pr.printer_id, label: pr.label, ip: pr.ip, vendor: pr.vendor,
+        status: pr.status, online: pr.online, total_pages: pr.total_pages,
+        x: Math.cos(ang) * R * 0.6, y: Math.sin(ang) * R * 0.6, vx: 0, vy: 0,
+        filter: ((pr.label || "") + " " + (pr.ip || "") + " " + (pr.vendor || "") + " принтер").toLowerCase()
+      };
+      nodes.push(n);
+      links.push({ a: n, b: gw, kind: "printer", cls: pcls, wifi: false,
+                   measured: false, idx: links.length });
+    });
   });
 
   /* отрисовка и hit-test ходят по одному порядку: точки → агенты → шлюзы,
      верхний нарисованный узел выигрывает наведение/клик */
-  var order = { other: 0, agent: 1, gw: 2 };
+  var order = { other: 0, printer: 1, agent: 1, gw: 2 };
   var sortedNodes = nodes.slice().sort(function (a, b) { return order[a.type] - order[b.type]; });
 
   /* — раскладка кластеров: построчная упаковка по ширине сцены — */
@@ -501,6 +538,22 @@ table.net-agents th { position: static; }
           ctx.fillStyle = C.text; ctx.font = "500 10.5px " + C.mono; ctx.textAlign = "center";
           ctx.fillText(name, n.x, n.y + n.r + 13);
         }
+      } else if (n.type === "printer") {
+        /* принтер: квадрат (не ромб, как шлюз) цвета статуса + метка-иконка */
+        ctx.shadowColor = col; ctx.shadowBlur = (hover === n ? 16 : 8) * view.k;
+        ctx.fillStyle = col; ctx.globalAlpha = dimN ? 0.05 : 0.18;
+        ctx.fillRect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
+        ctx.globalAlpha = dimN ? 0.08 : 0.95;
+        ctx.lineWidth = 2; ctx.strokeStyle = col;
+        ctx.strokeRect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
+        ctx.shadowBlur = 0;
+        if (view.k > 0.6) {
+          var pname = n.label || n.ip || "принтер";
+          if (pname.length > 18) pname = pname.slice(0, 17) + "…";
+          ctx.globalAlpha = dimN ? 0.06 : 0.85;
+          ctx.fillStyle = C.text; ctx.font = "500 10px " + C.mono; ctx.textAlign = "center";
+          ctx.fillText("🖨 " + pname, n.x, n.y + n.r + 13);
+        }
       } else {
         ctx.fillStyle = col; ctx.globalAlpha = dimN ? 0.04 : 0.75;
         ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 6.2832); ctx.fill();
@@ -584,6 +637,13 @@ table.net-agents th { position: static; }
             "медиана потерь: " + Math.round(n.quality.median_loss_pct) + "%" +
             (n.quality.median_latency_ms != null ? " · " + Math.round(n.quality.median_latency_ms) + " мс" : ""));
       if (n.anomaly) row(tip, "t-bad", "⚠ " + n.anomaly_reason);
+    } else if (n.type === "printer") {
+      row(tip, "t-head", "🖨 " + (n.label || n.ip || "принтер"));
+      row(tip, "t-muted", "IP: " + (n.ip || "—") + (n.vendor ? " · " + n.vendor : ""));
+      row(tip, tipCls(n.online === false ? "bad" : "good"),
+          n.online === false ? "недоступен" : "на связи");
+      if (n.total_pages != null) row(tip, "", "напечатано: " + n.total_pages + " стр");
+      row(tip, "t-muted", "клик — карточка принтера");
     } else {
       row(tip, "t-head", n.ip || n.mac || "устройство");
       row(tip, "t-muted", "MAC: " + (n.mac || "—") + (n.vendor ? " · " + n.vendor : ""));
@@ -631,12 +691,14 @@ table.net-agents th { position: static; }
     var n = pick(toWorld(e));
     if (n !== hover) { hover = n; invalidate(); }
     if (n) showTip(n, e); else tip.hidden = true;
-    cv.style.cursor = n ? (n.type === "agent" ? "pointer" : "default") : "grab";
+    cv.style.cursor = n ? (n.type === "agent" || n.type === "printer" ? "pointer" : "default") : "grab";
   });
   window.addEventListener("mouseup", function () {
     if (dragNode) { dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15); }
     if (dragNode && !moved && dragNode.type === "agent") {
       window.location.href = "/device/" + encodeURIComponent(dragNode.device_id);
+    } else if (dragNode && !moved && dragNode.type === "printer" && dragNode.printer_id) {
+      window.location.href = "/printers/" + encodeURIComponent(dragNode.printer_id);
     }
     dragNode = null; panning = false; downPt = null;
     invalidate();

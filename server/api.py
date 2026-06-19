@@ -17,6 +17,7 @@ from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.pipeline import ingest_envelope
+from server.printers import scheduler
 
 router = APIRouter(prefix="/api/v1")
 
@@ -224,3 +225,33 @@ def delete_device(device_id: str) -> dict:
 def purge_devices(body: PurgeBody) -> dict:
     """Bulk-clear ghosts: delete (or, with dry_run, preview) devices silent past *days*."""
     return db.purge_devices_silent_for(body.days, dry_run=body.dry_run)
+
+
+# ---------------------------------------------------------------------------
+# Network printers (phase 6)
+# ---------------------------------------------------------------------------
+@router.get("/printers")
+def list_printers(days: int = 30) -> dict:
+    """Hardware printer inventory + per-printer software print reconcile."""
+    return db.get_printers_overview(days=_clamp_days(days))
+
+
+@router.get("/printers/{printer_id}")
+def printer_detail(printer_id: str, days: int = 30) -> dict:
+    """One printer: inventory + counter series + which PCs printed to it."""
+    p = db.get_printer_detail(printer_id, days=_clamp_days(days))
+    if p is None:
+        raise HTTPException(status_code=404, detail="printer not found")
+    return p
+
+
+@router.post("/printers/poll")
+def poll_printers(request: Request) -> dict:
+    """Force one printer poll cycle now (dashboard button). Bounded by SNMP/HTTP
+    timeouts; probes only already-discovered hosts, never scans ranges here."""
+    printer_cfg = getattr(request.app.state, "printer_config", None)
+    if printer_cfg is None:
+        from server.printers.config import load_printer_config
+
+        printer_cfg = load_printer_config(None)
+    return scheduler.poll_now(printer_cfg)

@@ -17,6 +17,7 @@ static list). Active range scanning stays behind the phase-7 security stop-gate
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from server.printers.models import PrinterReading, printer_identity
 _log = logging.getLogger("srp.printers")
 
 _MAX_WORKERS = 16  # bound the SNMP fan-out; printer fleets are small
+_poll_lock = threading.Lock()  # serialize cycles: one fan-out at a time (anti-DoS)
 
 ProbeFn = Callable[..., Optional[PrinterReading]]
 StoreFn = Callable[..., None]
@@ -138,9 +140,17 @@ def poll_now(
 
     Used by the lifespan loop and the dashboard force button. Never scans ranges.
     """
-    candidates = discovery.merge(
-        agent_hints=get_hints(),
-        arp_snapshots=get_snapshots(),
-        static_ips=printer_cfg.static_ips,
-    )
-    return run_poll_cycle(candidates, printer_cfg, probe=probe, store=store, now=now)
+    # Serialize cycles: a second concurrent poll (button mashed, or the lifespan
+    # loop firing while a manual poll runs) returns "busy" instead of launching
+    # another full SNMP/IPP/HTTP fan-out (security review MEDIUM-1: anti-DoS).
+    if not _poll_lock.acquire(blocking=False):
+        return {"polled": 0, "online": 0, "unreachable": 0, "errors": 0, "busy": True}
+    try:
+        candidates = discovery.merge(
+            agent_hints=get_hints(),
+            arp_snapshots=get_snapshots(),
+            static_ips=printer_cfg.static_ips,
+        )
+        return run_poll_cycle(candidates, printer_cfg, probe=probe, store=store, now=now)
+    finally:
+        _poll_lock.release()
