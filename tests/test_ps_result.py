@@ -63,3 +63,20 @@ def test_ok_with_parsed_data(monkeypatch):
 
 def test_psresult_default_data_is_none():
     assert PsResult("empty").data is None
+
+
+def test_run_ps_spawns_windowless(monkeypatch):
+    """Every PowerShell spawn must be invisible -- no console window may flash on
+    the user's desktop (agent sweeps run as SYSTEM, but the per-user tray cert
+    check runs in the interactive session). CREATE_NO_WINDOW on Windows; 0
+    (harmless default) on other platforms.
+    """
+    seen: dict = {}
+
+    def fake_run(*args, **kwargs):
+        seen.update(kwargs)
+        return _Proc(b"{}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_ps("x")
+    assert seen.get("creationflags") == getattr(subprocess, "CREATE_NO_WINDOW", 0)

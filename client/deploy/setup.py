@@ -14,6 +14,7 @@ bottom. The agent/tray code stays pure stdlib -- PyInstaller is a build-only dep
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -367,14 +368,21 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     if not opts.allow_offline:
         # Live collect+send check. Runs in THIS elevated-admin context, not SYSTEM
         # (accepted gap): the common failures -- wrong URL, network down -- reproduce
-        # here; a per-user proxy/VPN edge is the only difference. Output is captured
-        # (the agent already redacts the URL and never prints the token) and a
-        # redacted tail is logged to install.log for RMM/GPO triage.
+        # here; a per-user proxy/VPN edge is the only difference. The agent EXE is
+        # windowed (no console -> stderr is None), so route its diagnostics to a log
+        # file and read a redacted tail from there for RMM/GPO triage (the agent
+        # already redacts the URL and never prints the token).
+        val_log = destp / "validate.log"
         proc = subprocess.run(  # nosec B603 -- fixed path, no user-controlled argv
-            [str(destp / AGENT_EXE), "--once"], capture_output=True, text=True
+            [str(destp / AGENT_EXE), "--once", "--log-file", str(val_log)],
+            capture_output=True,
+            text=True,
         )
         if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")[-300:]
+            tail = ""
+            with contextlib.suppress(OSError):
+                tail = val_log.read_text(encoding="utf-8", errors="replace")
+            tail = (tail or proc.stderr or proc.stdout or "").strip().replace("\n", " ")[-300:]
             _log(dest, f"validation pass failed rc={proc.returncode}: {tail}")
             return EXIT_SERVER_UNREACHABLE
 

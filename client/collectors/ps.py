@@ -24,6 +24,12 @@ _PREAMBLE = (
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
 )
 
+# The agent must collect silently: no console window may flash on the user's
+# desktop on any sweep. CREATE_NO_WINDOW stops powershell.exe (a console app)
+# from allocating a window -- essential for the per-user tray cert check and for
+# any non-session-0 launch. Absent off-Windows, where 0 is the harmless default.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 class PsResult(NamedTuple):
     """Outcome of a PowerShell run.
@@ -58,6 +64,7 @@ def run_ps(script: str, timeout: int = 30) -> PsResult:
             ],
             capture_output=True,
             timeout=timeout,
+            creationflags=_NO_WINDOW,
         )
     except FileNotFoundError:
         return PsResult("absent")

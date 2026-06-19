@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import sys
 import time
 import urllib.parse
 from functools import partial
@@ -104,11 +105,14 @@ _LOG_BACKUPS = 3  # keep srp-agent.log plus .1/.2/.3
 
 
 def setup_logging(verbose: bool, log_file: Optional[str] = None) -> None:
-    """Configure root logging: console always, plus an optional rotating file.
+    """Configure root logging: a console handler when a stream exists, plus an
+    optional rotating file.
 
     A SYSTEM scheduled task has no console, so the install step passes
-    ``--log-file`` to capture diagnostics to a bounded, rotating file. Idempotent:
-    re-running replaces handlers rather than stacking duplicates.
+    ``--log-file`` to capture diagnostics to a bounded, rotating file. A windowed
+    (no-console) build has ``sys.stderr is None`` -- there the console handler is
+    skipped (it would raise on every emit) and the file handler carries the logs.
+    Idempotent: re-running replaces handlers rather than stacking duplicates.
     """
     level = logging.DEBUG if verbose else logging.INFO
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -117,9 +121,13 @@ def setup_logging(verbose: bool, log_file: Optional[str] = None) -> None:
     for handler in list(root.handlers):
         handler.close()
         root.removeHandler(handler)
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-    root.addHandler(console)
+    # A windowed (no-console) PyInstaller build has sys.stderr is None; a plain
+    # StreamHandler there raises on every emit. Attach a console handler only when
+    # a stream exists -- the rotating file below carries the logs headless.
+    if sys.stderr is not None:
+        console = logging.StreamHandler()
+        console.setFormatter(fmt)
+        root.addHandler(console)
     if log_file:
         path = Path(log_file)
         path.parent.mkdir(parents=True, exist_ok=True)
