@@ -8,6 +8,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional
 
+from server.netdisco.config import NetdiscoConfig, load_netdisco_config
 from server.printers.config import PrinterConfig, load_printer_config
 
 _CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -40,6 +41,13 @@ class ServerConfig:
     printer_poll_enabled: bool = False
     printers: Optional[dict[str, Any]] = None
     retain_printer_readings: int = 2000
+    # Network discovery (netdisco). OFF by default (secure default, like
+    # printer_poll_enabled). The ``netdisco`` block is parsed into a
+    # NetdiscoConfig via netdisco_config().
+    netdisco_enabled: bool = False
+    netdisco: Optional[dict[str, Any]] = None
+    retain_net_readings: int = 2000
+    retain_net_snapshots: int = 500
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
@@ -52,6 +60,10 @@ class ServerConfig:
     def printer_config(self) -> PrinterConfig:
         """Parse the raw ``printers`` block into a validated PrinterConfig."""
         return load_printer_config(self.printers)
+
+    def netdisco_config(self) -> NetdiscoConfig:
+        """Parse the raw ``netdisco`` block into a validated NetdiscoConfig."""
+        return load_netdisco_config(self.netdisco)
 
 
 def load_config(path: Path = _CONFIG_PATH) -> ServerConfig:
