@@ -7,6 +7,7 @@ identity), deliberately separate from the agent ``device_id`` lifecycle.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -56,3 +57,124 @@ def test_net_tables_are_added_to_a_preexisting_db(tmp_path: Path) -> None:
     assert not (_NET_TABLES & _table_names(p))  # confirm the simulation removed them
     db.init_db(p)
     assert _table_names(p) >= _NET_TABLES
+
+
+# --------------------------------------------------------------------------- #
+# Writers
+# --------------------------------------------------------------------------- #
+def _rows(path: Path, sql: str, params: tuple = ()) -> list:
+    con = sqlite3.connect(str(path))
+    con.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in con.execute(sql, params)]
+    finally:
+        con.close()
+
+
+def test_upsert_net_device_coalesces_identity_and_keeps_known_type(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_device(
+        {
+            "device_nid": "nd-mac-AA",
+            "ip": "10.0.0.5",
+            "vendor": "VMware",
+            "dev_type": "switch",
+            "status": "up",
+        }
+    )
+    # A later transient poll missing identity must not wipe known values, and must
+    # not demote a known type back to 'unknown'.
+    db.upsert_net_device(
+        {
+            "device_nid": "nd-mac-AA",
+            "ip": None,
+            "vendor": None,
+            "dev_type": "unknown",
+            "status": "unreachable",
+        }
+    )
+    row = _rows(p, "SELECT * FROM net_devices WHERE device_nid=?", ("nd-mac-AA",))[0]
+    assert row["vendor"] == "VMware"  # COALESCE kept known vendor
+    assert row["dev_type"] == "switch"  # keep-known over later 'unknown'
+    assert row["status"] == "unreachable"  # status is latest-wins
+    assert row["first_seen"] is not None
+    assert row["last_seen"] is not None
+
+
+def test_store_net_device_reading_appends_and_prunes(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p, retain_net_readings=2)
+    for i in range(3):
+        db.store_net_device_reading("nd-mac-AA", {"seq": i}, status="up")
+    rows = _rows(
+        p, "SELECT detail FROM net_device_readings WHERE device_nid=? ORDER BY id", ("nd-mac-AA",)
+    )
+    assert len(rows) == 2  # pruned to retain cap
+    assert json.loads(rows[-1]["detail"])["seq"] == 2  # newest kept
+
+
+def test_store_net_interfaces_replaces_previous(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.store_net_interfaces(
+        "nd-mac-AA",
+        [
+            {"if_index": 1, "name": "eth0", "oper_up": True},
+            {"if_index": 2, "name": "eth1", "oper_up": False},
+        ],
+    )
+    db.store_net_interfaces("nd-mac-AA", [{"if_index": 3, "name": "eth2", "oper_up": True}])
+    rows = _rows(p, "SELECT name, oper_up FROM net_interfaces WHERE device_nid=?", ("nd-mac-AA",))
+    assert [r["name"] for r in rows] == ["eth2"]  # full replace, not append
+    assert rows[0]["oper_up"] == 1  # bool stored as 0/1
+
+
+def test_upsert_net_link_canonicalises_and_dedups(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-z",
+            "b_nid": "nd-a",
+            "a_if": 9,
+            "b_if": 1,
+            "link_kind": "l2-edge",
+            "via_source": "fdb_edge",
+            "confidence": "high",
+        }
+    )
+    # Same undirected link in reverse order -> one canonical row, latest source wins.
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-a",
+            "b_nid": "nd-z",
+            "link_kind": "l2-edge",
+            "via_source": "lldp",
+            "confidence": "high",
+        }
+    )
+    rows = _rows(p, "SELECT a_nid, b_nid, a_if, b_if, via_source FROM net_links")
+    assert len(rows) == 1
+    assert rows[0]["a_nid"] == "nd-a" and rows[0]["b_nid"] == "nd-z"  # canonical a<=b
+    assert rows[0]["a_if"] == 1 and rows[0]["b_if"] == 9  # ifs swapped with endpoints, COALESCEd
+    assert rows[0]["via_source"] == "lldp"  # latest-wins
+
+
+def test_store_topology_snapshot_appends_prunes_and_counts(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p, retain_net_snapshots=2)
+    for i in range(3):
+        db.store_topology_snapshot({"nodes": [{"nid": "a"}], "links": [], "seq": i})
+    rows = _rows(p, "SELECT node_count, link_count FROM net_topology_snapshots ORDER BY id")
+    assert len(rows) == 2
+    assert rows[0]["node_count"] == 1 and rows[0]["link_count"] == 0
+
+
+def test_store_net_change_appends(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.store_net_change("appeared", device_nid="nd-mac-AA", detail={"ip": "10.0.0.5"})
+    rows = _rows(p, "SELECT kind, device_nid, detail FROM net_changes")
+    assert rows[0]["kind"] == "appeared"
+    assert json.loads(rows[0]["detail"])["ip"] == "10.0.0.5"

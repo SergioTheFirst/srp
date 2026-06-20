@@ -25,6 +25,8 @@ _retain_ev = 1000
 _retain_hist = 2000  # historical readings kept per device (W0.1; downsample TBD)
 _retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample TBD)
 _retain_prn = 2000  # printer readings kept per printer (phase 4; downsample TBD)
+_retain_net = 2000  # netdisco device readings kept per device (phase 2)
+_retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 _lock = threading.Lock()
 
@@ -243,14 +245,19 @@ def init_db(
     retain_historical: int = 2000,
     retain_scores: int = 5000,
     retain_printer_readings: int = 2000,
+    retain_net_readings: int = 2000,
+    retain_net_snapshots: int = 500,
 ) -> None:
     global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores, _retain_prn
+    global _retain_net, _retain_net_topo
     _db_path = Path(db_path)
     _retain_hb = retain_heartbeats
     _retain_ev = retain_events
     _retain_hist = retain_historical
     _retain_scores = retain_scores
     _retain_prn = retain_printer_readings
+    _retain_net = retain_net_readings
+    _retain_net_topo = retain_net_snapshots
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         _migrate_legacy_latest_wins(conn)
@@ -689,6 +696,187 @@ def store_printer_reading(
                 recv,
                 recv,
             ),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Network discovery (netdisco) persistence -- mirrors the printers pattern:
+# COALESCE inventory + append-only readings + retention prune. Keyed by
+# device_nid (network identity), separate from the agent device_id lifecycle,
+# so net_* tables are deliberately NOT in _DEVICE_TABLES.
+# --------------------------------------------------------------------------- #
+def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Insert or refresh a network device. Identity fields are COALESCEd (a
+    transient poll missing a value never wipes a known one); ``dev_type`` keeps a
+    known type over a later ``unknown`` (a classify miss must not demote);
+    ``status`` is COALESCEd too (an inventory-only upsert keeps the last probe
+    status). ``first_seen`` is set on insert; ``last_seen`` advances each upsert."""
+    nid = dev.get("device_nid")
+    if not nid:
+        return
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_devices
+              (device_nid, ip, hostname, mac, vendor, dev_type, sys_object_id,
+               model, serial, site_code, status, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_nid) DO UPDATE SET
+              ip            = COALESCE(excluded.ip, net_devices.ip),
+              hostname      = COALESCE(excluded.hostname, net_devices.hostname),
+              mac           = COALESCE(excluded.mac, net_devices.mac),
+              vendor        = COALESCE(excluded.vendor, net_devices.vendor),
+              dev_type      = CASE
+                                WHEN excluded.dev_type IS NOT NULL
+                                 AND excluded.dev_type != 'unknown'
+                                THEN excluded.dev_type ELSE net_devices.dev_type END,
+              sys_object_id = COALESCE(excluded.sys_object_id, net_devices.sys_object_id),
+              model         = COALESCE(excluded.model, net_devices.model),
+              serial        = COALESCE(excluded.serial, net_devices.serial),
+              site_code     = COALESCE(excluded.site_code, net_devices.site_code),
+              status        = COALESCE(excluded.status, net_devices.status),
+              last_seen     = excluded.last_seen
+            """,
+            (
+                nid,
+                dev.get("ip"),
+                dev.get("hostname"),
+                dev.get("mac"),
+                dev.get("vendor"),
+                dev.get("dev_type"),
+                dev.get("sys_object_id"),
+                dev.get("model"),
+                dev.get("serial"),
+                dev.get("site_code"),
+                dev.get("status"),
+                recv,
+                recv,
+            ),
+        )
+
+
+def store_net_device_reading(
+    device_nid: str,
+    detail: dict[str, Any],
+    status: Optional[str] = None,
+    received_at: Optional[str] = None,
+) -> None:
+    """Append one device reading (append-only history) and prune to the retain cap."""
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_device_readings (device_nid, received_at, status, detail) "
+            "VALUES (?,?,?,?)",
+            (device_nid, recv, status, json.dumps(detail)),
+        )
+        conn.execute(
+            """DELETE FROM net_device_readings WHERE device_nid=? AND id NOT IN (
+                 SELECT id FROM net_device_readings WHERE device_nid=? ORDER BY id DESC LIMIT ?)""",
+            (device_nid, device_nid, _retain_net),
+        )
+
+
+def store_net_interfaces(
+    device_nid: str,
+    interfaces: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+) -> None:
+    """Replace a device's interface set (full snapshot each config poll)."""
+    recv = received_at or _now_iso()
+    rows = [
+        (
+            device_nid,
+            i.get("if_index"),
+            i.get("name"),
+            i.get("if_type"),
+            i.get("speed_mbps"),
+            None if i.get("oper_up") is None else int(bool(i.get("oper_up"))),
+            i.get("phys_mac"),
+            recv,
+        )
+        for i in interfaces
+    ]
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM net_interfaces WHERE device_nid=?", (device_nid,))
+        conn.executemany(
+            "INSERT INTO net_interfaces "
+            "(device_nid, if_index, name, if_type, speed_mbps, oper_up, phys_mac, last_seen) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Insert or refresh one undirected L2/L3 link. Endpoints are canonicalised
+    (a_nid <= b_nid, ifIndexes swapped to match) so the same link in either
+    direction is one row; ``via_source``/``confidence`` are latest-wins and the
+    per-endpoint ifIndexes are COALESCEd; ``first_seen`` is preserved."""
+    a, b = link.get("a_nid"), link.get("b_nid")
+    if not a or not b:
+        return
+    a_if, b_if = link.get("a_if"), link.get("b_if")
+    if a > b:
+        a, b = b, a
+        a_if, b_if = b_if, a_if
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_links
+              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
+              a_if       = COALESCE(excluded.a_if, net_links.a_if),
+              b_if       = COALESCE(excluded.b_if, net_links.b_if),
+              via_source = excluded.via_source,
+              confidence = excluded.confidence,
+              last_seen  = excluded.last_seen
+            """,
+            (
+                a,
+                b,
+                a_if,
+                b_if,
+                link.get("link_kind"),
+                link.get("via_source"),
+                link.get("confidence"),
+                recv,
+                recv,
+            ),
+        )
+
+
+def store_topology_snapshot(graph: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Append a full topology snapshot (append-only graph history) and prune."""
+    recv = received_at or _now_iso()
+    nodes = graph.get("nodes") or []
+    links = graph.get("links") or []
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_topology_snapshots (received_at, node_count, link_count, graph) "
+            "VALUES (?,?,?,?)",
+            (recv, len(nodes), len(links), json.dumps(graph)),
+        )
+        conn.execute(
+            """DELETE FROM net_topology_snapshots WHERE id NOT IN (
+                 SELECT id FROM net_topology_snapshots ORDER BY id DESC LIMIT ?)""",
+            (_retain_net_topo,),
+        )
+
+
+def store_net_change(
+    kind: str,
+    device_nid: Optional[str] = None,
+    detail: Optional[dict[str, Any]] = None,
+    ts: Optional[str] = None,
+) -> None:
+    """Append one topology-change record to the change journal."""
+    stamp = ts or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_changes (ts, device_nid, kind, detail) VALUES (?,?,?,?)",
+            (stamp, device_nid, kind, json.dumps(detail or {})),
         )
 
 
