@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,6 +22,7 @@ from starlette.responses import Response
 from server import db, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
+from server.netdisco import scheduler as netdisco_scheduler
 from server.printers import scheduler
 from server.web.dashboard import router as web_router
 
@@ -110,6 +112,34 @@ async def _printer_poll_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec)
 
 
+_ndlog = logging.getLogger("srp.netdisco")
+
+
+def _run_netdisco_cycle() -> None:
+    """Run one netdisco inventory cycle (cheap rebuild from snapshots; via to_thread).
+
+    Self-guards like the printer/retention loops: a transient error must never
+    crash startup or kill the periodic loop.
+    """
+    try:
+        result = netdisco_scheduler.poll_now()
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco inventory cycle failed")
+        return
+    if result.get("persisted"):
+        _ndlog.info("netdisco inventory: %d devices", result["persisted"])
+
+
+async def _netdisco_loop(cfg: ServerConfig) -> None:
+    """Rebuild the network inventory at startup, then every interval (+jitter)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.inventory_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_cycle)
+        # jitter de-phases this loop from the other poll loops (anti-thundering-herd)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -120,6 +150,8 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             retain_heartbeats=cfg.retain_heartbeats,
             retain_events=cfg.retain_events,
             retain_printer_readings=cfg.retain_printer_readings,
+            retain_net_readings=cfg.retain_net_readings,
+            retain_net_snapshots=cfg.retain_net_snapshots,
         )
         org_directory.init_directory(cfg.resolved_org_directory_path())
         _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
@@ -128,6 +160,8 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             tasks.append(asyncio.create_task(_retention_loop(cfg)))
         if cfg.printer_poll_enabled:
             tasks.append(asyncio.create_task(_printer_poll_loop(cfg)))
+        if cfg.netdisco_enabled:
+            tasks.append(asyncio.create_task(_netdisco_loop(cfg)))
         try:
             yield
         finally:
@@ -143,6 +177,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     )
     app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
+    app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
     app.add_middleware(_IngestBodySizeMiddleware)
     app.include_router(api_router)
     app.include_router(web_router)
