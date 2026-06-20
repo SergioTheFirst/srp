@@ -104,7 +104,8 @@ def poll_discovery() -> dict:
     unauthenticated, so it is rate-limited (a single shared bucket) AND bounded by
     the scheduler's anti-DoS lock -- a concurrent call returns busy, not a second
     pass. This guard must stay ahead of P5's active scan sitting behind that lock."""
-    if not check_rate_limit("discovery_poll"):
+    # namespaced key: never collides with a real device_id in the shared limiter
+    if not check_rate_limit("endpoint:discovery_poll"):
         raise HTTPException(status_code=429, detail="discovery poll rate exceeded")
     return netdisco_scheduler.poll_now()
 
