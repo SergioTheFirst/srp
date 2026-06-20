@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from server.netdisco.inventory import build_inventory
+from server.netdisco.inventory import build_inventory, persist_inventory
 
 # Two agents on one subnet. Each sees the gateway (VMware OUI 00-50-56), the
 # other agent, and (agent A only) a VirtualBox host (OUI 08-00-27).
@@ -96,3 +96,13 @@ def test_oui_vendor_resolved_for_known_prefix() -> None:
 
 def test_empty_snapshots_yield_empty_inventory() -> None:
     assert build_inventory([]) == []
+
+
+def test_persist_inventory_writes_each_device_through_upsert() -> None:
+    captured: list[dict[str, Any]] = []
+    devices = build_inventory([_SNAP_A, _SNAP_B])
+    written = persist_inventory(devices, upsert=captured.append)
+    assert written == len(devices)
+    agent_row = next(c for c in captured if c["device_nid"] == "nd-mac-AA-BB-CC-DD-EE-01")
+    assert agent_row["dev_type"] == "agent"
+    assert agent_row["hostname"] == "PC-A"

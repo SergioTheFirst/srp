@@ -16,8 +16,9 @@ DB or the network. ``persist_inventory`` is the thin server-bound writer.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from server import db
 from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco.identity import device_nid
 from server.netdisco.models import NetDevice
@@ -134,3 +135,28 @@ def build_inventory(snapshots: list[dict[str, Any]]) -> list[NetDevice]:
     _add_agents(snapshots, by_nid)  # agents first, so their MACs win the identity layer
     _add_neighbors(snapshots, by_nid, _agent_macs(snapshots))
     return [_to_device(by_nid[nid]) for nid in sorted(by_nid)]
+
+
+def persist_inventory(
+    devices: list[NetDevice],
+    upsert: Callable[[dict[str, Any]], None] = db.upsert_net_device,
+) -> int:
+    """Write each inventory device through ``upsert`` (injectable for tests).
+
+    Returns the count written. COALESCE in ``upsert_net_device`` means a later
+    classify/probe phase enriches the same row without churn.
+    """
+    for device in devices:
+        upsert(
+            {
+                "device_nid": device.nid,
+                "ip": device.ip,
+                "hostname": device.hostname,
+                "mac": device.mac,
+                "vendor": device.vendor,
+                "dev_type": device.dev_type,
+                "site_code": device.site_code,
+                "status": device.status,
+            }
+        )
+    return len(devices)
