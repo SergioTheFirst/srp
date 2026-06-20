@@ -167,6 +167,72 @@ CREATE TABLE IF NOT EXISTS printer_readings (
   detail       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_prn_readings ON printer_readings(printer_id, id);
+CREATE TABLE IF NOT EXISTS net_devices (
+  device_nid    TEXT PRIMARY KEY,
+  ip            TEXT,
+  hostname      TEXT,
+  mac           TEXT,
+  vendor        TEXT,
+  dev_type      TEXT,
+  sys_object_id TEXT,
+  model         TEXT,
+  serial        TEXT,
+  site_code     TEXT,
+  status        TEXT,
+  first_seen    TEXT,
+  last_seen     TEXT
+);
+CREATE TABLE IF NOT EXISTS net_interfaces (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_nid  TEXT,
+  if_index    INTEGER,
+  name        TEXT,
+  if_type     INTEGER,
+  speed_mbps  REAL,
+  oper_up     INTEGER,
+  phys_mac    TEXT,
+  last_seen   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netif_device ON net_interfaces(device_nid);
+CREATE TABLE IF NOT EXISTS net_links (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  a_nid       TEXT,
+  b_nid       TEXT,
+  a_if        INTEGER,
+  b_if        INTEGER,
+  link_kind   TEXT,
+  via_source  TEXT,
+  confidence  TEXT,
+  first_seen  TEXT,
+  last_seen   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_netlink_uniq ON net_links(a_nid, b_nid, link_kind);
+CREATE INDEX IF NOT EXISTS idx_netlink_a ON net_links(a_nid);
+CREATE INDEX IF NOT EXISTS idx_netlink_b ON net_links(b_nid);
+CREATE TABLE IF NOT EXISTS net_device_readings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_nid  TEXT,
+  received_at TEXT,
+  status      TEXT,
+  detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netread_device ON net_device_readings(device_nid, id);
+CREATE TABLE IF NOT EXISTS net_topology_snapshots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  received_at TEXT,
+  node_count  INTEGER,
+  link_count  INTEGER,
+  graph       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nettopo_ts ON net_topology_snapshots(id);
+CREATE TABLE IF NOT EXISTS net_changes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          TEXT,
+  device_nid  TEXT,
+  kind        TEXT,
+  detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netchg_ts ON net_changes(id);
 """
 
 
