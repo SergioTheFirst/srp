@@ -16,6 +16,7 @@ from server import db, org_directory
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
+from server.netdisco import scheduler as netdisco_scheduler
 from server.pipeline import ingest_envelope
 from server.printers import scheduler
 
@@ -95,6 +96,13 @@ def netdisco_devices(dev_type: Optional[str] = None, site: Optional[str] = None)
     """Persistent network-device inventory (netdisco phase 3), optionally filtered
     by device type (router/switch/ap/agent/endpoint/unknown) and site."""
     return {"devices": db.get_net_devices(dev_type=dev_type, site=site)}
+
+
+@router.post("/discovery/poll")
+def poll_discovery() -> dict:
+    """Force one netdisco inventory cycle now (dashboard button). Bounded by the
+    scheduler's anti-DoS lock -- a concurrent call returns busy, not a second pass."""
+    return netdisco_scheduler.poll_now()
 
 
 # ---------------------------------------------------------------------------
