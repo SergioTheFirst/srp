@@ -26,6 +26,14 @@ def test_netdisco_devices_endpoint_filters_by_type(client: TestClient) -> None:
     assert [d["device_nid"] for d in resp.json()["devices"]] == ["nd-mac-AA"]
 
 
+def test_netdisco_devices_endpoint_filters_by_site(client: TestClient) -> None:
+    db.upsert_net_device({"device_nid": "nd-mac-AA", "dev_type": "switch", "site_code": "HQ"})
+    db.upsert_net_device({"device_nid": "nd-mac-BB", "dev_type": "switch", "site_code": "BR"})
+    resp = client.get("/api/v1/netdisco/devices?site=HQ")
+    assert resp.status_code == 200
+    assert [d["device_nid"] for d in resp.json()["devices"]] == ["nd-mac-AA"]
+
+
 def test_netdisco_devices_endpoint_empty_when_no_inventory(client: TestClient) -> None:
     resp = client.get("/api/v1/netdisco/devices")
     assert resp.status_code == 200

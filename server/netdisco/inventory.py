@@ -101,7 +101,9 @@ def _add_neighbors(
             if mac and mac in agent_macs:
                 continue  # a known agent: already its own 'agent' device
             ip = neighbor.get("ip")
-            nid = device_nid(mac=neighbor.get("mac"), ip=ip)
+            # Use the already-normalised MAC (consistent with rec["mac"] / the
+            # agent-skip check); device_nid falls back to ip when it is None.
+            nid = device_nid(mac=mac, ip=ip)
             if nid == "nd-unknown":
                 continue
             rec = by_nid.setdefault(nid, _blank(nid))
@@ -146,6 +148,8 @@ def persist_inventory(
     Returns the count written. COALESCE in ``upsert_net_device`` means a later
     classify/probe phase enriches the same row without churn.
     """
+    # last_seen is stamped server-side by upsert_net_device; sources is a
+    # transient build artifact (no net_devices column).
     for device in devices:
         upsert(
             {
