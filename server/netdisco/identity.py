@@ -9,6 +9,7 @@ under any case/separator. Nothing usable -> ``nd-unknown`` (UNKNOWN over a guess
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Optional
 
 from server.analytics.oui import normalize_mac
@@ -29,6 +30,16 @@ def _norm_token(raw: Optional[str]) -> Optional[str]:
     return collapsed[:_TOKEN_MAX] or None
 
 
+def _valid_ip(ip: str) -> bool:
+    """True for a syntactically valid IPv4/IPv6 literal. The nid may become a
+    graph/DB key, so a non-address string is never embedded as one."""
+    try:
+        ipaddress.ip_address(ip.strip())
+    except ValueError:
+        return False
+    return True
+
+
 def device_nid(
     *,
     chassis_id: Optional[str] = None,
@@ -46,7 +57,7 @@ def device_nid(
     norm_mac = normalize_mac(mac)
     if norm_mac:
         return "nd-mac-" + norm_mac
-    if ip and ip.strip():
+    if ip and _valid_ip(ip):
         return "nd-ip-" + ip.strip()
     return "nd-unknown"
 

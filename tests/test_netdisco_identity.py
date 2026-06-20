@@ -60,3 +60,18 @@ def test_merge_identity_is_stable_at_equal_strength() -> None:
     assert merge_identity("nd-mac-AA-BB-CC-DD-EE-FF", "nd-mac-11-22-33-44-55-66") == (
         "nd-mac-AA-BB-CC-DD-EE-FF"
     )
+
+
+def test_unparseable_ip_fallback_collapses_to_unknown() -> None:
+    # nid may become a graph/DB key downstream: a non-IP string must never be
+    # embedded verbatim (review MEDIUM). Only a syntactically valid address keys.
+    assert device_nid(ip="../../etc/passwd") == "nd-unknown"
+    assert device_nid(ip="not.an.ip") == "nd-unknown"
+    assert device_nid(ip="999.999.999.999") == "nd-unknown"
+    assert device_nid(ip="10.0.0.5") == "nd-ip-10.0.0.5"  # valid still keys
+
+
+def test_merge_identity_keeps_old_when_new_scheme_is_unrecognised() -> None:
+    # A corrupted / future-scheme nid maps to strength 0 -> never demotes a known
+    # device (UNKNOWN over false confidence).
+    assert merge_identity("nd-mac-AA-BB-CC-DD-EE-FF", "garbage") == "nd-mac-AA-BB-CC-DD-EE-FF"
