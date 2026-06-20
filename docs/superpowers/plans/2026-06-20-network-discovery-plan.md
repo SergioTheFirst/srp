@@ -42,7 +42,7 @@
 **Файлы:** 3 новых модуля + 2 теста + `tests/netdisco/__init__.py`.
 **Порядок коммитов:** (1) пакет+models+test_models → (2) identity+test_identity.
 
-## Phase 2 — Topology storage (БД-слой) ⬜
+## Phase 2 — Topology storage (БД-слой) ✅ [merge 75942f3]
 **Цель:** персистентные таблицы + store/get-функции (зеркало `printers`/`printer_readings`).
 **Зависит от:** P1 (модели).
 **Задачи:**
