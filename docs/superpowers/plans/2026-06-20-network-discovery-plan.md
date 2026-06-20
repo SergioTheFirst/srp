@@ -98,7 +98,7 @@
 **Файлы:** 2 новых + 3 edit + 2 теста.
 **Порядок коммитов:** (1) config+test → (2) scheduler+test → (3) ServerConfig+main loop → (4) API force-poll+test.
 
-## Phase 5 — Generalized active scan (за флагом active_scan) ⬜
+## Phase 5 — Generalized active scan (за флагом active_scan) ✅ [merge c2b5c82]
 **Цель:** активный bounded-скан сегмента → IP-кандидаты «живых» хостов; влить в discovery. Все safety-рейлы `scan.py`.
 **Зависит от:** P4. **Security-review: ОБЯЗАТЕЛЕН (Opus).**
 **Задачи:**
