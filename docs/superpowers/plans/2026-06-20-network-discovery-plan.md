@@ -79,7 +79,7 @@
 **Файлы:** `inventory.py` + 2 теста + `api.py` (edit).
 **Порядок коммитов:** (1) build_inventory+test → (2) persist+test → (3) API+test.
 
-## Phase 4 — Config + Scheduler + background loop (OFF by default) ⬜
+## Phase 4 — Config + Scheduler + background loop (OFF by default) ✅ [merge 763dbd9]
 **Цель:** netdisco сам обновляет инвентарь по интервалу; каркас poll-type-петель; force-poll кнопка. Без новых probe (пока только rebuild из snapshots).
 **Зависит от:** P3.
 **Задачи:**
