@@ -90,6 +90,13 @@ def netmap() -> dict:
     return build_netmap(db.get_network_snapshots())
 
 
+@router.get("/netdisco/devices")
+def netdisco_devices(dev_type: Optional[str] = None, site: Optional[str] = None) -> dict:
+    """Persistent network-device inventory (netdisco phase 3), optionally filtered
+    by device type (router/switch/ap/agent/endpoint/unknown) and site."""
+    return {"devices": db.get_net_devices(dev_type=dev_type, site=site)}
+
+
 # ---------------------------------------------------------------------------
 # Print tracking endpoints
 # ---------------------------------------------------------------------------
