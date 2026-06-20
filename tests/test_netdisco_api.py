@@ -38,3 +38,23 @@ def test_netdisco_devices_endpoint_empty_when_no_inventory(client: TestClient) -
     resp = client.get("/api/v1/netdisco/devices")
     assert resp.status_code == 200
     assert resp.json()["devices"] == []
+
+
+def test_discovery_poll_runs_a_cycle(client: TestClient) -> None:
+    resp = client.post("/api/v1/discovery/poll")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["busy"] == 0
+    assert body["persisted"] >= 0  # empty fleet -> 0 devices, still a clean cycle
+
+
+def test_discovery_poll_returns_busy_when_a_cycle_is_running(client: TestClient) -> None:
+    from server.netdisco import scheduler
+
+    scheduler._poll_lock.acquire()  # simulate a cycle already in flight
+    try:
+        resp = client.post("/api/v1/discovery/poll")
+        assert resp.status_code == 200
+        assert resp.json()["busy"] == 1  # anti-DoS: no second concurrent pass
+    finally:
+        scheduler._poll_lock.release()
