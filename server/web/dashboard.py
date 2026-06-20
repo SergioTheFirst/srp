@@ -74,7 +74,7 @@ def fmt_age(sec: Optional[int]) -> str:
     if sec is None:
         return "—"
     if sec <= 0:
-        return "только что"
+        return "0с"
     if sec < 90:
         return f"{sec}с"
     if sec < 5400:
