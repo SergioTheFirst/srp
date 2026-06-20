@@ -58,3 +58,11 @@ def test_discovery_poll_returns_busy_when_a_cycle_is_running(client: TestClient)
         assert resp.json()["busy"] == 1  # anti-DoS: no second concurrent pass
     finally:
         scheduler._poll_lock.release()
+
+
+def test_discovery_poll_is_rate_limited_after_a_burst(client: TestClient) -> None:
+    # P4 carry-forward: the force button is unauthenticated, so it must be rate-
+    # limited (before P5's active scan can ever sit behind its lock).
+    assert client.post("/api/v1/discovery/poll").status_code == 200  # within budget
+    statuses = {client.post("/api/v1/discovery/poll").status_code for _ in range(40)}
+    assert 429 in statuses  # the flood is throttled
