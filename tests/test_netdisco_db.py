@@ -178,3 +178,84 @@ def test_store_net_change_appends(tmp_path: Path) -> None:
     rows = _rows(p, "SELECT kind, device_nid, detail FROM net_changes")
     assert rows[0]["kind"] == "appeared"
     assert json.loads(rows[0]["detail"])["ip"] == "10.0.0.5"
+
+
+# --------------------------------------------------------------------------- #
+# Readers
+# --------------------------------------------------------------------------- #
+def test_get_net_devices_lists_and_filters_by_type(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_device({"device_nid": "nd-1", "dev_type": "switch", "ip": "10.0.0.1"})
+    db.upsert_net_device({"device_nid": "nd-2", "dev_type": "endpoint", "ip": "10.0.0.2"})
+    assert {d["device_nid"] for d in db.get_net_devices()} == {"nd-1", "nd-2"}
+    assert [d["device_nid"] for d in db.get_net_devices(dev_type="switch")] == ["nd-1"]
+
+
+def test_get_net_device_includes_interfaces_and_links(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_device({"device_nid": "nd-a", "ip": "10.0.0.1"})
+    db.upsert_net_device({"device_nid": "nd-b", "ip": "10.0.0.2"})
+    db.store_net_interfaces("nd-a", [{"if_index": 1, "name": "eth0", "oper_up": True}])
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-a",
+            "b_nid": "nd-b",
+            "link_kind": "l2-edge",
+            "via_source": "lldp",
+            "confidence": "high",
+        }
+    )
+    dev = db.get_net_device("nd-a")
+    assert dev is not None
+    assert dev["device_nid"] == "nd-a"
+    assert [i["name"] for i in dev["interfaces"]] == ["eth0"]
+    assert len(dev["links"]) == 1 and dev["links"][0]["via_source"] == "lldp"
+    assert db.get_net_device("nope") is None
+
+
+def test_get_net_links_returns_all(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-a",
+            "b_nid": "nd-b",
+            "link_kind": "l2-edge",
+            "via_source": "lldp",
+            "confidence": "high",
+        }
+    )
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-b",
+            "b_nid": "nd-c",
+            "link_kind": "l2-edge",
+            "via_source": "fdb_edge",
+            "confidence": "medium",
+        }
+    )
+    assert len(db.get_net_links()) == 2
+
+
+def test_get_latest_topology_snapshot(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    assert db.get_latest_topology_snapshot() is None  # empty DB
+    db.store_topology_snapshot({"nodes": [{"nid": "a"}], "links": [], "seq": 0})
+    db.store_topology_snapshot({"nodes": [{"nid": "a"}, {"nid": "b"}], "links": [], "seq": 1})
+    snap = db.get_latest_topology_snapshot()
+    assert snap is not None
+    assert snap["node_count"] == 2  # newest snapshot
+    assert snap["graph"]["seq"] == 1
+
+
+def test_get_net_changes_returns_recent_parsed(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.store_net_change("appeared", device_nid="nd-a", detail={"x": 1})
+    changes = db.get_net_changes(days=30)
+    assert len(changes) == 1
+    assert changes[0]["kind"] == "appeared"
+    assert changes[0]["detail"]["x"] == 1  # detail JSON parsed back to a dict

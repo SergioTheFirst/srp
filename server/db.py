@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -878,6 +878,92 @@ def store_net_change(
             "INSERT INTO net_changes (ts, device_nid, kind, detail) VALUES (?,?,?,?)",
             (stamp, device_nid, kind, json.dumps(detail or {})),
         )
+
+
+def get_net_devices(
+    dev_type: Optional[str] = None, site: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """Network-device inventory, optionally filtered by type / site (filtered in
+    Python -- net inventories are small, and it keeps the SQL injection-free)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM net_devices ORDER BY COALESCE(hostname, ip, device_nid)"
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    if dev_type:
+        out = [d for d in out if d.get("dev_type") == dev_type]
+    if site:
+        out = [d for d in out if d.get("site_code") == site]
+    return out
+
+
+def get_net_device(device_nid: str) -> Optional[dict[str, Any]]:
+    """One network device + its interfaces + every link it participates in."""
+    with _connect() as conn:
+        drow = conn.execute(
+            "SELECT * FROM net_devices WHERE device_nid=?", (device_nid,)
+        ).fetchone()
+        if drow is None:
+            return None
+        ifaces = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_interfaces WHERE device_nid=? ORDER BY if_index", (device_nid,)
+            ).fetchall()
+        ]
+        links = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_links WHERE a_nid=? OR b_nid=? ORDER BY id",
+                (device_nid, device_nid),
+            ).fetchall()
+        ]
+    dev = dict(drow)
+    dev["interfaces"] = ifaces
+    dev["links"] = links
+    return dev
+
+
+def get_net_links() -> list[dict[str, Any]]:
+    """Every resolved topology link (read side for the graph engine / map)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM net_links ORDER BY id").fetchall()]
+
+
+def get_latest_topology_snapshot() -> Optional[dict[str, Any]]:
+    """The newest stored topology snapshot (parsed graph), or None when absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT received_at, node_count, link_count, graph FROM net_topology_snapshots "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "received_at": row["received_at"],
+        "node_count": row["node_count"],
+        "link_count": row["link_count"],
+        "graph": json.loads(row["graph"]) if row["graph"] else {},
+    }
+
+
+def get_net_changes(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
+    """Topology-change journal within the last *days* (newest first, capped).
+
+    Cutoff is a parameterised ISO timestamp (no SQL string interpolation)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, days))).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ts, device_nid, kind, detail FROM net_changes WHERE ts >= ? "
+            "ORDER BY id DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["detail"] = json.loads(d["detail"]) if d["detail"] else {}
+        out.append(d)
+    return out
 
 
 # --------------------------------------------------------------------------- #
