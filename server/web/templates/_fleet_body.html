@@ -59,7 +59,7 @@
   <table>
     <thead>
       <tr>
-        <th>Устройство</th>
+        <th class="sortable" data-col="0" data-sort="text"><span>Устройство</span><span class="sort-icon"></span></th>
         <th>Статус</th>
         <th class="sortable" data-col="2"><span>П</span><span class="sort-icon"></span></th>
         <th class="sortable" data-col="3"><span>Н</span><span class="sort-icon"></span></th>
@@ -69,6 +69,7 @@
         <th>Сертификат</th>
         <th title="страниц за сегодня">Печать</th>
         <th>Связь</th>
+        <th title="локальный IP — клик копирует">IP</th>
         <th></th>
       </tr>
     </thead>
@@ -81,7 +82,7 @@
         data-risk="{{ d.risk_exposure or 0 }}">
 
       {# ── Device name + identity sub-line ─────────────────────────────── #}
-      <td>
+      <td data-name="{{ (d.hostname or d.device_id)|lower }}">
         <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
         <div class="dev-sub2">
           {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
@@ -147,6 +148,15 @@
       {# ── Last seen ────────────────────────────────────────────────────── #}
       <td class="mono" title="{{ d.last_seen or '' }}">
         {{ fmt_age(d.last_seen_age_sec) }}
+      </td>
+
+      {# ── Local IP (click to copy) ─────────────────────────────────────── #}
+      <td class="mono">
+        {% if d.local_ip %}
+          <span class="ip-copy" data-ip="{{ d.local_ip }}" title="скопировать IP">{{ d.local_ip }}</span>
+        {% else %}
+          <span class="muted">—</span>
+        {% endif %}
       </td>
 
       {# ── Ack ──────────────────────────────────────────────────────────── #}

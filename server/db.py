@@ -806,6 +806,27 @@ def get_ack(device_id: str) -> Optional[dict[str, Any]]:
     return {"note": row["note"], "acked_at": row["acked_at"]} if row else None
 
 
+def _primary_ip(hist_payload: Optional[str]) -> Optional[str]:
+    """First IPv4 of the device's primary adapter (fleet IP column, display-only).
+
+    Read from the latest historical payload's ``network_adapters``; only RFC1918
+    addresses ever leave the agent, so this is local-LAN context, not PII.
+    """
+    if not hist_payload:
+        return None
+    try:
+        payload = json.loads(hist_payload)
+    except (ValueError, TypeError):
+        return None
+    for adapter in (payload.get("network_adapters") or [])[:64]:
+        if not isinstance(adapter, dict):
+            continue
+        for ip in adapter.get("ipv4") or []:
+            if isinstance(ip, str) and ip:
+                return ip
+    return None
+
+
 def get_devices() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
@@ -840,6 +861,7 @@ def get_devices() -> list[dict[str, Any]]:
                 "chassis": r["chassis"],
                 "last_seen": r["last_seen"],
                 "last_seen_age_sec": age,
+                "local_ip": _primary_ip(r["hist_payload"]),
                 "stale": age is not None and age > _STALE_AFTER_SEC,
                 "last_reported_ts": r["last_reported_ts"],
                 "clock_drift_sec": r["clock_drift_sec"],

@@ -86,7 +86,7 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .devrow.escalated { animation: escalate-flash 2.5s ease-in-out 3; }
 @keyframes escalate-flash {
   0%,100% { background: transparent; }
-  40%     { background: rgba(244,63,94,.1); }
+  40%     { background: var(--bad-dim); }
 }
 
 /* ── Alerts / badges ───────────────────────────────────────────────────── */
@@ -99,7 +99,7 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 .badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.3); }
 .badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.3); }
 .badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.3); }
-.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.3); }
+.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: var(--bad-dim); }
 .badge.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(51,78,104,.4); }
 
 /* ── Trend cell ────────────────────────────────────────────────────────── */
@@ -154,15 +154,26 @@ tbody td .chip.bad,
 tbody td .chip.na,
 tbody td .chip.accent { color: #ffe000; }
 
-/* Trend arrows */
-tbody td .trend-up,
+/* Trend arrows — worsening arrow rendered as a high-contrast highlight */
 tbody td .trend-flat,
 tbody td .trend-none { font-size: 15px; }
+tbody td .trend-up {
+  display: inline-block;
+  font: 800 16px/1 var(--mono);
+  padding: 1px 7px; border-radius: 3px;
+  background: var(--bad); color: #000;
+}
+.ip-copy {
+  cursor: pointer; color: var(--text);
+  border-bottom: 1px dashed var(--line-2); transition: color .12s, border-color .12s;
+}
+.ip-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.ip-copy.copied { color: var(--good); border-bottom-color: var(--good); }
 
 /* Status badges — compact */
 .badge { font-size: 12px; padding: 2px 7px; }
 .badge.warn { background: rgba(245,158,11,.82); color: #fff; border-color: var(--warn); }
-.badge.bad  { background: rgba(244,63,94,.82);  color: #fff; border-color: var(--bad); }
+.badge.bad  { background: var(--bad); color: #000; border-color: var(--bad); }
 .badge.high { background: rgba(249,115,22,.82); color: #fff; border-color: var(--high); }
 .badge.good { background: rgba(16,217,122,.82); color: #fff; border-color: var(--good); }
 .badge.na   { background: rgba(88,120,160,.3);  color: #cce4f8; border-color: rgba(88,120,160,.65); }
@@ -176,6 +187,9 @@ tbody td .trend-none { font-size: 15px; }
 }
 
 /* ─── Meta theme overrides (fleet) ─────────────────────────────────────── */
+/* Light theme keeps red for "bad" (the no-red rule is dark-theme only). */
+[data-theme="meta"] .badge.bad { background: rgba(228,30,63,.82); color: #fff; border-color: var(--bad); }
+[data-theme="meta"] tbody td .trend-up { background: var(--bad); color: #fff; }
 [data-theme="meta"] tbody td { color: var(--text); }
 [data-theme="meta"] tbody td a { color: var(--text); font-weight: 700; }
 [data-theme="meta"] tbody td a:hover { color: var(--accent); }
@@ -307,7 +321,7 @@ tbody td .trend-none { font-size: 15px; }
          autocomplete="off" spellcheck="false">
   <div class="live-indicator">
     <span class="dot" id="livedot"></span>
-    <span id="liveinfo" class="muted small">обновлено только что</span>
+    <span id="liveinfo" class="muted small">обновлено 0с назад</span>
   </div>
   <button id="purgebtn" class="toolbtn" type="button"
           title="удалить из базы машины, давно не выходившие на связь">Очистить офлайн…</button>
@@ -384,8 +398,14 @@ function makeSortable() {
       th.classList.add(goAsc ? "asc" : "desc");
       var tbody = table.querySelector("tbody");
       var rows  = Array.from(tbody.querySelectorAll("tr.devrow"));
+      var isText = th.getAttribute("data-sort") === "text";
       rows.sort(function (a, b) {
         var tds = function (r) { return r.querySelectorAll("td"); };
+        if (isText) {
+          var an = tds(a)[col].getAttribute("data-name") || "";
+          var bn = tds(b)[col].getAttribute("data-name") || "";
+          return goAsc ? an.localeCompare(bn, "ru") : bn.localeCompare(an, "ru");
+        }
         var av  = parseFloat(tds(a)[col].getAttribute("data-val") || "0") || 0;
         var bv  = parseFloat(tds(b)[col].getAttribute("data-val") || "0") || 0;
         return goAsc ? av - bv : bv - av;
@@ -433,7 +453,31 @@ function refresh() {
 }
 
 // ── KPI click + ack (delegated) ───────────────────────────────────────────
+function copyIp(span) {
+  var ip = span.getAttribute("data-ip") || "";
+  if (!ip) return;
+  var done = function () {
+    span.classList.add("copied");
+    setTimeout(function () { span.classList.remove("copied"); }, 1100);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ip).then(done).catch(function () { legacyCopy(ip, done); });
+  } else {
+    legacyCopy(ip, done);
+  }
+}
+function legacyCopy(text, done) {
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); document.body.removeChild(ta); done();
+  } catch (err) {}
+}
+
 fleet.addEventListener("click", function (e) {
+  var ipc = e.target.closest(".ip-copy");
+  if (ipc) { copyIp(ipc); return; }
   var kpi = e.target.closest(".kpi[data-filter]");
   if (kpi) {
     var f = kpi.getAttribute("data-filter");
@@ -496,7 +540,7 @@ setInterval(refresh, POLL_MS);
 setInterval(function () {
   var s = Math.round((Date.now() - lastUpdate) / 1000);
   if (s > 20) livedot.classList.add("stale"); else livedot.classList.remove("stale");
-  liveinfo.textContent = s < 2 ? "обновлено только что" : "обновлено " + s + "с назад";
+  liveinfo.textContent = "обновлено " + (s < 0 ? 0 : s) + "с назад";
 }, 1000);
 
 // Init
