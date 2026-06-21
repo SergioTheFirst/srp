@@ -29,3 +29,23 @@ def test_discovery_cycle_glue_logs_on_new_devices(monkeypatch: pytest.MonkeyPatc
         lambda _cfg: {"discovered": 2, "scanned": 5, "active": 1, "busy": 0},
     )
     main._run_netdisco_discovery_cycle(_CFG)  # exercises the success/log branch
+
+
+# --- Phase 6: classify-cycle glue must self-guard too ---
+
+
+def test_classify_cycle_glue_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(_cfg: object) -> dict:
+        raise RuntimeError("probe blew up")
+
+    monkeypatch.setattr(main.netdisco_scheduler, "run_classify_cycle", boom)
+    main._run_netdisco_classify_cycle(_CFG)  # must not raise
+
+
+def test_classify_cycle_glue_logs_on_classified(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main.netdisco_scheduler,
+        "run_classify_cycle",
+        lambda _cfg: {"classified": 3, "probed": 5, "busy": 0},
+    )
+    main._run_netdisco_classify_cycle(_CFG)  # exercises the success/log branch

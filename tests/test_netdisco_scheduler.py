@@ -108,3 +108,142 @@ def test_run_discovery_cycle_returns_busy_when_locked() -> None:
         assert result["busy"] == 1 and result["discovered"] == 0
     finally:
         scheduler._poll_lock.release()
+
+
+# --- Phase 6: classify cycle (probe known -> classify -> upsert type + ifaces) ---
+
+from server.analytics.oui import normalize_mac  # noqa: E402
+from server.netdisco.models import DeviceProfile, NetInterface  # noqa: E402
+
+
+def _router_profile(ip: str = "10.0.0.1") -> DeviceProfile:
+    return DeviceProfile(
+        ip=ip,
+        responded=True,
+        ip_forwarding=True,
+        sys_descr="RouterOS 7",
+        sys_object_id="1.3.6.1.4.1.14988.1",
+        interfaces=(NetInterface(if_index=1, name="ether1", if_type=6),),
+    )
+
+
+def test_classify_cycle_is_noop_when_disabled() -> None:
+    cfg = NetdiscoConfig(enabled=False)
+
+    def boom(_ip: str, _sess: object) -> DeviceProfile:
+        raise AssertionError("probed while netdisco disabled")
+
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [{"device_nid": "n", "ip": "10.0.0.1", "dev_type": "endpoint"}],
+        get_agent_macs=lambda: set(),
+        probe_fn=boom,
+    )
+    assert result == {"classified": 0, "probed": 0, "busy": 0}
+
+
+def test_classify_cycle_probes_unclassified_and_sets_type() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+    ups: list[dict[str, Any]] = []
+    ifaces: list[tuple[str, list]] = []
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [
+            {"device_nid": "n1", "ip": "10.0.0.1", "dev_type": "endpoint", "status": "discovered"}
+        ],
+        get_agent_macs=lambda: set(),
+        probe_fn=lambda ip, sess: _router_profile(ip),
+        session_factory=lambda ip, c: object(),
+        upsert=ups.append,
+        store_interfaces=lambda nid, rows: ifaces.append((nid, rows)),
+    )
+    assert result == {"classified": 1, "probed": 1, "busy": 0}
+    assert ups[0]["device_nid"] == "n1" and ups[0]["dev_type"] == "router"
+    assert ups[0]["status"] == "up" and ups[0]["model"] == "RouterOS 7"
+    assert ifaces[0][0] == "n1" and len(ifaces[0][1]) == 1
+
+
+def test_classify_cycle_skips_already_classified_infra() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+
+    def boom(_ip: str, _sess: object) -> DeviceProfile:
+        raise AssertionError("re-probed an already-classified switch")
+
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [{"device_nid": "s", "ip": "10.0.0.2", "dev_type": "switch"}],
+        get_agent_macs=lambda: set(),
+        probe_fn=boom,
+    )
+    assert result["probed"] == 0 and result["classified"] == 0
+
+
+def test_classify_cycle_skips_our_own_agents() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+    amac = normalize_mac("aa:bb:cc:dd:ee:ff")
+
+    def boom(_ip: str, _sess: object) -> DeviceProfile:
+        raise AssertionError("probed our own agent machine")
+
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [
+            {
+                "device_nid": "a",
+                "ip": "10.0.0.3",
+                "dev_type": "endpoint",
+                "mac": "AA:BB:CC:DD:EE:FF",
+            }
+        ],
+        get_agent_macs=lambda: {amac},
+        probe_fn=boom,
+    )
+    assert result["probed"] == 0
+
+
+def test_classify_cycle_skips_non_rfc1918() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+
+    def boom(_ip: str, _sess: object) -> DeviceProfile:
+        raise AssertionError("probed a public IP")
+
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [{"device_nid": "p", "ip": "8.8.8.8", "dev_type": "endpoint"}],
+        get_agent_macs=lambda: set(),
+        probe_fn=boom,
+    )
+    assert result["probed"] == 0
+
+
+def test_classify_cycle_silent_host_is_endpoint_via_inventory_mac() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+    ups: list[dict[str, Any]] = []
+    result = scheduler.run_classify_cycle(
+        cfg,
+        get_known=lambda: [
+            {"device_nid": "e", "ip": "10.0.0.4", "dev_type": "unknown", "mac": "00:1b:44:11:3a:b7"}
+        ],
+        get_agent_macs=lambda: set(),
+        probe_fn=lambda ip, sess: DeviceProfile(ip=ip, responded=False),
+        session_factory=lambda ip, c: object(),
+        upsert=ups.append,
+        store_interfaces=lambda nid, rows: None,
+    )
+    assert result["classified"] == 1
+    assert ups[0]["dev_type"] == "endpoint"  # silent, but seen on the LAN (inventory MAC)
+
+
+def test_classify_cycle_returns_busy_when_locked() -> None:
+    cfg = NetdiscoConfig(enabled=True)
+    scheduler._poll_lock.acquire()
+    try:
+        result = scheduler.run_classify_cycle(
+            cfg,
+            get_known=lambda: [{"device_nid": "n", "ip": "10.0.0.1", "dev_type": "endpoint"}],
+            get_agent_macs=lambda: set(),
+            probe_fn=lambda ip, sess: _router_profile(),
+        )
+        assert result["busy"] == 1 and result["classified"] == 0
+    finally:
+        scheduler._poll_lock.release()

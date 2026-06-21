@@ -166,6 +166,32 @@ async def _netdisco_discovery_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+def _run_netdisco_classify_cycle(cfg: ServerConfig) -> None:
+    """Run one SNMP classify cycle (via to_thread). Self-guarded so a transient
+    probe error never crashes startup or kills the loop."""
+    try:
+        result = netdisco_scheduler.run_classify_cycle(cfg.netdisco_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco classify cycle failed")
+        return
+    if result.get("classified"):
+        _ndlog.info(
+            "netdisco classify: %d device(s) typed from %d probed",
+            result["classified"],
+            result.get("probed", 0),
+        )
+
+
+async def _netdisco_classify_loop(cfg: ServerConfig) -> None:
+    """SNMP-probe and classify the known hosts every interval (+jitter). Started
+    when netdisco is enabled (unicast probes of known hosts, not a range scan)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.classify_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_classify_cycle, cfg)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -188,6 +214,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             tasks.append(asyncio.create_task(_printer_poll_loop(cfg)))
         if cfg.netdisco_enabled:
             tasks.append(asyncio.create_task(_netdisco_loop(cfg)))
+            tasks.append(asyncio.create_task(_netdisco_classify_loop(cfg)))
             # active scan is double-gated: netdisco on AND the active_scan stop-gate
             if cfg.netdisco_config().active_scan:
                 tasks.append(asyncio.create_task(_netdisco_discovery_loop(cfg)))

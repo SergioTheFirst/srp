@@ -120,3 +120,13 @@ def test_snmp_version_only_0_or_1() -> None:
 def test_discovery_interval_clamped_to_floor() -> None:
     assert load_netdisco_config({"discovery_interval_sec": 5}).discovery_interval_sec == 60
     assert load_netdisco_config({"discovery_interval_sec": 1800}).discovery_interval_sec == 1800
+
+
+# --- Phase 6: classify interval (rare loop, clamped to the floor) ---
+
+
+def test_classify_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).classify_interval_sec == 3600  # rare by default
+    assert load_netdisco_config({"classify_interval_sec": 5}).classify_interval_sec == 60
+    assert load_netdisco_config({"classify_interval_sec": 7200}).classify_interval_sec == 7200
+    assert load_netdisco_config({"classify_interval_sec": "x"}).classify_interval_sec == 3600
