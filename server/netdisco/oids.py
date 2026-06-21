@@ -42,6 +42,23 @@ IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"
 # the OID suffix (+ ifIndex from the value) in a single walk.
 IP_CIDR_ROUTE_IF_INDEX = "1.3.6.1.2.1.4.24.4.1.5"
 
+# --- P8 topology evidence: LLDP / CDP / bridge-FDB / STP --------------------
+# LLDP-MIB (IEEE 802.1AB), lldpRemTable columns. Index = lldpRemTimeMark.
+# lldpRemLocalPortNum.lldpRemIndex, so the local port number rides in the OID
+# suffix. Authoritative neighbour source (standards-based).
+LLDP_REM_CHASSIS_ID = "1.0.8802.1.1.2.1.4.1.1.5"  # remote chassis id (often a MAC)
+LLDP_REM_PORT_ID = "1.0.8802.1.1.2.1.4.1.1.7"  # remote port id
+# CISCO-CDP-MIB cdpCacheTable columns. Index = cdpCacheIfIndex.cdpCacheDeviceIndex,
+# so the local ifIndex rides in the OID suffix. Cisco-only, high authority.
+CDP_CACHE_DEVICE_ID = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"  # remote device id (text)
+CDP_CACHE_DEVICE_PORT = "1.3.6.1.4.1.9.9.23.1.2.1.1.7"  # remote port (text)
+# BRIDGE-MIB: bridge port -> ifIndex (resolves the FDB port number to an ifTable
+# interface). dot1dTpFdbPort (MAC -> bridge port) is defined above.
+DOT1D_BASE_PORT_IF_INDEX = "1.3.6.1.2.1.17.1.4.1.2"
+# STP: designated bridge per port -- disambiguates uplink direction ("who is
+# higher") during fusion (P9). Defined here with the rest of the topology OIDs.
+DOT1D_STP_PORT_DESIGNATED_BRIDGE = "1.3.6.1.2.1.17.2.15.1.8"
+
 # --- Printer-MIB root (presence => printer, via printers.classify.is_printer)
 PRINTER_MIB = "1.3.6.1.2.1.43"
 
