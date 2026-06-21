@@ -13,5 +13,18 @@
     "active_scan": true,
     "scan_cidrs": [],
     "scan_max_hosts": 4096
+  },
+  "netdisco_enabled": true,
+  "netdisco": {
+    "enabled": true,
+    "active_scan": true,
+    "inventory_interval_sec": 900,
+    "discovery_interval_sec": 900,
+    "classify_interval_sec": 3600,
+    "snmp_community": "public",
+    "snmp_version": 1,
+    "static_ips": [],
+    "scan_cidrs": [],
+    "scan_max_hosts": 4096
   }
 }
