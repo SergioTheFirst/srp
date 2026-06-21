@@ -51,6 +51,24 @@ class DeviceProfile:
 
 
 @dataclass(frozen=True)
+class ResolvedLink:
+    """One topology edge after fusion (§4.4): the winning claim for a node pair.
+
+    ``a``/``b`` are stable node-ids (canonical order a <= b). ``via_source`` is the
+    winning evidence source, ``confidence`` its band (LOW when ``ambiguous`` -- a
+    contradiction was shown rather than resolved away). ``observed_at`` is the
+    freshest contributing observation, stamped by the topology cycle."""
+
+    a: str
+    b: str
+    via_source: str
+    confidence: str
+    link_kind: str = "l2-edge"
+    ambiguous: bool = False
+    observed_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class NetDevice:
     """A discovered network device. ``nid`` is the stable identity (see
     ``identity.device_nid``); everything else is best-effort and may be None."""
