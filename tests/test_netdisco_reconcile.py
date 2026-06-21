@@ -84,11 +84,11 @@ def test_cycle_skips_non_rfc1918_infra():
 def test_cycle_idempotent_rerun_does_not_duplicate_links(tmp_path: Path):
     db.init_db(tmp_path / "srp.db")
     db.upsert_net_device(_switch())
-    kwargs = dict(
-        get_known=db.get_net_devices,
-        session_factory=lambda ip, cfg: object(),
-        collect=_fake_collect,
-    )
+    kwargs = {
+        "get_known": db.get_net_devices,
+        "session_factory": lambda ip, cfg: object(),
+        "collect": _fake_collect,
+    }
     reconcile.run_topology_cycle(NetdiscoConfig(enabled=True), **kwargs)
     assert len(db.get_net_links()) == 1
     reconcile.run_topology_cycle(NetdiscoConfig(enabled=True), **kwargs)

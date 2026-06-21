@@ -80,6 +80,16 @@ def test_one_port_two_equal_source_neighbours_is_ambiguous_low():
     assert all(link.ambiguous and link.confidence == evidence.LOW for link in out)
 
 
+def test_winner_tiebreak_deterministic_across_equal_priority_sources():
+    # "route" and "fdb_edge" share priority 3; with equal freshness the winner must
+    # not depend on input order (forward-proofing for route/arp evidence in P10+).
+    e_route = _ev(SW1, HOSTMAC, "route", evidence.HIGH, 3)
+    e_fdb = _ev(SW1, HOSTMAC, evidence.SOURCE_FDB_EDGE, evidence.HIGH, 3)
+    assert (
+        fusion.fuse([e_route, e_fdb])[0].via_source == fusion.fuse([e_fdb, e_route])[0].via_source
+    )
+
+
 def test_empty_evidence_yields_empty_graph():
     assert fusion.fuse([]) == []
 

@@ -97,7 +97,7 @@ def fuse(evidence: List[LinkEvidence]) -> List[ResolvedLink]:
 
     out: List[ResolvedLink] = []
     for pair, evs in groups.items():
-        winner = max(evs, key=lambda e: (_priority(e.source), e.observed_at or ""))
+        winner = max(evs, key=lambda e: (_priority(e.source), e.observed_at or "", e.source))
         node_a, node_b = sorted(pair)
         ambiguous = any(
             e.local_if is not None and (_node_id(e.a), e.local_if) in conflicted for e in evs
