@@ -239,6 +239,47 @@ def test_get_net_links_returns_all(tmp_path: Path) -> None:
     assert len(db.get_net_links()) == 2
 
 
+def _edge(a: str, b: str, source: str = "fdb_edge", kind: str = "l2-edge") -> dict:
+    return {"a_nid": a, "b_nid": b, "link_kind": kind, "via_source": source, "confidence": "high"}
+
+
+def test_replace_net_links_round_trip_and_idempotent_rerun(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    links = [
+        _edge("nd-chassis-sw1", "nd-mac-aa"),
+        _edge("nd-chassis-sw1", "nd-chassis-sw2", "lldp"),
+    ]
+    db.replace_net_links(links, {"nd-chassis-sw1"})
+    assert len(db.get_net_links()) == 2
+    db.replace_net_links(links, {"nd-chassis-sw1"})  # rerun must not duplicate
+    assert len(db.get_net_links()) == 2
+
+
+def test_replace_net_links_removes_vanished_links_of_probed_node(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.replace_net_links(
+        [_edge("nd-chassis-sw1", "nd-mac-aa"), _edge("nd-chassis-sw1", "nd-mac-bb")],
+        {"nd-chassis-sw1"},
+    )
+    assert len(db.get_net_links()) == 2
+    # next cycle sw1 only learns aa -> the bb link is dropped
+    db.replace_net_links([_edge("nd-chassis-sw1", "nd-mac-aa")], {"nd-chassis-sw1"})
+    got = db.get_net_links()
+    assert len(got) == 1 and got[0]["b_nid"] == "nd-mac-aa"
+
+
+def test_replace_net_links_keeps_links_of_unprobed_nodes(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.replace_net_links([_edge("nd-chassis-sw2", "nd-mac-cc")], {"nd-chassis-sw2"})
+    # probing sw1 must not delete sw2's link (sw2 was not in this cycle's node set)
+    db.replace_net_links([_edge("nd-chassis-sw1", "nd-mac-aa")], {"nd-chassis-sw1"})
+    pairs = {(link["a_nid"], link["b_nid"]) for link in db.get_net_links()}
+    assert pairs == {("nd-chassis-sw1", "nd-mac-aa"), ("nd-chassis-sw2", "nd-mac-cc")}
+
+
 def test_get_latest_topology_snapshot(tmp_path: Path) -> None:
     p = tmp_path / "srp.db"
     db.init_db(p)

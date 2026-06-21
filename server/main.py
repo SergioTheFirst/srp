@@ -22,6 +22,7 @@ from starlette.responses import Response
 from server import db, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
+from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.printers import scheduler
 from server.web.dashboard import router as web_router
@@ -192,6 +193,32 @@ async def _netdisco_classify_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+def _run_netdisco_topology_cycle(cfg: ServerConfig) -> None:
+    """Run one L2 topology reconcile cycle (via to_thread). Self-guarded so a
+    transient SNMP/DB error never crashes startup or kills the loop."""
+    try:
+        result = netdisco_reconcile.run_topology_cycle(cfg.netdisco_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco topology cycle failed")
+        return
+    if result.get("links"):
+        _ndlog.info(
+            "netdisco topology: %d link(s) from %d probed device(s)",
+            result["links"],
+            result.get("probed", 0),
+        )
+
+
+async def _netdisco_topology_loop(cfg: ServerConfig) -> None:
+    """Collect LLDP/CDP/FDB evidence off known infra and rebuild the L2 graph every
+    interval (+jitter). Started when netdisco is enabled (unicast SNMP, not a scan)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.topology_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_topology_cycle, cfg)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -215,6 +242,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         if cfg.netdisco_enabled:
             tasks.append(asyncio.create_task(_netdisco_loop(cfg)))
             tasks.append(asyncio.create_task(_netdisco_classify_loop(cfg)))
+            tasks.append(asyncio.create_task(_netdisco_topology_loop(cfg)))
             # active scan is double-gated: netdisco on AND the active_scan stop-gate
             if cfg.netdisco_config().active_scan:
                 tasks.append(asyncio.create_task(_netdisco_discovery_loop(cfg)))

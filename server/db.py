@@ -847,6 +847,64 @@ def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> 
         )
 
 
+def replace_net_links(
+    links: list[dict[str, Any]],
+    node_nids: set[str],
+    received_at: Optional[str] = None,
+) -> None:
+    """Idempotently replace the links incident to the probed nodes (§4.5 reconcile).
+
+    A topology cycle re-derives every link touching the nodes it probed this pass.
+    We delete only those nodes' now-vanished links and upsert the current ones
+    (canonical a_nid <= b_nid, ``first_seen`` preserved): a rerun never duplicates
+    rows, and a link between two nodes NOT probed this cycle is left untouched. All
+    SQL is parameterised -- only the IN-clause placeholder count is interpolated."""
+    recv = received_at or _now_iso()
+    nodes = sorted({n for n in node_nids if n})
+    canon: list[tuple[Any, ...]] = []
+    new_keys: set[tuple[Any, ...]] = set()
+    for link in links:
+        a, b = link.get("a_nid"), link.get("b_nid")
+        if not a or not b or a == b:
+            continue
+        a_if, b_if = link.get("a_if"), link.get("b_if")
+        if a > b:
+            a, b = b, a
+            a_if, b_if = b_if, a_if
+        kind = link.get("link_kind")
+        canon.append((a, b, a_if, b_if, kind, link.get("via_source"), link.get("confidence")))
+        new_keys.add((a, b, kind))
+    with _lock, _connect() as conn:
+        if nodes:
+            placeholders = ",".join("?" * len(nodes))
+            rows = conn.execute(
+                f"SELECT a_nid, b_nid, link_kind FROM net_links "  # nosec B608
+                f"WHERE a_nid IN ({placeholders}) OR b_nid IN ({placeholders})",
+                (*nodes, *nodes),
+            ).fetchall()
+            for a, b, kind in {(r[0], r[1], r[2]) for r in rows} - new_keys:
+                conn.execute(
+                    "DELETE FROM net_links WHERE a_nid=? AND b_nid=? AND link_kind IS ?",
+                    (a, b, kind),
+                )
+        for a, b, a_if, b_if, kind, via, conf in canon:
+            conn.execute(
+                """
+                INSERT INTO net_links
+                  (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence,
+                   first_seen, last_seen)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
+                  a_if       = COALESCE(excluded.a_if, net_links.a_if),
+                  b_if       = COALESCE(excluded.b_if, net_links.b_if),
+                  via_source = excluded.via_source,
+                  confidence = excluded.confidence,
+                  last_seen  = excluded.last_seen
+                """,
+                (a, b, a_if, b_if, kind, via, conf, recv, recv),
+            )
+
+
 def store_topology_snapshot(graph: dict[str, Any], received_at: Optional[str] = None) -> None:
     """Append a full topology snapshot (append-only graph history) and prune."""
     recv = received_at or _now_iso()

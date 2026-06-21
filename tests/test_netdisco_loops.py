@@ -49,3 +49,23 @@ def test_classify_cycle_glue_logs_on_classified(monkeypatch: pytest.MonkeyPatch)
         lambda _cfg: {"classified": 3, "probed": 5, "busy": 0},
     )
     main._run_netdisco_classify_cycle(_CFG)  # exercises the success/log branch
+
+
+# --- Phase 9: topology-cycle glue must self-guard too ---
+
+
+def test_topology_cycle_glue_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(_cfg: object) -> dict:
+        raise RuntimeError("topology blew up")
+
+    monkeypatch.setattr(main.netdisco_reconcile, "run_topology_cycle", boom)
+    main._run_netdisco_topology_cycle(_CFG)  # must not raise
+
+
+def test_topology_cycle_glue_logs_on_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main.netdisco_reconcile,
+        "run_topology_cycle",
+        lambda _cfg: {"links": 4, "probed": 2, "busy": 0},
+    )
+    main._run_netdisco_topology_cycle(_CFG)  # exercises the success/log branch
