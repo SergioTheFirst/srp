@@ -130,3 +130,10 @@ def test_classify_interval_default_and_clamp() -> None:
     assert load_netdisco_config({"classify_interval_sec": 5}).classify_interval_sec == 60
     assert load_netdisco_config({"classify_interval_sec": 7200}).classify_interval_sec == 7200
     assert load_netdisco_config({"classify_interval_sec": "x"}).classify_interval_sec == 3600
+
+
+def test_topology_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).topology_interval_sec == 3600  # L2 evidence is rare
+    assert load_netdisco_config({"topology_interval_sec": 5}).topology_interval_sec == 60
+    assert load_netdisco_config({"topology_interval_sec": 1800}).topology_interval_sec == 1800
+    assert load_netdisco_config({"topology_interval_sec": "x"}).topology_interval_sec == 3600

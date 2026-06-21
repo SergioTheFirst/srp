@@ -25,6 +25,7 @@ _MIN_INTERVAL_SEC = 60  # never refresh faster than this, whatever the config sa
 _DEFAULT_INVENTORY_INTERVAL_SEC = 900
 _DEFAULT_DISCOVERY_INTERVAL_SEC = 900
 _DEFAULT_CLASSIFY_INTERVAL_SEC = 3600  # SNMP probing is rare: classify once an hour
+_DEFAULT_TOPOLOGY_INTERVAL_SEC = 3600  # L2 evidence (LLDP/CDP/FDB) is rare: once an hour
 _DEFAULT_JITTER_SEC = 30
 
 _DEFAULT_SCAN_MAX_HOSTS = 4096  # hard cap on hosts enumerated per scan (anti-blast)
@@ -42,6 +43,7 @@ class NetdiscoConfig:
     inventory_interval_sec: int = _DEFAULT_INVENTORY_INTERVAL_SEC
     discovery_interval_sec: int = _DEFAULT_DISCOVERY_INTERVAL_SEC
     classify_interval_sec: int = _DEFAULT_CLASSIFY_INTERVAL_SEC
+    topology_interval_sec: int = _DEFAULT_TOPOLOGY_INTERVAL_SEC
     jitter_sec: int = _DEFAULT_JITTER_SEC  # de-phase the loop (anti-thundering-herd)
     # --- active scan (P5), OFF behind its own stop-gate ---
     active_scan: bool = False  # second gate: no range scanning until explicit True
@@ -99,6 +101,10 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
         _MIN_INTERVAL_SEC,
         _as_int(d.get("classify_interval_sec"), _DEFAULT_CLASSIFY_INTERVAL_SEC),
     )
+    topology_interval = max(
+        _MIN_INTERVAL_SEC,
+        _as_int(d.get("topology_interval_sec"), _DEFAULT_TOPOLOGY_INTERVAL_SEC),
+    )
     jitter = max(0, _as_int(d.get("jitter_sec"), _DEFAULT_JITTER_SEC))
     static = tuple(ip for ip in _as_str_list(d.get("static_ips")) if is_rfc1918(ip))
     scan_cidrs = tuple(c for c in _as_str_list(d.get("scan_cidrs")) if is_rfc1918_cidr(c))
@@ -116,6 +122,7 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
         inventory_interval_sec=interval,
         discovery_interval_sec=discovery_interval,
         classify_interval_sec=classify_interval,
+        topology_interval_sec=topology_interval,
         jitter_sec=jitter,
         active_scan=d.get("active_scan") is True,
         static_ips=static,
