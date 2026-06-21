@@ -253,7 +253,7 @@ class SnmpSession:
             retries=self.retries,
         )
 
-    def walk(self, base_oid: str) -> Dict[str, object]:
+    def walk(self, base_oid: str, *, max_rows: int = 512) -> Dict[str, object]:
         return snmp_walk(
             self.host,
             base_oid,
@@ -262,4 +262,5 @@ class SnmpSession:
             port=self.port,
             timeout=self.timeout,
             retries=self.retries,
+            max_rows=max_rows,
         )

@@ -28,6 +28,29 @@ class NetInterface:
 
 
 @dataclass(frozen=True)
+class DeviceProfile:
+    """What one SNMP probe learned about a host (phase 6 input to ``classify``).
+
+    Everything is best-effort: ``responded`` is False for an SNMP-mute host and
+    every other field stays at its UNKNOWN default. Signals are raw -- the type
+    decision lives entirely in ``classify`` (collector ⊥ semantic)."""
+
+    ip: str
+    responded: bool = False
+    sys_object_id: Optional[str] = None
+    sys_descr: Optional[str] = None
+    sys_name: Optional[str] = None
+    sys_services: Optional[int] = None  # numeric layer bitmask (language-independent)
+    ip_forwarding: Optional[bool] = None  # True iff ipForwarding == 1 (router)
+    bridge_address: Optional[str] = None  # dot1dBaseBridgeAddress present
+    has_fdb: bool = False  # non-empty forwarding DB (switch confirmation)
+    is_printer: bool = False  # printers.classify.is_printer on the Printer-MIB probe
+    serial: Optional[str] = None
+    interfaces: tuple[NetInterface, ...] = ()
+    macs: tuple[str, ...] = ()  # normalized phys MACs seen across the ifTable
+
+
+@dataclass(frozen=True)
 class NetDevice:
     """A discovered network device. ``nid`` is the stable identity (see
     ``identity.device_nid``); everything else is best-effort and may be None."""
