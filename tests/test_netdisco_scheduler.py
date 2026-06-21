@@ -110,6 +110,30 @@ def test_run_discovery_cycle_returns_busy_when_locked() -> None:
         scheduler._poll_lock.release()
 
 
+def test_run_discovery_cycle_harvests_arp_and_routes_from_infra_only() -> None:
+    cfg = NetdiscoConfig(active_scan=True)
+    captured: list[dict[str, Any]] = []
+    sessions_for: list[str] = []
+    known = [
+        {"device_nid": "rtr", "ip": "10.0.0.1", "dev_type": "router"},
+        {"device_nid": "ep", "ip": "10.0.0.2", "dev_type": "endpoint"},  # not harvested
+    ]
+    result = scheduler.run_discovery_cycle(
+        cfg,
+        scan_fn=lambda c: [],
+        get_snapshots=lambda: [],
+        get_known=lambda: known,
+        session_factory=lambda ip, c: sessions_for.append(ip) or ("sess", ip),
+        harvest_arp_fn=lambda s: [("10.0.0.50", "AA-BB-CC-00-00-50")],
+        harvest_routes_fn=lambda s: [("10.0.0.0/24", "10.0.0.99", 1)],
+        upsert=captured.append,
+    )
+    assert sessions_for == ["10.0.0.1"]  # only the router was harvested, not the endpoint
+    ips = {d["ip"] for d in captured}
+    assert "10.0.0.50" in ips and "10.0.0.99" in ips  # ARP neighbour + route next-hop found
+    assert result["active"] == 1 and result["busy"] == 0
+
+
 # --- Phase 6: classify cycle (probe known -> classify -> upsert type + ifaces) ---
 
 from server.analytics.oui import normalize_mac  # noqa: E402
