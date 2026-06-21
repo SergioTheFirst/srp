@@ -12,15 +12,23 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Callable, List
+from dataclasses import replace
+from typing import Any, Callable, List, Optional
 
 from server import db
-from server.analytics.oui import vendor_for_mac
+from server.analytics import netmap
+from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco import scan as scan_mod
+from server.netdisco import snmp_probe
+from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.discovery import gather_candidates
+from server.netdisco.drivers import select_driver
 from server.netdisco.identity import device_nid
 from server.netdisco.inventory import build_inventory, persist_inventory
+from server.netdisco.models import DeviceProfile
+from server.printers.discovery import is_rfc1918
+from server.printers.snmp import SnmpSession
 
 _log = logging.getLogger("srp.netdisco")
 _poll_lock = threading.Lock()  # serialize cycles: one inventory/discovery pass at a time
@@ -103,5 +111,103 @@ def run_discovery_cycle(
             )
             discovered += 1
         return {"discovered": discovered, "scanned": len(scan_ips), "active": 1, "busy": 0}
+    finally:
+        _poll_lock.release()
+
+
+# --- Phase 6: classify cycle (probe known hosts -> type + interfaces) -------
+
+_NEEDS_CLASSIFY = frozenset({"unknown", "endpoint"})  # firmly-typed devices are left alone
+
+AgentMacsFn = Callable[[], set]
+ProbeFn = Callable[[str, Any], DeviceProfile]
+SessionFactory = Callable[[str, NetdiscoConfig], Any]
+StoreInterfacesFn = Callable[[str, List[dict]], None]
+
+
+def _fleet_agent_macs() -> set:
+    """Every SRP agent's adapter MACs (identity layer) -- never probe our own."""
+    return set(netmap._agent_macs(db.get_network_snapshots()))
+
+
+def _make_session(ip: str, cfg: NetdiscoConfig) -> SnmpSession:
+    return SnmpSession(ip, community=cfg.snmp_community, version=cfg.snmp_version)
+
+
+def _iface_rows(profile: DeviceProfile) -> List[dict]:
+    return [
+        {
+            "if_index": i.if_index,
+            "name": i.name,
+            "if_type": i.if_type,
+            "speed_mbps": i.speed_mbps,
+            "oper_up": i.oper_up,
+            "phys_mac": i.phys_mac,
+        }
+        for i in profile.interfaces
+    ]
+
+
+def _device_update(nid: str, profile: DeviceProfile, dev_type: str, extras: dict) -> dict[str, Any]:
+    return {
+        "device_nid": nid,
+        "dev_type": dev_type,
+        "hostname": profile.sys_name,
+        "vendor": extras.get("vendor"),  # None -> COALESCE keeps the OUI vendor
+        "sys_object_id": profile.sys_object_id,
+        "model": extras.get("model") or profile.sys_descr,
+        "serial": extras.get("serial") or profile.serial,
+        "status": "up" if profile.responded else None,  # None -> keep the prior status
+    }
+
+
+def run_classify_cycle(
+    cfg: NetdiscoConfig,
+    *,
+    get_known: GetKnownFn = db.get_net_devices,
+    get_agent_macs: AgentMacsFn = _fleet_agent_macs,
+    probe_fn: ProbeFn = snmp_probe.probe_device,
+    session_factory: SessionFactory = _make_session,
+    select_driver_fn: Callable[[Optional[str]], Any] = select_driver,
+    classify_fn: Callable[[DeviceProfile, set], str] = classify,
+    upsert: UpsertFn = db.upsert_net_device,
+    store_interfaces: StoreInterfacesFn = db.store_net_interfaces,
+) -> dict[str, int]:
+    """SNMP-probe the not-yet-classified known hosts; set their type + interfaces.
+
+    Gated by ``cfg.enabled`` -- these are unicast probes of already-known RFC1918
+    hosts, so the active-scan stop-gate (range scanning) does not apply. Serialized
+    by the shared lock. Skips our own agents and already-classified infra (no
+    re-probe, no demotion). All dependencies injectable for tests."""
+    if not cfg.enabled:
+        return {"classified": 0, "probed": 0, "busy": 0}
+    if not _poll_lock.acquire(blocking=False):
+        return {"classified": 0, "probed": 0, "busy": 1}
+    try:
+        agent_macs = get_agent_macs()
+        probed = 0
+        classified = 0
+        for dev in get_known():
+            ip = dev.get("ip")
+            if not ip or not is_rfc1918(ip):
+                continue  # need an address, and only ever touch RFC1918 (defense-in-depth)
+            known_mac = normalize_mac(dev["mac"]) if dev.get("mac") else None
+            if known_mac and known_mac in agent_macs:
+                continue  # our own machine -> already 'agent' in the inventory
+            dev_type_now = dev.get("dev_type") or "unknown"
+            if dev_type_now not in _NEEDS_CLASSIFY and dev.get("status") != "discovered":
+                continue  # already firmly classified -> don't re-probe, don't demote
+            session = session_factory(ip, cfg)
+            profile = probe_fn(ip, session)
+            probed += 1
+            macs = profile.macs or ((known_mac,) if known_mac else ())
+            verdict = classify_fn(replace(profile, macs=macs), agent_macs)
+            extras = select_driver_fn(profile.sys_object_id)(
+                session, sys_object_id=profile.sys_object_id
+            )
+            upsert(_device_update(dev["device_nid"], profile, verdict, extras))
+            store_interfaces(dev["device_nid"], _iface_rows(profile))
+            classified += 1
+        return {"classified": classified, "probed": probed, "busy": 0}
     finally:
         _poll_lock.release()
