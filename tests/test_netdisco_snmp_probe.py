@@ -183,6 +183,34 @@ def test_probe_extracts_entphysical_serial():
     assert profile.serial == "FOC1234X5Y"
 
 
+# --- probe: defensive parsing of untrusted SNMP values ---------------------
+def test_iface_down_status_and_bad_length_mac_are_handled():
+    bad_mac = bytes([0x01, 0x02, 0x03, 0x04]).decode("latin-1")  # 4 octets, not a MAC
+    tables = {
+        oids.IF_DESCR: {f"{oids.IF_DESCR}.3": "eth2"},
+        oids.IF_TYPE: {f"{oids.IF_TYPE}.3": 6},
+        oids.IF_SPEED: {},  # absent speed -> None
+        oids.IF_PHYS_ADDRESS: {f"{oids.IF_PHYS_ADDRESS}.3": bad_mac},
+        oids.IF_OPER_STATUS: {f"{oids.IF_OPER_STATUS}.3": 2},  # down
+    }
+    session = FakeSession(scalars={oids.SYS_DESCR: "sw"}, tables=tables)
+    profile = snmp_probe.probe_device("10.0.0.11", session)
+    iface = profile.interfaces[0]
+    assert iface.oper_up is False
+    assert iface.speed_mbps is None
+    assert iface.phys_mac is None  # bad length -> dropped, never a wrong MAC
+    assert profile.macs == ()
+
+
+def test_serial_walk_with_only_empty_values_is_none():
+    session = FakeSession(
+        scalars={oids.SYS_DESCR: "sw"},
+        tables={oids.ENT_PHYSICAL_SERIAL: {f"{oids.ENT_PHYSICAL_SERIAL}.1": ""}},
+    )
+    profile = snmp_probe.probe_device("10.0.0.12", session)
+    assert profile.serial is None
+
+
 # --- the bounded-walk seam the probe relies on -----------------------------
 def test_snmp_session_walk_forwards_max_rows(monkeypatch):
     from server.printers import snmp as printer_snmp
