@@ -50,3 +50,27 @@ def test_gather_drops_non_rfc1918_hosts() -> None:
 
 def test_gather_empty_inputs_returns_empty() -> None:
     assert gather_candidates(arp_snapshots=[]) == []
+
+
+# --- Phase 7: SNMP-harvested ARP neighbours as an extra candidate source ---
+
+
+def test_gather_includes_harvested_arp_hosts() -> None:
+    cands = gather_candidates(
+        arp_snapshots=[],
+        harvest_arp=[("10.0.0.30", "AA-BB-CC-00-00-30"), ("192.168.1.40", None)],
+    )
+    by_ip = {c.ip: c for c in cands}
+    assert set(by_ip) == {"10.0.0.30", "192.168.1.40"}
+    assert "snmp-arp" in by_ip["10.0.0.30"].sources
+    assert by_ip["10.0.0.30"].mac == "AA-BB-CC-00-00-30"
+
+
+def test_gather_harvest_drops_public_and_dedups_with_arp() -> None:
+    snaps: list[dict[str, Any]] = [{"neighbors": [{"ip": "10.0.0.5", "mac": "AA-BB-CC-00-00-01"}]}]
+    cands = gather_candidates(
+        arp_snapshots=snaps,
+        harvest_arp=[("10.0.0.5", "AA-BB-CC-00-00-01"), ("8.8.8.8", None)],
+    )
+    by_ip = {c.ip: c for c in cands}
+    assert set(by_ip) == {"10.0.0.5"}  # public next-hop dropped, ARP dup not re-added

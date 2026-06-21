@@ -18,8 +18,8 @@ from typing import Any, Callable, List, Optional
 from server import db
 from server.analytics import netmap
 from server.analytics.oui import normalize_mac, vendor_for_mac
+from server.netdisco import harvest, snmp_probe
 from server.netdisco import scan as scan_mod
-from server.netdisco import snmp_probe
 from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.discovery import gather_candidates
@@ -65,6 +65,34 @@ def poll_now() -> dict[str, int]:
     return run_inventory_cycle()
 
 
+_INFRA_TYPES = frozenset({"router", "switch"})  # devices worth a passive SNMP harvest
+HarvestFn = Callable[..., list]
+
+
+def _harvest_infra(
+    devices: list[dict[str, Any]],
+    cfg: NetdiscoConfig,
+    session_factory: Callable[[str, NetdiscoConfig], Any],
+    harvest_arp_fn: HarvestFn,
+    harvest_routes_fn: HarvestFn,
+) -> list[tuple]:
+    """Passively walk ARP + routes off each known router/switch -> (ip, mac) pairs
+    (route next-hops carried as (next_hop, None)). RFC1918-gated, read-only; harvest
+    helpers never raise (SNMP garbage -> empty), so one bad infra host can't break
+    the cycle."""
+    pairs: list[tuple] = []
+    for dev in devices:
+        if dev.get("dev_type") not in _INFRA_TYPES:
+            continue
+        ip = dev.get("ip")
+        if not ip or not is_rfc1918(ip):
+            continue
+        session = session_factory(ip, cfg)
+        pairs.extend(harvest_arp_fn(session))
+        pairs.extend((next_hop, None) for _cidr, next_hop, _ifx in harvest_routes_fn(session))
+    return pairs
+
+
 def run_discovery_cycle(
     cfg: NetdiscoConfig,
     *,
@@ -72,9 +100,13 @@ def run_discovery_cycle(
     get_snapshots: GetSnapshots = db.get_network_snapshots,
     get_known: GetKnownFn = db.get_net_devices,
     upsert: UpsertFn = db.upsert_net_device,
+    session_factory: Optional[Callable[[str, NetdiscoConfig], Any]] = None,
+    harvest_arp_fn: HarvestFn = harvest.harvest_arp,
+    harvest_routes_fn: HarvestFn = harvest.harvest_routes,
 ) -> dict[str, int]:
-    """Active-scan discovery: find live hosts, merge with ARP/static, persist the
-    NEW ones (serialized by the shared lock). No-op unless ``cfg.active_scan``.
+    """Active-scan discovery: find live hosts (scan + passive SNMP harvest off known
+    routers/switches), merge with ARP/static, persist the NEW ones (serialized by the
+    shared lock). No-op unless ``cfg.active_scan``.
 
     Newly-found hosts are upserted UNKNOWN-first: ``unknown`` when scan-only (no
     MAC), ``endpoint`` when a MAC is known; status ``discovered`` (a later probe/
@@ -87,13 +119,19 @@ def run_discovery_cycle(
     if not _poll_lock.acquire(blocking=False):
         return {"discovered": 0, "scanned": 0, "active": 1, "busy": 1}
     try:
+        factory = session_factory or _make_session
         scan_ips = tuple(scan_fn(cfg))
+        known_devices = get_known()
+        harvest_pairs = _harvest_infra(
+            known_devices, cfg, factory, harvest_arp_fn, harvest_routes_fn
+        )
         candidates = gather_candidates(
             arp_snapshots=get_snapshots(),
             static_ips=cfg.static_ips,
             scan_ips=scan_ips,
+            harvest_arp=harvest_pairs,
         )
-        known = {d.get("device_nid") for d in get_known()}
+        known = {d.get("device_nid") for d in known_devices}
         discovered = 0
         for cand in candidates:
             nid = device_nid(mac=cand.mac, ip=cand.ip)
