@@ -19,7 +19,7 @@ Pure function of its inputs; output is sorted so input order never changes the g
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from server.netdisco.evidence import (
     HIGH,
@@ -52,7 +52,7 @@ def infer_edges(
     own_macs: FrozenSet[str] = frozenset(),
 ) -> List[LinkEvidence]:
     """Infer L2 link evidence for switch ``local`` from its FDB (§4.3)."""
-    out: List[LinkEvidence] = []
+    tagged: List[Tuple[int, LinkEvidence]] = []  # carry the bridge port for a stable sort
     for port, raw in port_macs.items():
         macs = {m for m in raw if not _is_multicast(m) and m not in own_macs}
         if not macs:
@@ -63,22 +63,14 @@ def infer_edges(
             # uplink/trunk: name a peer only via known infra MACs; a nameless
             # trunk (no infra MAC) emits nothing -- never a fabricated edge.
             for mac in infra_hits:
-                out.append(
-                    LinkEvidence(
-                        a=local, b=mac, source=SOURCE_FDB_UPLINK, confidence=LOW, local_if=ifx
-                    )
-                )
+                tagged.append((port, LinkEvidence(local, mac, SOURCE_FDB_UPLINK, LOW, ifx)))
         elif len(macs) == 1:
             (mac,) = tuple(macs)
-            out.append(
-                LinkEvidence(a=local, b=mac, source=SOURCE_FDB_EDGE, confidence=HIGH, local_if=ifx)
-            )
+            tagged.append((port, LinkEvidence(local, mac, SOURCE_FDB_EDGE, HIGH, ifx)))
         else:  # 2..threshold non-infra MACs -> hub/unmanaged switch behind the port
             for mac in macs:
-                out.append(
-                    LinkEvidence(
-                        a=local, b=mac, source=SOURCE_FDB_AMBIGUOUS, confidence=LOW, local_if=ifx
-                    )
-                )
-    out.sort(key=lambda e: (e.b, e.source, e.local_if if e.local_if is not None else -1))
-    return out
+                tagged.append((port, LinkEvidence(local, mac, SOURCE_FDB_AMBIGUOUS, LOW, ifx)))
+    # sort fully deterministically: by remote, source, ifindex, then bridge port so
+    # even sort-equal duplicate rows keep a stable order (input order never matters).
+    tagged.sort(key=lambda pe: (pe[1].b, pe[1].source, pe[1].local_if or -1, pe[0]))
+    return [ev for _, ev in tagged]

@@ -149,6 +149,22 @@ def test_collect_evidence_combines_sources_and_filters_own_mac():
     }
 
 
+def test_read_fdb_drops_non_positive_bridge_port():
+    # a hostile/buggy device returns a negative or zero bridge port; BRIDGE-MIB
+    # ports are >= 1, so the row is dropped rather than keyed under a junk port.
+    fdb_base = oids.DOT1D_TP_FDB_PORT
+    session = FakeSession(
+        tables={
+            fdb_base: {
+                f"{fdb_base}.0.27.68.17.58.183": -7,
+                f"{fdb_base}.0.27.68.17.58.184": 0,
+            }
+        }
+    )
+    port_macs, _ = evidence.read_fdb(session)
+    assert port_macs == {}
+
+
 def test_read_fdb_skips_malformed_octets_and_missing_port():
     fdb_base = oids.DOT1D_TP_FDB_PORT
     session = FakeSession(

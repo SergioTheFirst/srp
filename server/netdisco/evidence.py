@@ -163,7 +163,7 @@ def read_fdb(session: Session) -> Tuple[Dict[int, Set[str]], Dict[int, int]]:
             continue
         mac = _mac_from_oid_octets(parts)
         port = _opt_int(value)
-        if mac is None or port is None:
+        if mac is None or port is None or port < 1:  # BRIDGE-MIB ports are >= 1
             continue
         port_macs[port].add(mac)
 
