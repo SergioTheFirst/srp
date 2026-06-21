@@ -69,6 +69,36 @@ def test_harvest_routes_drops_non_rfc1918_next_hop():
     assert harvest.harvest_routes(session) == []
 
 
+def test_harvest_arp_skips_malformed_foreign_and_dedups():
+    base = oids.IP_NET_TO_MEDIA_PHYS
+    session = FakeSession(
+        tables={
+            base: {
+                f"{base}.2.10.0.0.5": "aaaaaa",  # valid
+                f"{base}.3.10.0.0.5": "bbbbbb",  # same IP, other ifIndex -> deduped
+                f"{base}.2.10.0.0.999": "cccccc",  # octet out of range -> dropped
+                f"{base}.2.10.0": "dddddd",  # suffix too short -> dropped
+                "9.9.9.9.9.9": "eeeeee",  # not under the table prefix -> dropped
+            }
+        }
+    )
+    result = harvest.harvest_arp(session)
+    assert result == [("10.0.0.5", normalize_mac("61:61:61:61:61:61"))]
+
+
+def test_harvest_routes_skips_short_suffix_and_bad_mask():
+    base = oids.IP_CIDR_ROUTE_IF_INDEX
+    session = FakeSession(
+        tables={
+            base: {
+                f"{base}.10.0.0.0.255.0.255.0.0.10.0.0.1": 1,  # non-contiguous mask -> dropped
+                f"{base}.10.0.0.0": 2,  # suffix too short -> dropped
+            }
+        }
+    )
+    assert harvest.harvest_routes(session) == []
+
+
 def test_harvest_walks_are_bounded():
     session = FakeSession()
     harvest.harvest_arp(session, max_rows=128)
