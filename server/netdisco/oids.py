@@ -33,6 +33,15 @@ IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"  # 1=up, 2=down
 # --- ENTITY-MIB physical serial (table base) --------------------------------
 ENT_PHYSICAL_SERIAL = "1.3.6.1.2.1.47.1.1.1.1.11"
 
+# --- passive harvest (P7): read neighbour + route tables off infra devices --
+# ipNetToMediaPhysAddress (ARP): walked OID suffix = ifIndex.a.b.c.d (the IP),
+# value = MAC octets. One walk yields both IP and MAC, no ping.
+IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"
+# ipCidrRouteIfIndex: the ipCidrRouteTable INDEX is dest(4).mask(4).tos(1).
+# nextHop(4), so walking just the ifIndex column recovers dest/mask/next-hop from
+# the OID suffix (+ ifIndex from the value) in a single walk.
+IP_CIDR_ROUTE_IF_INDEX = "1.3.6.1.2.1.4.24.4.1.5"
+
 # --- Printer-MIB root (presence => printer, via printers.classify.is_printer)
 PRINTER_MIB = "1.3.6.1.2.1.43"
 
