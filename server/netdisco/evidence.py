@@ -20,10 +20,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Protocol, Set, Tuple
 
 from server.analytics.oui import normalize_mac
 from server.netdisco import oids
+from server.netdisco.models import NetDevice
 from server.netdisco.snmp_probe import _mac
 
 # Evidence source tags (also the fusion priority keys in P9, §4.4).
@@ -177,3 +178,32 @@ def read_fdb(session: Session) -> Tuple[Dict[int, Set[str]], Dict[int, int]]:
         port_if[int(parts[0])] = ifindex
 
     return dict(port_macs), port_if
+
+
+def _own_macs(device: NetDevice) -> FrozenSet[str]:
+    """The probed switch's own MACs (primary + per-interface), normalised."""
+    macs = set()
+    for raw in (device.mac, *(iface.phys_mac for iface in device.interfaces)):
+        norm = normalize_mac(raw)
+        if norm:
+            macs.add(norm)
+    return frozenset(macs)
+
+
+def collect_evidence(
+    device: NetDevice, session: Session, *, infra_macs: FrozenSet[str] = frozenset()
+) -> List[LinkEvidence]:
+    """All link evidence for ``device``: LLDP + CDP neighbours + §4.3 FDB edges.
+
+    ``infra_macs`` (known infrastructure MACs across the fleet) lets the FDB step
+    tell an uplink from an edge. The switch's own MACs are filtered automatically."""
+    from server.netdisco import l2  # local import: evidence <-> l2 would be cyclic
+
+    local = device.nid
+    out = collect_lldp(local, session)
+    out += collect_cdp(local, session)
+    port_macs, port_if = read_fdb(session)
+    out += l2.infer_edges(
+        local, port_macs, port_if, infra_macs=infra_macs, own_macs=_own_macs(device)
+    )
+    return out

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from server.analytics.oui import normalize_mac
 from server.netdisco import evidence, oids
+from server.netdisco.models import NetDevice, NetInterface
 
 
 class FakeSession:
@@ -115,6 +116,37 @@ def test_collect_lldp_skips_malformed_rows():
         }
     )
     assert evidence.collect_lldp("sw1", session) == []
+
+
+def test_collect_evidence_combines_sources_and_filters_own_mac():
+    chassis = _octet_str(0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7)  # neighbour over LLDP
+    host_a = normalize_mac("aa:11:22:33:44:55")  # a mute host on bridge port 3
+    fdb_base = oids.DOT1D_TP_FDB_PORT
+    pif_base = oids.DOT1D_BASE_PORT_IF_INDEX
+    device = NetDevice(
+        nid="sw1",
+        mac="00-11-22-33-44-55",  # the switch's own MAC
+        interfaces=(NetInterface(phys_mac=normalize_mac("00:11:22:33:44:66")),),
+    )
+    session = FakeSession(
+        tables={
+            oids.LLDP_REM_CHASSIS_ID: {f"{oids.LLDP_REM_CHASSIS_ID}.0.3.1": chassis},
+            oids.CDP_CACHE_DEVICE_ID: {f"{oids.CDP_CACHE_DEVICE_ID}.2.1": "Switch2"},
+            fdb_base: {
+                f"{fdb_base}.170.17.34.51.68.85": 3,  # host_a -> edge link
+                f"{fdb_base}.0.17.34.51.68.85": 4,  # the switch's own MAC -> filtered
+            },
+            pif_base: {f"{pif_base}.3": 10, f"{pif_base}.4": 11},
+        }
+    )
+    result = evidence.collect_evidence(device, session)
+    assert set(result) == {
+        evidence.LinkEvidence(
+            "sw1", normalize_mac("00:1b:44:11:3a:b7"), evidence.SOURCE_LLDP, evidence.HIGH, 3
+        ),
+        evidence.LinkEvidence("sw1", "Switch2", evidence.SOURCE_CDP, evidence.HIGH, 2),
+        evidence.LinkEvidence("sw1", host_a, evidence.SOURCE_FDB_EDGE, evidence.HIGH, 10),
+    }
 
 
 def test_read_fdb_skips_malformed_octets_and_missing_port():
