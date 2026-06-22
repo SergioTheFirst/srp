@@ -1728,10 +1728,77 @@ def _match_software(hw: dict[str, Any], software: list[dict[str, Any]]) -> Optio
     return None
 
 
+def _printer_is_confirmed_row(model: Any, serial: Any, total_pages: Any) -> bool:
+    """A record is a real printer once it carries any printer evidence (model /
+    serial / a hardware page counter). A bare ARP neighbour has none of these."""
+    return model is not None or serial is not None or total_pages is not None
+
+
+def _printer_is_unlisted_arp(p: dict[str, Any]) -> bool:
+    """True for a phantom printer that was only ever seen via ARP and never
+    answered as a printer -- i.e. some other LAN host, not a printer at all."""
+    sources = set(p.get("sources") or [])
+    confirmed = _printer_is_confirmed_row(p.get("model"), p.get("serial"), p.get("total_pages"))
+    return bool(sources) and sources <= {"arp"} and not confirmed
+
+
+def printer_is_confirmed(printer_id: str) -> bool:
+    """Whether a stored printer carries real printer evidence (model/serial/pages).
+
+    The poll cycle uses this so a printer we already confirmed still records an
+    "unreachable" reading when it goes offline (down != gone), while a bare ARP
+    neighbour that never answered is never minted as a phantom printer.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT model, serial, total_pages FROM printers WHERE printer_id=?",
+            (printer_id,),
+        ).fetchone()
+    if row is None:
+        return False
+    return _printer_is_confirmed_row(row["model"], row["serial"], row["total_pages"])
+
+
+def delete_unconfirmed_arp_printers() -> int:
+    """Remove phantom printers (ARP-only, never answered as a printer). Returns
+    how many were deleted. Real printers (any model/serial/page-counter evidence)
+    and printers seen via spooler/config/scan are kept.
+
+    The victim list is computed and deleted inside a single ``_lock`` hold so a
+    concurrent ``store_printer_reading`` (background poll) cannot confirm a
+    printer between the read and the delete (no TOCTOU window)."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """SELECT p.printer_id, p.model, p.serial, p.total_pages,
+                      (SELECT detail FROM printer_readings
+                        WHERE printer_id = p.printer_id ORDER BY id DESC LIMIT 1) AS detail
+               FROM printers p"""
+        ).fetchall()
+        victims: list[str] = []
+        for r in rows:
+            detail = json.loads(r["detail"]) if r["detail"] else {}
+            candidate = {
+                "model": r["model"],
+                "serial": r["serial"],
+                "total_pages": r["total_pages"],
+                "sources": detail.get("sources") or [],
+            }
+            if _printer_is_unlisted_arp(candidate):
+                victims.append(r["printer_id"])
+        for pid in victims:
+            conn.execute("DELETE FROM printer_readings WHERE printer_id=?", (pid,))
+            conn.execute("DELETE FROM printers WHERE printer_id=?", (pid,))
+    return len(victims)
+
+
 def get_printers_overview(days: int = 30) -> dict[str, Any]:
     """Hardware printer inventory, each reconciled with its software print totals,
-    plus the software names that matched no discovered printer."""
-    hardware = get_printers()
+    plus the software names that matched no discovered printer.
+
+    Phantom ARP-only entries (LAN hosts that never answered as printers) are
+    excluded -- they are not printers and would otherwise clutter the list and
+    skew the hardware page-count chart (no counter -> empty)."""
+    hardware = [hw for hw in get_printers() if not _printer_is_unlisted_arp(hw)]
     software = get_printer_print_summary(days)
     matched: set[str] = set()
     for hw in hardware:

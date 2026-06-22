@@ -80,6 +80,13 @@ def _build_reading(cand: PrinterCandidate, reading: Optional[PrinterReading]) ->
     return d
 
 
+def _arp_only(sources: Sequence[str]) -> bool:
+    """True when ARP is the ONLY way this candidate was found -- no spooler hint,
+    config entry, or printer-port scan vouches that it is actually a printer."""
+    s = set(sources)
+    return bool(s) and s <= {"arp"}
+
+
 def run_poll_cycle(
     candidates: Sequence[PrinterCandidate],
     printer_cfg: PrinterConfig,
@@ -88,13 +95,20 @@ def run_poll_cycle(
     store: StoreFn = db.store_printer_reading,
     now: Optional[str] = None,
     max_workers: int = _MAX_WORKERS,
+    is_confirmed: Callable[[str], bool] = db.printer_is_confirmed,
 ) -> dict[str, int]:
-    """Probe every candidate once and store the result. Returns a count summary."""
+    """Probe every candidate once and store the result. Returns a count summary.
+
+    A bare ARP neighbour that does not answer as a printer is NOT minted as a
+    phantom "unreachable" record -- it is some other LAN host, not a printer. An
+    already-confirmed printer that is merely offline still records "unreachable"
+    (down != gone); spooler/config/scan candidates are kept on their own merit.
+    """
     polled = len(candidates)
     if polled == 0:
-        return {"polled": 0, "online": 0, "unreachable": 0, "errors": 0}
+        return {"polled": 0, "online": 0, "unreachable": 0, "errors": 0, "skipped": 0}
     stamp = now or _now_iso()
-    counts = {"online": 0, "unreachable": 0, "errors": 0}
+    counts = {"online": 0, "unreachable": 0, "errors": 0, "skipped": 0}
 
     def work(cand: PrinterCandidate) -> str:
         try:
@@ -109,21 +123,18 @@ def run_poll_cycle(
                 mac=payload.get("mac"),
                 ip=payload.get("ip"),
             )
+            if reading is None and _arp_only(cand.sources) and not is_confirmed(pid):
+                return "skipped"  # not a printer, just an ARP neighbour -- don't store
             store(pid, payload, received_at=stamp)
             return "online" if reading is not None else "unreachable"
         except Exception:  # noqa: BLE001 -- one bad host must not kill the whole cycle
             _log.exception("printer poll failed for %s", cand.ip)
-            return "error"
+            return "errors"
 
     workers = min(max_workers, polled)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for tag in pool.map(work, candidates):
-            if tag == "online":
-                counts["online"] += 1
-            elif tag == "unreachable":
-                counts["unreachable"] += 1
-            else:
-                counts["errors"] += 1
+            counts[tag] += 1
     return {"polled": polled, **counts}
 
 
@@ -136,6 +147,7 @@ def poll_now(
     store: StoreFn = db.store_printer_reading,
     now: Optional[str] = None,
     scan_fn: Callable[[PrinterConfig], list[str]] = scan.scan,
+    purge_phantoms: Callable[[], int] = db.delete_unconfirmed_arp_printers,
 ) -> dict[str, int]:
     """Build the candidate list from discovery (+ active scan when enabled), then
     run one poll cycle. Used by the lifespan loop and the dashboard force button.
@@ -156,6 +168,11 @@ def poll_now(
             static_ips=printer_cfg.static_ips,
             scan_ips=scan_ips,
         )
-        return run_poll_cycle(candidates, printer_cfg, probe=probe, store=store, now=now)
+        result = run_poll_cycle(candidates, printer_cfg, probe=probe, store=store, now=now)
+        # Sweep any legacy phantom ARP rows created before the skip guard existed.
+        purged = purge_phantoms()
+        if purged:
+            result = {**result, "purged": purged}
+        return result
     finally:
         _poll_lock.release()
