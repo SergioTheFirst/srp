@@ -28,6 +28,7 @@ from server.netdisco import scan as scan_mod
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.evidence import collect_evidence
 from server.netdisco.graph import build_graph
+from server.netdisco.metrics import METRICS
 from server.netdisco.models import NetDevice, NetInterface, ResolvedLink
 from server.netdisco.scheduler import _make_session, _poll_lock
 from server.printers.discovery import is_rfc1918
@@ -161,6 +162,7 @@ def run_topology_cycle(
         )
         for nid, status in aged:
             set_status(nid, status)
+        METRICS.observe_cycle("topology", probed=probed, links=len(links), deltas=len(deltas))
         return {"links": len(links), "probed": probed, "deltas": len(deltas), "busy": 0}
     finally:
         _poll_lock.release()
@@ -221,6 +223,7 @@ def run_reachability_cycle(
         for nid in live_nids:  # a device that answers again recovers to up
             if prior.get(nid) in (correlation.DOWN, correlation.UNREACHABLE, changes.MISSING):
                 set_status(nid, "up")
+        METRICS.observe_cycle("reachability", down=down, unreachable=unreachable)
         return {"down": down, "unreachable": unreachable, "busy": 0}
     finally:
         _poll_lock.release()
