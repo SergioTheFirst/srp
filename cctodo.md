@@ -48,6 +48,10 @@ disk-fill — это детерминированная арифметика (п
 - Auto-remediation, fleet-wide remote execution, сложный updater.
 - Survival/labels как центр до прохождения гейтов §7.
 
+### Сделано вне основной дорожной карты (отдельные RFC/планы)
+- [x] **Мониторинг сетевых принтеров** (`server/printers/`): обнаружение (ARP-подсказки агентов + локальная печать ПК + активный RFC1918-скан за стоп-гейтом), SNMP-опрос (счётчики/расходники/ошибки, IPP/HTTP-резерв, вендор-драйверы), история, дашборд «принтеры» со сверкой ПК↔принтер.
+- [x] **Network Discovery** (`server/netdisco/`, RFC `docs/superpowers/specs/2026-06-20-network-discovery-rfc.md` + план, **13/13 фаз готовы, в `origin/main`**): персистентный L2/L3 граф топологии (LLDP/CDP/FDB/ARP evidence-fusion, confidence-per-edge), пассивный SNMP-harvest, reachability-корреляция (DOWN vs UNREACHABLE), change-detection/ghost-lifecycle, read-only topology API + TTL-кэш + телеметрия, веб-страница «Топология», DPAPI-хранилище непубличной SNMP-community. Инварианты: OFF-by-default за двойным гейтом, RFC1918-only, SNMP read-only, контракт additive, агент не тронут. Память: `[[project-netdisco]]`.
+
 ---
 
 ## 2. P0 — Целостность слоя данных (АБСОЛЮТНЫЙ ФУНДАМЕНТ, до аналитики)

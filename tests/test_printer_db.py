@@ -76,6 +76,69 @@ def test_get_printer_absent_returns_none(db_init):
     assert db_init.get_printer("nope") is None
 
 
+def _arp_shell(ip: str, mac: str):
+    # A bare ARP neighbour that never answered as a printer: no model/serial/pages,
+    # discovered only via "arp".
+    return {
+        "ip": ip,
+        "online": False,
+        "hostname": None,
+        "mac": mac,
+        "vendor": None,
+        "model": None,
+        "serial": None,
+        "firmware": None,
+        "uptime": None,
+        "status": "unreachable",
+        "total_pages": None,
+        "color_pages": None,
+        "mono_pages": None,
+        "duplex_pages": None,
+        "supplies": [],
+        "trays": [],
+        "errors": [],
+        "source_protocol": None,
+        "sources": ["arp"],
+    }
+
+
+def test_printer_is_confirmed(db_init):
+    db = db_init
+    db.store_printer_reading("prn-sn-CNX-1", _reading())
+    db.store_printer_reading(
+        "prn-mac-AABBCCDDEE77", _arp_shell("192.168.1.77", "AA-BB-CC-DD-EE-77")
+    )
+    assert db.printer_is_confirmed("prn-sn-CNX-1") is True
+    assert db.printer_is_confirmed("prn-mac-AABBCCDDEE77") is False
+    assert db.printer_is_confirmed("nope") is False
+
+
+def test_delete_unconfirmed_arp_printers(db_init):
+    db = db_init
+    db.store_printer_reading("prn-sn-CNX-1", _reading())  # real printer
+    db.store_printer_reading(
+        "prn-mac-AABBCCDDEE77", _arp_shell("192.168.1.77", "AA-BB-CC-DD-EE-77")
+    )
+    db.store_printer_reading(
+        "prn-mac-AABBCCDDEE88", _arp_shell("192.168.1.88", "AA-BB-CC-DD-EE-88")
+    )
+    removed = db.delete_unconfirmed_arp_printers()
+    assert removed == 2
+    ids = [r["printer_id"] for r in db.get_printers()]
+    assert ids == ["prn-sn-CNX-1"]  # only the real printer survives
+
+
+def test_overview_hides_unconfirmed_arp_printers(db_init):
+    db = db_init
+    db.store_printer_reading("prn-sn-CNX-1", _reading())
+    db.store_printer_reading(
+        "prn-mac-AABBCCDDEE77", _arp_shell("192.168.1.77", "AA-BB-CC-DD-EE-77")
+    )
+    ov = db.get_printers_overview(days=30)
+    ids = [p["printer_id"] for p in ov["printers"]]
+    assert ids == ["prn-sn-CNX-1"]
+
+
 def test_get_printers_lists_each_printer_once(db_init):
     db = db_init
     db.store_printer_reading("prn-sn-A", _reading(ip="192.168.1.10", serial="A"))
