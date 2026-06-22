@@ -17,19 +17,31 @@ collectors (garbage -> empty), so one bad device cannot break the cycle.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable, FrozenSet, List, Optional
 
 from server import db
 from server.analytics.oui import normalize_mac
+from server.netdisco import changes, correlation
 from server.netdisco import fusion as fusion_mod
+from server.netdisco import scan as scan_mod
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.evidence import collect_evidence
+from server.netdisco.graph import build_graph
 from server.netdisco.models import NetDevice, NetInterface, ResolvedLink
 from server.netdisco.scheduler import _make_session, _poll_lock
 from server.printers.discovery import is_rfc1918
 
 # Device types that carry L2 neighbour tables worth probing for topology evidence.
 _TOPOLOGY_TYPES = frozenset({"router", "switch", "ap"})
+# Ghost lifecycle (§3.13): a device is "missing" after this many idle cycles, and
+# "eligible_purge" after a long absence -- never on a single missed cycle.
+_STALE_CYCLES = 3
+_PURGE_AFTER_SEC = 30 * 86400  # 30 days, matching the agent-device ghost sweep
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _infra_macs(devices: List[dict[str, Any]]) -> FrozenSet[str]:
@@ -101,9 +113,13 @@ def run_topology_cycle(
     replace_links: Callable[..., None] = db.replace_net_links,
     store_snapshot: Callable[..., None] = db.store_topology_snapshot,
     upsert: Callable[..., None] = db.upsert_net_device,
+    get_prev_snapshot: Callable[[], Optional[dict]] = db.get_latest_topology_snapshot,
+    store_change: Callable[..., None] = db.store_net_change,
+    set_status: Callable[[str, str], None] = db.set_net_device_status,
     now: Optional[str] = None,
 ) -> dict[str, int]:
-    """Probe known infra for L2 evidence, fuse, and persist the graph (serialized).
+    """Probe known infra for L2 evidence, fuse, persist the graph + change journal,
+    and age out ghosts (serialized).
 
     Gated by ``cfg.enabled``; returns ``busy=1`` if another cycle holds the lock.
     Only RFC1918 router/switch/AP devices are probed. All dependencies injectable."""
@@ -130,8 +146,81 @@ def run_topology_cycle(
             probed += 1
             upsert({"device_nid": netdev.nid, "status": "up"}, now)  # advance last_seen
         links = fuse(evidence)
+        new_graph = _graph(devices, links)
+        prev_graph = (get_prev_snapshot() or {}).get("graph") or {"nodes": [], "links": []}
+        deltas = changes.diff(prev_graph, new_graph)
         replace_links([_link_row(link) for link in links], probed_nids, received_at=now)
-        store_snapshot(_graph(devices, links), received_at=now)
-        return {"links": len(links), "probed": probed, "busy": 0}
+        store_snapshot(new_graph, received_at=now)
+        for delta in deltas:
+            store_change(delta.kind, delta.device_nid, delta.detail, now)
+        aged = changes.stale_lifecycle(
+            devices,
+            now=now or _iso_now(),
+            stale_after_sec=_STALE_CYCLES * cfg.topology_interval_sec,
+            purge_after_sec=_PURGE_AFTER_SEC,
+        )
+        for nid, status in aged:
+            set_status(nid, status)
+        return {"links": len(links), "probed": probed, "deltas": len(deltas), "busy": 0}
+    finally:
+        _poll_lock.release()
+
+
+# Vantage points the monitor trusts as "up" when correlating reachability.
+_ROOT_TYPES = frozenset({"agent", "router"})
+
+
+def run_reachability_cycle(
+    cfg: NetdiscoConfig,
+    *,
+    get_known: Callable[[], List[dict[str, Any]]] = db.get_net_devices,
+    get_links: Callable[[], List[dict[str, Any]]] = db.get_net_links,
+    is_alive: Callable[..., bool] = scan_mod.host_is_alive,
+    set_status: Callable[[str, str], None] = db.set_net_device_status,
+    store_change: Callable[..., None] = db.store_net_change,
+    now: Optional[str] = None,
+) -> dict[str, int]:
+    """Ping known RFC1918 devices, correlate failures into DOWN vs UNREACHABLE.
+
+    A device whose path to a root (agent/router) crosses another down device is
+    UNREACHABLE (suppressed); the upstream failure is the single root cause raised.
+    Gated by ``cfg.enabled``, serialized by the shared lock, read-only liveness only.
+    A device that answers again is returned to ``up``. All dependencies injectable."""
+    if not cfg.enabled:
+        return {"down": 0, "unreachable": 0, "busy": 0}
+    if not _poll_lock.acquire(blocking=False):
+        return {"down": 0, "unreachable": 0, "busy": 1}
+    try:
+        devices = get_known()
+        down_set: set = set()
+        live_nids: set = set()
+        for dev in devices:
+            ip, nid = dev.get("ip"), dev.get("device_nid")
+            if not ip or not nid or not is_rfc1918(ip):
+                continue  # only ever probe private hosts
+            alive = is_alive(
+                ip, ports=cfg.scan_ports, community=cfg.snmp_community, version=cfg.snmp_version
+            )
+            (live_nids if alive else down_set).add(nid)
+        graph = build_graph(devices, get_links())
+        roots = {
+            d["device_nid"]
+            for d in devices
+            if d.get("dev_type") in _ROOT_TYPES and d.get("device_nid")
+        }
+        verdicts = correlation.correlate(graph, down_set, roots)
+        down = unreachable = 0
+        for nid, verdict in verdicts.items():
+            set_status(nid, verdict.status)
+            if verdict.status == correlation.DOWN:
+                down += 1
+                store_change("root_cause", nid, {"status": correlation.DOWN}, now)
+            else:
+                unreachable += 1
+        prior = {d.get("device_nid"): d.get("status") for d in devices}
+        for nid in live_nids:  # a device that answers again recovers to up
+            if prior.get(nid) in (correlation.DOWN, correlation.UNREACHABLE, changes.MISSING):
+                set_status(nid, "up")
+        return {"down": down, "unreachable": unreachable, "busy": 0}
     finally:
         _poll_lock.release()

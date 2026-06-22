@@ -807,6 +807,17 @@ def store_net_interfaces(
         )
 
 
+def set_net_device_status(device_nid: str, status: str) -> None:
+    """Update ONLY a device's status (down/unreachable/missing/up) -- never advancing
+    last_seen. A reachability or ghost-lifecycle verdict must not revive the staleness
+    clock (else a missing device would look fresh next cycle and never age out)."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE net_devices SET status=? WHERE device_nid=?",
+            (status, device_nid),
+        )
+
+
 def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
     """Insert or refresh one undirected L2/L3 link. Endpoints are canonicalised
     (a_nid <= b_nid, ifIndexes swapped to match) so the same link in either
