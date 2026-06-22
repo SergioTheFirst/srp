@@ -17,6 +17,8 @@ from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.netdisco import scheduler as netdisco_scheduler
+from server.netdisco.cache import GraphCache
+from server.netdisco.metrics import METRICS
 from server.pipeline import ingest_envelope
 from server.printers import scheduler
 
@@ -108,6 +110,44 @@ def poll_discovery() -> dict:
     if not check_rate_limit("endpoint:discovery_poll"):
         raise HTTPException(status_code=429, detail="discovery poll rate exceeded")
     return netdisco_scheduler.poll_now()
+
+
+@router.get("/topology/graph")
+def topology_graph(request: Request) -> dict:
+    """Latest L2 topology graph (nodes + resolved links), served from a short-TTL
+    cache so a polling dashboard does not re-query the DB on every request."""
+    cache = getattr(request.app.state, "netdisco_graph_cache", None)
+    if cache is None:
+        cache = GraphCache()
+        request.app.state.netdisco_graph_cache = cache
+    snap = cache.get() or {}
+    return {
+        "graph": snap.get("graph") or {"nodes": [], "links": []},
+        "received_at": snap.get("received_at"),
+    }
+
+
+@router.get("/topology/changes")
+def topology_changes(days: int = 7) -> dict:
+    """Topology-change journal for the last *days* (clamped 1..365), newest first."""
+    clamped_days = max(1, min(days, 365))
+    return {"changes": db.get_net_changes(days=clamped_days, limit=2000)}
+
+
+@router.get("/netdisco/devices/{device_nid}")
+def netdisco_device(device_nid: str) -> dict:
+    """One network device: interfaces, links and current reachability status
+    (up/down/unreachable/missing) -- the read-side correlation annotation."""
+    dev = db.get_net_device(device_nid)
+    if dev is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    return {"device": dev}
+
+
+@router.get("/netdisco/stats")
+def netdisco_stats() -> dict:
+    """Scanner telemetry counters (cycles, probes, links, deltas, outages found)."""
+    return {"stats": METRICS.snapshot()}
 
 
 # ---------------------------------------------------------------------------
