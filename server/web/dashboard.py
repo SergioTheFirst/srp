@@ -432,7 +432,12 @@ def printers(request: Request, days: int = 30):
     return _TEMPLATES.TemplateResponse(
         request,
         "printers.html",
-        {"days": days, "ov": ov, "kpis": _printer_kpis(ov["printers"])},
+        {
+            "days": days,
+            "ov": ov,
+            "kpis": _printer_kpis(ov["printers"]),
+            "pages_series": db.get_printers_pages_series(days=days),
+        },
     )
 
 

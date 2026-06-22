@@ -1639,6 +1639,46 @@ def get_printer_series(printer_id: str, limit: int = 200) -> list[dict[str, Any]
     ]
 
 
+def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[dict[str, Any]]:
+    """Historical hardware page-counter trend, one series per printer, for the
+    /printers overview chart (spec §9 "история счётчиков (тренд)").
+
+    Picks the printers with the highest latest ``total_pages``, then returns each
+    one's time-ordered (received_at, total_pages) readings inside the ``days``
+    window. Readings with a NULL counter are skipped -- an unreachable poll is
+    UNKNOWN, never plotted as 0. ``days`` MUST be a caller-clamped int (f-string).
+    """
+    win = f"AND received_at >= datetime('now', '-{days} days')" if days > 0 else ""
+    out: list[dict[str, Any]] = []
+    with _connect() as conn:
+        top = conn.execute(
+            """SELECT printer_id,
+                      COALESCE(model, hostname, ip, printer_id) AS label
+               FROM printers WHERE total_pages IS NOT NULL
+               ORDER BY total_pages DESC LIMIT ?""",
+            (max_printers,),
+        ).fetchall()
+        for t in top:
+            pts = conn.execute(
+                "SELECT received_at, total_pages FROM printer_readings"  # nosec B608
+                f" WHERE printer_id=? AND total_pages IS NOT NULL {win} ORDER BY id ASC",
+                (t["printer_id"],),
+            ).fetchall()
+            if not pts:
+                continue
+            out.append(
+                {
+                    "printer_id": t["printer_id"],
+                    "label": t["label"],
+                    "points": [
+                        {"received_at": r["received_at"], "total_pages": r["total_pages"]}
+                        for r in pts
+                    ],
+                }
+            )
+    return out
+
+
 def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
     """Per spooler printer-NAME software print totals + which PCs printed + last date.
 
