@@ -22,6 +22,7 @@ from server.netdisco import harvest, snmp_probe
 from server.netdisco import scan as scan_mod
 from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
+from server.netdisco.credentials import default_store, resolve_community
 from server.netdisco.discovery import gather_candidates
 from server.netdisco.drivers import select_driver
 from server.netdisco.identity import device_nid
@@ -169,7 +170,8 @@ def _fleet_agent_macs() -> set:
 
 
 def _make_session(ip: str, cfg: NetdiscoConfig) -> SnmpSession:
-    return SnmpSession(ip, community=cfg.snmp_community, version=cfg.snmp_version)
+    community = resolve_community(cfg, store=default_store())
+    return SnmpSession(ip, community=community, version=cfg.snmp_version)
 
 
 def _iface_rows(profile: DeviceProfile) -> List[dict]:

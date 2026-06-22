@@ -35,6 +35,9 @@ srp.db-wal
 srp.db-shm
 # Agent offline spool
 buffer.jsonl
+# DPAPI-encrypted netdisco SNMP credential store (machine-bound secret; never commit)
+server/netdisco_secrets.json
+netdisco_secrets.json
 client/buffer.jsonl
 # Tray status snapshot + print counters (written by the running agent)
 status.json
