@@ -13,6 +13,14 @@
   border: 1px solid var(--line-2); outline: none;
 }
 .topo-search:focus { border-color: var(--accent); }
+.topo-poll-btn {
+  font: 600 13px/1 var(--mono); padding: 8px 16px; border-radius: var(--r-btn);
+  background: var(--accent-dim); border: 1px solid rgba(14,165,233,.45);
+  color: var(--accent); cursor: pointer;
+}
+.topo-poll-btn:hover { background: rgba(14,165,233,.2); }
+.topo-poll-btn:disabled { opacity: .5; cursor: default; }
+.topo-poll-result { font: 600 13px/1 var(--mono); color: var(--muted); }
 
 .topo-stage {
   position: relative; margin-bottom: 20px; overflow: hidden;
@@ -69,6 +77,8 @@ table.topo-inv td { padding: 8px 11px; font-size: 14px; }
 <div class="topo-toolbar">
   <input id="topo-search" class="topo-search" type="search"
          placeholder="фильтр: имя / IP / MAC / тип…" autocomplete="off">
+  <button class="topo-poll-btn" id="topo-poll-btn" onclick="pollTopology()">⟳ Собрать топологию сейчас</button>
+  <span id="topo-poll-result" class="topo-poll-result"></span>
   <div class="cards" style="margin-left:auto">
     <div class="stat"><div class="n">{{ inventory|length }}</div><div class="l">устройств</div></div>
     <div class="stat"><div class="n">{{ graph.links|length }}</div><div class="l">связей</div></div>
@@ -90,7 +100,7 @@ table.topo-inv td { padding: 8px 11px; font-size: 14px; }
   <div class="topo-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по узлу — карточка</div>
 </div>
 {% else %}
-<p class="muted">Граф топологии ещё не собран — он появится после первого цикла обнаружения линков (LLDP/CDP/FDB/ARP).</p>
+<p class="muted">Граф топологии ещё не собран — он появится после первого цикла обнаружения линков (LLDP/CDP/FDB/ARP). Можно собрать его прямо сейчас кнопкой «⟳ Собрать топологию сейчас» вверху.</p>
 {% endif %}
 
 <h2>Инвентарь сети</h2>
@@ -132,6 +142,25 @@ table.topo-inv td { padding: 8px 11px; font-size: 14px; }
 
 <div class="topo-tip" id="topo-tip" hidden></div>
 <script id="topo-data" type="application/json">{{ graph | tojson }}</script>
+
+<script>
+/* Кнопка «собрать топологию сейчас»: форсирует один цикл сбора на сервере
+   (LLDP/CDP/FDB по известной инфраструктуре + слияние), затем перезагружает
+   страницу, чтобы показать свежий граф. Дальше фоновый цикл обновляет его сам. */
+function pollTopology() {
+  var btn = document.getElementById("topo-poll-btn");
+  var out = document.getElementById("topo-poll-result");
+  btn.disabled = true; out.textContent = "сбор…";
+  fetch("/api/v1/topology/poll", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.busy) { out.textContent = "сбор уже идёт…"; btn.disabled = false; return; }
+      out.textContent = "связей: " + (d.links || 0) + " · опрошено: " + (d.probed || 0);
+      setTimeout(function () { location.reload(); }, 900);
+    })
+    .catch(function (e) { out.textContent = "ошибка: " + srpEsc(String(e)); btn.disabled = false; });
+}
+</script>
 
 <script>
 /* Текстовый фильтр SSR-таблицы (canvas слушает тот же input ниже). */
