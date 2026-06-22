@@ -160,6 +160,30 @@ def test_series_is_append_only_newest_first(db_init):
     assert [s["total_pages"] for s in series] == [300, 200, 100]
 
 
+def test_pages_series_overview_returns_per_printer_history(db_init):
+    db = db_init
+    for i, pages in enumerate((12000, 12010, 12025)):
+        db.store_printer_reading(
+            "prn-sn-A",
+            _reading(serial="A", total_pages=pages),
+            received_at=f"2026-06-2{i}T10:00:00+00:00",
+        )
+    db.store_printer_reading("prn-sn-B", _reading(ip="192.168.1.11", serial="B", total_pages=500))
+    db.store_printer_reading(  # NULL counter (unreachable) must not be plotted as a point
+        "prn-sn-A", _reading(serial="A", total_pages=None), received_at="2026-06-24T10:00:00+00:00"
+    )
+    out = db.get_printers_pages_series(days=0)
+    by_id = {s["printer_id"]: s for s in out}
+    a = by_id["prn-sn-A"]
+    assert [p["total_pages"] for p in a["points"]] == [
+        12000,
+        12010,
+        12025,
+    ]  # ascending, NULL skipped
+    assert a["label"]  # human label present for the chart legend
+    assert by_id["prn-sn-B"]["points"][-1]["total_pages"] == 500
+
+
 def test_readings_retention_caps_per_printer(db_init):
     db = db_init  # retain_printer_readings=5
     for i in range(8):

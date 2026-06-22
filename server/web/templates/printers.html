@@ -50,7 +50,7 @@ td.r, th.r { text-align:right; }
 
 {% if ov.printers %}
 <div class="bars">
-  <div class="ch-title">Напечатано страниц по принтерам (аппаратный счётчик)</div>
+  <div class="ch-title">Напечатано страниц по принтерам (аппаратный счётчик, история)</div>
   <div id="chart-pages" style="height:320px"></div>
 </div>
 
@@ -111,7 +111,7 @@ td.r, th.r { text-align:right; }
 </div>
 {% endif %}
 
-<script id="printers-data" type="application/json">{{ ov.printers|tojson }}</script>
+<script id="pages-series-data" type="application/json">{{ pages_series|tojson }}</script>
 <script>
 function pollNow() {
   var btn = document.getElementById("poll-btn");
@@ -136,26 +136,32 @@ function filterRows() {
 (function () {
   var el = document.getElementById("chart-pages");
   if (!el || typeof Plotly === "undefined") return;
-  var data = JSON.parse(document.getElementById("printers-data").textContent || "[]");
-  var withPages = data.filter(function (p) { return p.total_pages != null; })
-                      .sort(function (a, b) { return b.total_pages - a.total_pages; })
-                      .slice(0, 15);
-  if (!withPages.length) { el.innerHTML = "<div class=\"no-data\">Нет аппаратных счётчиков</div>"; return; }
-  var names = withPages.map(function (p) { return srpEsc(p.model || p.hostname || p.ip || p.printer_id); }).reverse();
-  var pages = withPages.map(function (p) { return p.total_pages; }).reverse();
+  var series = JSON.parse(document.getElementById("pages-series-data").textContent || "[]");
+  // Keep only printers with at least two historical points (a trend needs a line).
+  var lines = series.filter(function (s) { return s.points && s.points.length >= 2; });
+  if (!lines.length) {
+    el.innerHTML = "<div class=\"no-data\">Пока нет истории счётчиков — нужно хотя бы два опроса принтера.</div>";
+    return;
+  }
   function draw() {
     var css = getComputedStyle(document.documentElement);
-    Plotly.newPlot(el, [{
-      x: pages, y: names, type: "bar", orientation: "h",
-      marker: { color: css.getPropertyValue("--accent").trim() || "#0ea5e9", opacity: 0.85 },
-      hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
-    }], {
+    var traces = lines.map(function (s) {
+      return {
+        x: s.points.map(function (p) { return p.received_at; }),
+        y: s.points.map(function (p) { return p.total_pages; }),
+        name: srpEsc(s.label || s.printer_id),
+        type: "scatter", mode: "lines+markers",
+        line: { width: 2 }, marker: { size: 5 },
+        hovertemplate: "<b>%{fullData.name}</b><br>%{x|%d.%m %H:%M}<br>%{y:,} стр<extra></extra>",
+      };
+    });
+    Plotly.newPlot(el, traces, {
       paper_bgcolor: "transparent", plot_bgcolor: "transparent",
       font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
-      margin: { t: 6, r: 14, b: 40, l: 200 },
-      xaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", title: { text: "страниц", font: { size: 11 } } },
-      yaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", automargin: true },
-      showlegend: false, autosize: true,
+      margin: { t: 6, r: 14, b: 40, l: 64 },
+      xaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", type: "date" },
+      yaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", title: { text: "страниц (всего)", font: { size: 11 } }, automargin: true },
+      legend: { orientation: "h", font: { size: 10 } }, autosize: true,
     }, { responsive: true, displayModeBar: false });
   }
   draw();
