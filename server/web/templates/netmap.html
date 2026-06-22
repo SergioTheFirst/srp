@@ -67,7 +67,6 @@ table.net-agents th { position: static; }
   width: 9px; height: 9px; display: inline-block; flex-shrink: 0;
   background: var(--accent); border-radius: 2px; transform: rotate(45deg);
 }
-.nm-mini { width: 5px; height: 5px; border-radius: 50%; background: var(--na); display: inline-block; flex-shrink: 0; }
 .netmap-hint {
   position: absolute; left: 12px; bottom: 8px; z-index: 5; pointer-events: none;
   font: 500 11px/1.5 var(--mono); color: var(--muted); opacity: .75;
@@ -94,7 +93,6 @@ table.net-agents th { position: static; }
          placeholder="фильтр: имя / IP / MAC / производитель…" autocomplete="off">
   <div class="cards" style="margin-left:auto">
     <div class="stat"><div class="n">{{ m.totals.agents }}</div><div class="l">агентов</div></div>
-    <div class="stat"><div class="n">{{ m.totals.others }}</div><div class="l">без агента</div></div>
     <div class="stat"><div class="n">{{ m.totals.clusters }}</div><div class="l">подсетей</div></div>
     <div class="stat"><div class="n {{ 'bad' if m.totals.anomalies }}">{{ m.totals.anomalies }}</div><div class="l">аномалий</div></div>
   </div>
@@ -103,14 +101,13 @@ table.net-agents th { position: static; }
 {% if m.clusters %}
 <div class="netmap-stage" id="netmap-stage">
   <canvas id="netmap-canvas" role="img"
-          aria-label="Интерактивная карта сети: шлюзы, машины с агентом и устройства без агента; подробности в таблицах ниже"></canvas>
+          aria-label="Интерактивная карта сети: шлюзы, машины с агентом и сетевые принтеры; подробности в таблицах ниже"></canvas>
   <div class="netmap-legend">
     <span class="nm-key"><i class="nm-dot good"></i>норма</span>
     <span class="nm-key"><i class="nm-dot warn"></i>потери ≥5%</span>
     <span class="nm-key"><i class="nm-dot bad"></i>потери ≥20%</span>
     <span class="nm-key"><i class="nm-dot na"></i>нет данных</span>
     <span class="nm-key"><i class="nm-dia"></i>шлюз</span>
-    <span class="nm-key"><i class="nm-mini"></i>без агента</span>
     <span class="nm-key">🖨 принтер</span>
   </div>
   <div class="netmap-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по ПК — карточка</div>
@@ -164,20 +161,6 @@ table.net-agents th { position: static; }
     {% endfor %}
     </tbody>
   </table>
-  {% endif %}
-
-  {% if c.others %}
-  <div class="node-grid">
-    {% for n in c.others %}
-    <span class="node" data-filter="{{ n.ip or '' }} {{ n.mac or '' }} {{ n.vendor or '' }}"
-          title="Устройство видно в ARP-таблицах агентов, но агент SRP на нём не стоит{% if n.state %} · состояние ARP: {{ n.state }}{% endif %}">
-      <span>{{ n.ip or "—" }}</span>
-      <span class="v">{{ n.mac or "—" }}</span>
-      {% if n.vendor %}<span class="pill">{{ n.vendor }}</span>{% endif %}
-      <span class="v" title="Сколько агентов видят это устройство">×{{ n.seen_by }}</span>
-    </span>
-    {% endfor %}
-  </div>
   {% endif %}
 
   {% if c.printers %}
@@ -279,7 +262,7 @@ table.net-agents th { position: static; }
   /* — граф из модели сервера — */
   var nodes = [], links = [], clusters = [];
   M.clusters.forEach(function (c) {
-    var count = 1 + c.agents.length + c.others.length;
+    var count = 1 + c.agents.length;
     var R = 64 + 13 * Math.sqrt(count);
     var rnd = mulberry(hashStr(c.gateway));
     var gw = {
@@ -307,21 +290,8 @@ table.net-agents th { position: static; }
       links.push({ a: n, b: gw, kind: "agent", cls: n.cls, wifi: a.kind === "wifi",
                    measured: a.loss_pct != null, idx: links.length });
     });
-    c.others.forEach(function (o, i) {
-      var ang = rnd() * 6.283 + i * 2.399963;
-      var n = {
-        type: "other", r: 3.5 + Math.min(o.seen_by || 1, 4) * 0.5, cls: "na",
-        cluster: cluster, ip: o.ip, mac: o.mac, vendor: o.vendor,
-        state: o.state, seen_by: o.seen_by,
-        x: Math.cos(ang) * R * 0.8, y: Math.sin(ang) * R * 0.8, vx: 0, vy: 0,
-        filter: ((o.ip || "") + " " + (o.mac || "") + " " + (o.vendor || "")).toLowerCase()
-      };
-      nodes.push(n);
-      links.push({ a: n, b: gw, kind: "other", cls: "na", wifi: false,
-                   measured: false, idx: links.length });
-    });
     (c.printers || []).forEach(function (pr, i) {
-      var ang = rnd() * 6.283 + (c.agents.length + c.others.length + i) * 2.399963;
+      var ang = rnd() * 6.283 + (c.agents.length + i) * 2.399963;
       var pcls = (!pr.online || pr.status === "unreachable") ? "bad" : "accent";
       var n = {
         type: "printer", r: 7, cls: pcls, cluster: cluster,

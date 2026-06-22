@@ -110,6 +110,19 @@ def test_netmap_page_embeds_canvas_and_data(client):
     assert cluster["agents"][0]["device_id"] == "map-41"
 
 
+def test_netmap_hides_arp_only_nodes(client):
+    # The agentless ARP neighbour from _net_payload (192.168.1.50) must no longer
+    # appear on the map -- not in the SSR body, not in the canvas JSON island
+    # (owner 2026-06-22). Gateways and agents still show.
+    _ingest(client, "map-61", _net_payload())
+    body = client.get("/netmap").text
+    assert "192.168.1.50" not in body  # ARP-only IP gone from SSR + JSON island
+    assert "без агента" not in body  # the ARP-only stat/legend label is gone
+    data = _embedded_json(body)
+    assert data["clusters"][0]["others"] == []  # no ARP-only nodes in the model
+    assert data["clusters"][0]["gateway"] == "192.168.1.1"  # gateway still present
+
+
 def test_netmap_page_without_data_has_no_canvas(client):
     body = client.get("/netmap").text
     assert 'id="netmap-canvas"' not in body

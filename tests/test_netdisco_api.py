@@ -105,3 +105,48 @@ def test_discovery_poll_is_rate_limited_after_a_burst(client: TestClient) -> Non
     assert client.post("/api/v1/discovery/poll").status_code == 200  # within budget
     statuses = {client.post("/api/v1/discovery/poll").status_code for _ in range(40)}
     assert 429 in statuses  # the flood is throttled
+
+
+def test_topology_poll_runs_a_cycle(client: TestClient) -> None:
+    # The "собрать топологию сейчас" button forces one reconcile now. With netdisco
+    # gated off (test default) the cycle is a clean no-op, still a well-formed reply.
+    resp = client.post("/api/v1/topology/poll")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["busy"] == 0
+    assert "links" in body and body["links"] >= 0
+
+
+def test_topology_poll_invalidates_graph_cache(client: TestClient) -> None:
+    # Prime the read-through cache with the (empty) snapshot, then store a fresh one
+    # straight into the DB. Without invalidation the cache would keep serving empty
+    # within its TTL; the force button must clear it so the new graph shows at once.
+    assert client.get("/api/v1/topology/graph").json()["graph"]["nodes"] == []
+    db.store_topology_snapshot({"nodes": [{"nid": "sw1"}], "links": []})
+    assert client.post("/api/v1/topology/poll").status_code == 200
+    assert client.get("/api/v1/topology/graph").json()["graph"]["nodes"] == [{"nid": "sw1"}]
+
+
+def test_topology_poll_returns_busy_when_a_cycle_is_running(tmp_path) -> None:
+    from server.config import ServerConfig
+    from server.main import create_app
+    from server.netdisco import reconcile
+
+    # netdisco config enabled so the cycle is not gated off; netdisco_enabled left
+    # False so no background loop competes for the lock; empty inventory -> no SNMP.
+    app = create_app(ServerConfig(db_path=str(tmp_path / "t.db"), netdisco={"enabled": True}))
+    with TestClient(app) as c:
+        reconcile._poll_lock.acquire()  # simulate a cycle already in flight
+        try:
+            resp = c.post("/api/v1/topology/poll")
+            assert resp.status_code == 200
+            assert resp.json()["busy"] == 1  # anti-DoS: no second concurrent pass
+        finally:
+            reconcile._poll_lock.release()
+
+
+def test_topology_poll_is_rate_limited_after_a_burst(client: TestClient) -> None:
+    # Unauthenticated force button that can trigger SNMP probes -> must be throttled.
+    assert client.post("/api/v1/topology/poll").status_code == 200  # within budget
+    statuses = {client.post("/api/v1/topology/poll").status_code for _ in range(40)}
+    assert 429 in statuses  # the flood is throttled

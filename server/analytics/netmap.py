@@ -108,30 +108,22 @@ def _attach_agent(c: dict[str, Any], snap: dict[str, Any], adapters: list[dict[s
 def _attach_neighbors(
     c: dict[str, Any], snap: dict[str, Any], mac_to_device: dict[str, str]
 ) -> None:
+    """Extract the gateway's MAC/vendor from this agent's ARP neighbours.
+
+    Agentless ARP-only devices are deliberately NOT collected (owner 2026-06-22):
+    the map shows agents, gateways and discovered printers, never the unidentified
+    ARP cloud. ``c["others"]`` therefore stays empty -- the key is kept so the map
+    and the ``/api/v1/netmap`` response keep a stable shape.
+    """
     for n in snap.get("neighbors") or []:
         if not isinstance(n, dict):
             continue
         mac = normalize_mac(n.get("mac"))
-        ip = n.get("ip")
         if mac and mac in mac_to_device:
             continue  # a known agent: shown via its own snapshot, never "unknown"
-        if ip == c["gateway"]:
+        if n.get("ip") == c["gateway"]:
             c["gateway_mac"] = mac
             c["gateway_vendor"] = vendor_for_mac(mac)
-            continue
-        node = c["others"].setdefault(
-            mac or f"ip:{ip}",
-            {
-                "ip": ip,
-                "mac": mac,
-                "vendor": vendor_for_mac(mac),
-                "state": n.get("state"),
-                "_seen": set(),
-            },
-        )
-        # Unique observers, not ARP entries: a duplicate row in one agent's
-        # snapshot must not inflate the "seen by N agents" metric (review HIGH).
-        node["_seen"].add(snap["device_id"])
 
 
 def _finalize(c: dict[str, Any]) -> dict[str, Any]:

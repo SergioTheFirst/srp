@@ -16,6 +16,7 @@ from server import db, org_directory
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
+from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.netdisco.cache import GraphCache
 from server.netdisco.metrics import METRICS
@@ -125,6 +126,28 @@ def topology_graph(request: Request) -> dict:
         "graph": snap.get("graph") or {"nodes": [], "links": []},
         "received_at": snap.get("received_at"),
     }
+
+
+@router.post("/topology/poll")
+def poll_topology(request: Request) -> dict:
+    """Force one topology reconcile now (dashboard "собрать топологию сейчас" button):
+    probe the known infra for L2 evidence (LLDP/CDP/FDB), fuse it, and rebuild the
+    persistent graph from the data on hand -- after which the background loop keeps
+    it fresh. Unauthenticated, so it is rate-limited AND serialized by the scheduler's
+    anti-DoS lock (a concurrent cycle returns ``busy`` instead of a second pass). Only
+    RFC1918 infra is ever probed and SNMP stays read-only."""
+    if not check_rate_limit("endpoint:topology_poll"):
+        raise HTTPException(status_code=429, detail="topology poll rate exceeded")
+    cfg = getattr(request.app.state, "netdisco_config", None)
+    if cfg is None:
+        from server.netdisco.config import load_netdisco_config
+
+        cfg = load_netdisco_config(None)
+    result = netdisco_reconcile.run_topology_cycle(cfg)
+    cache = getattr(request.app.state, "netdisco_graph_cache", None)
+    if cache is not None:
+        cache.invalidate()  # the next /topology/graph read reflects the fresh snapshot
+    return result
 
 
 @router.get("/topology/changes")

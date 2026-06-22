@@ -85,7 +85,11 @@ def test_same_gateway_one_cluster_agents_merged_by_mac():
     assert c["others"] == []  # d2's MAC matched an agent -> never an "unknown device"
 
 
-def test_unknown_neighbor_union_dedup_and_gateway_extraction():
+def test_gateway_extracted_but_arp_only_nodes_are_hidden():
+    # The router (a neighbour whose IP is the gateway) is still surfaced in the
+    # cluster header, but agentless ARP-only devices are no longer collected or
+    # shown on the map (owner 2026-06-22): only agents, gateways and discovered
+    # printers belong on it.
     n_unknown = {"ip": "192.168.1.50", "mac": "00:50:56:00:00:09", "state": "Stale"}
     n_gw = {"ip": "192.168.1.1", "mac": "DE-AD-BE-EF-00-01", "state": "Reachable"}
     m = build_netmap(
@@ -95,14 +99,13 @@ def test_unknown_neighbor_union_dedup_and_gateway_extraction():
         ]
     )
     c = m["clusters"][0]
-    assert len(c["others"]) == 1
-    other = c["others"][0]
-    assert other["seen_by"] == 2 and other["vendor"] == "VMware"
-    assert c["gateway_mac"] == "DE-AD-BE-EF-00-01"  # router shown in header, not others
-    assert m["totals"]["others"] == 1
+    assert c["others"] == []  # the ARP-only device is not shown
+    assert c["gateway_mac"] == "DE-AD-BE-EF-00-01"  # router still shown in the header
+    assert m["totals"]["others"] == 0
 
 
-def test_seen_by_counts_unique_agents_not_arp_entries():
+def test_arp_only_neighbor_seen_by_many_is_still_hidden():
+    # However many agents observe an agentless ARP device, it stays off the map.
     n = {"ip": "192.168.1.50", "mac": "00:50:56:00:00:09", "state": "Stale"}
     m = build_netmap(
         [
@@ -110,7 +113,7 @@ def test_seen_by_counts_unique_agents_not_arp_entries():
             _snap("d2", ip="192.168.1.11", mac="AA-BB-CC-00-00-02", neighbors=[n]),
         ]
     )
-    assert m["clusters"][0]["others"][0]["seen_by"] == 2  # agents, not entries
+    assert m["clusters"][0]["others"] == []
 
 
 def test_subnet_anomaly_threshold():
