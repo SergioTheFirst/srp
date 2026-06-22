@@ -26,6 +26,7 @@ from server.netdisco import changes, correlation
 from server.netdisco import fusion as fusion_mod
 from server.netdisco import scan as scan_mod
 from server.netdisco.config import NetdiscoConfig
+from server.netdisco.credentials import default_store, resolve_community
 from server.netdisco.evidence import collect_evidence
 from server.netdisco.graph import build_graph
 from server.netdisco.metrics import METRICS
@@ -193,6 +194,7 @@ def run_reachability_cycle(
     if not _poll_lock.acquire(blocking=False):
         return {"down": 0, "unreachable": 0, "busy": 1}
     try:
+        community = resolve_community(cfg, store=default_store())
         devices = get_known()
         down_set: set = set()
         live_nids: set = set()
@@ -201,7 +203,7 @@ def run_reachability_cycle(
             if not ip or not nid or not is_rfc1918(ip):
                 continue  # only ever probe private hosts
             alive = is_alive(
-                ip, ports=cfg.scan_ports, community=cfg.snmp_community, version=cfg.snmp_version
+                ip, ports=cfg.scan_ports, community=community, version=cfg.snmp_version
             )
             (live_nids if alive else down_set).add(nid)
         graph = build_graph(devices, get_links())

@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Sequence
 
 from server.netdisco.config import NetdiscoConfig
+from server.netdisco.credentials import default_store, resolve_community
 from server.printers import oids, snmp
 from server.printers.discovery import is_rfc1918
 from server.printers.scan import expand_cidrs, local_cidrs
@@ -95,12 +96,14 @@ def scan(
     if not hosts:
         return []
 
+    community = resolve_community(cfg, store=default_store())
+
     def default_check(ip: str) -> bool:
         try:
             return host_is_alive(
                 ip,
                 ports=cfg.scan_ports,
-                community=cfg.snmp_community,
+                community=community,
                 version=cfg.snmp_version,
             )
         except Exception:  # noqa: BLE001 -- one bad host must never abort the whole scan

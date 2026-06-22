@@ -54,8 +54,11 @@ class NetdiscoConfig:
     scan_max_hosts: int = _DEFAULT_SCAN_MAX_HOSTS
     scan_workers: int = _DEFAULT_SCAN_WORKERS
     scan_ports: tuple[int, ...] = field(default_factory=lambda: _DEFAULT_SCAN_PORTS)
-    snmp_community: str = "public"
+    snmp_community: str = "public"  # plaintext path; only "public" should be plaintext
     snmp_version: int = 1  # on-wire code: 0=v1, 1=v2c (default v2c)
+    # Non-public community lives DPAPI-encrypted; this names it in the store
+    # (see netdisco/credentials.py). Empty -> use snmp_community plaintext.
+    snmp_credential_ref: str = ""
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -123,6 +126,8 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
     community = community if isinstance(community, str) and community else "public"
     version = _as_int(d.get("snmp_version"), 1)
     version = version if version in (0, 1) else 1
+    cred_ref = d.get("snmp_credential_ref")
+    cred_ref = cred_ref if isinstance(cred_ref, str) else ""
     return NetdiscoConfig(
         enabled=d.get("enabled") is True,
         inventory_interval_sec=interval,
@@ -139,4 +144,5 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
         scan_ports=scan_ports,
         snmp_community=community,
         snmp_version=version,
+        snmp_credential_ref=cred_ref,
     )
