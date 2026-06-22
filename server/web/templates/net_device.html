@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ d.hostname or d.device_nid }} · топология · SRP{% endblock %}
+{% block subtitle %}{{ net_type_ru(d.dev_type) }}{% if d.model %} · {{ d.model }}{% endif %}{% endblock %}
+
+{% set st = net_status_ru(d.status) %}
+
+{% block extra_head %}
+<style>
+.nd-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+.nd-title { font: 700 22px/1.2 var(--mono); }
+.nd-meta { display: flex; gap: 10px 18px; flex-wrap: wrap; margin: 14px 0 4px; font-size: 14px; }
+.nd-meta .k { color: var(--muted); font: 600 11px/1.4 var(--mono); letter-spacing: .6px; text-transform: uppercase; }
+.nd-meta .v { font-family: var(--mono); }
+.link-list { list-style: none; margin-top: 6px; }
+.link-list li {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px;
+}
+.link-list .peer { font-weight: 600; }
+.link-list .via { color: var(--muted); font: 500 12px/1 var(--mono); }
+.changelog { list-style: none; margin-top: 6px; }
+.changelog li {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px;
+}
+.changelog li .when { color: var(--muted); font: 500 12px/1 var(--mono); white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block body %}
+<p class="small"><a href="/topology">← топология</a></p>
+
+<div class="nd-head">
+  <span class="nd-title">{{ d.hostname or d.device_nid }}</span>
+  <span class="chip {{ st[0] }}">{{ st[1] }}</span>
+  <span class="pill">{{ net_type_ru(d.dev_type) }}</span>
+  {% if d.vendor %}<span class="pill">{{ d.vendor }}</span>{% endif %}
+</div>
+
+<div class="nd-meta">
+  <span><span class="k">IP</span> <span class="v">{{ d.ip or "—" }}</span></span>
+  <span><span class="k">MAC</span> <span class="v muted">{{ d.mac or "—" }}</span></span>
+  {% if d.model %}<span><span class="k">Модель</span> <span class="v">{{ d.model }}</span></span>{% endif %}
+  {% if d.serial %}<span><span class="k">Серийный</span> <span class="v">{{ d.serial }}</span></span>{% endif %}
+  {% if d.site_code %}<span><span class="k">Объект</span> <span class="v">{{ d.site_code }}</span></span>{% endif %}
+  <span><span class="k">Впервые</span> <span class="v muted">{{ d.first_seen or "—" }}</span></span>
+  <span><span class="k">Последний раз</span> <span class="v muted">{{ d.last_seen or "—" }}</span></span>
+</div>
+
+<h2>Интерфейсы</h2>
+{% if d.interfaces %}
+<table>
+  <thead><tr><th>#</th><th>Имя</th><th>Тип (ifType)</th><th>Скорость</th><th>Состояние</th><th>MAC</th></tr></thead>
+  <tbody>
+  {% for i in d.interfaces %}
+  <tr>
+    <td class="mono small">{{ i.if_index if i.if_index is not none else "—" }}</td>
+    <td class="mono small">{{ i.name or "—" }}</td>
+    <td class="mono small muted">{{ i.if_type if i.if_type is not none else "—" }}</td>
+    <td class="mono small">{{ "%.0f Мбит/с"|format(i.speed_mbps) if i.speed_mbps is not none else "—" }}</td>
+    <td>
+      {% if i.oper_up == 1 %}<span class="chip good">up</span>
+      {% elif i.oper_up == 0 %}<span class="chip bad">down</span>
+      {% else %}<span class="chip na">—</span>{% endif %}
+    </td>
+    <td class="mono small muted">{{ i.phys_mac or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted small">Интерфейсы не собраны (устройство не опрашивалось по SNMP или не отвечает).</p>
+{% endif %}
+
+<h2>Связи</h2>
+{% if d.links %}
+<ul class="link-list">
+  {% for l in d.links %}
+  {% set peer = l.b_nid if l.a_nid == d.device_nid else l.a_nid %}
+  <li>
+    <span class="peer"><a href="/netdisco/device/{{ peer }}">{{ peer }}</a></span>
+    <span class="chip {{ net_conf_color(l.confidence) }}">{{ l.confidence or "—" }}</span>
+    <span class="via">{{ l.link_kind or "link" }} · через {{ l.via_source or "—" }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted small">Линки к этому устройству ещё не выведены.</p>
+{% endif %}
+
+<h2 class="incident">Журнал изменений</h2>
+{% if changes %}
+<ul class="changelog">
+  {% for c in changes %}
+  <li>
+    <span class="when">{{ c.ts }}</span>
+    <span>{{ net_change_ru(c.kind) }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted small">Изменений по этому устройству за 90 дней нет.</p>
+{% endif %}
+{% endblock %}

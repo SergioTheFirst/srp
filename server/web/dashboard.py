@@ -110,6 +110,53 @@ def supply_color(pct_left: Optional[int]) -> str:
     return "good"
 
 
+# Stored dev_type / status / confidence stay English (machine values, tests pin
+# them); these map them to operator-facing Russian + a chip colour at render time.
+_NET_TYPE_RU = {
+    "router": "маршрутизатор",
+    "switch": "коммутатор",
+    "ap": "точка доступа",
+    "agent": "агент",
+    "printer": "принтер",
+    "endpoint": "устройство",
+    "unknown": "неизвестно",
+}
+
+_NET_STATUS_RU = {
+    "up": ("good", "на связи"),
+    "down": ("bad", "недоступен"),
+    "unreachable": ("warn", "за недоступным узлом"),
+    "missing": ("na", "пропал"),
+}
+
+_NET_CHANGE_RU = {
+    "device_new": "появилось устройство",
+    "device_gone": "устройство пропало",
+    "type_changed": "сменился тип",
+    "link_new": "новая связь",
+    "link_gone": "связь исчезла",
+    "status_changed": "сменился статус",
+}
+
+
+def net_type_ru(dev_type: Optional[str]) -> str:
+    return _NET_TYPE_RU.get(dev_type or "", dev_type or "неизвестно")
+
+
+def net_status_ru(status: Optional[str]) -> tuple[str, str]:
+    """(chip-class, RU label) for a network-device reachability status."""
+    return _NET_STATUS_RU.get(status or "", ("na", "неизвестно"))
+
+
+def net_conf_color(confidence: Optional[str]) -> str:
+    """Chip colour for an edge/link confidence band."""
+    return {"high": "good", "medium": "warn", "low": "na"}.get(confidence or "", "na")
+
+
+def net_change_ru(kind: Optional[str]) -> str:
+    return _NET_CHANGE_RU.get(kind or "", kind or "изменение")
+
+
 _TEMPLATES.env.globals.update(
     health_color=health_color,
     risk_color=risk_color,
@@ -119,6 +166,10 @@ _TEMPLATES.env.globals.update(
     fmt_age=fmt_age,
     printer_status_ru=printer_status_ru,
     supply_color=supply_color,
+    net_type_ru=net_type_ru,
+    net_status_ru=net_status_ru,
+    net_conf_color=net_conf_color,
+    net_change_ru=net_change_ru,
 )
 
 
@@ -320,6 +371,49 @@ def network_map(request: Request):
     m = build_netmap(db.get_network_snapshots())
     m = _attach_printers_to_netmap(m, db.get_printers())
     return _TEMPLATES.TemplateResponse(request, "netmap.html", {"m": m})
+
+
+@router.get("/topology", response_class=HTMLResponse)
+def topology(request: Request):
+    """Network topology page (SSR inventory table + canvas graph of real L2/L3
+    links). The graph is the latest stored snapshot (§3.5); nodes are enriched
+    with live reachability status/vendor from the inventory so the map colours
+    them. All agent/SNMP strings reach the JSON island via ``|tojson`` (autoescape
+    on) -- a hostile hostname cannot break out of the <script> island."""
+    snap = db.get_latest_topology_snapshot() or {}
+    raw = snap.get("graph") or {"nodes": [], "links": []}
+    inventory = db.get_net_devices()
+    by_nid = {d.get("device_nid"): d for d in inventory}
+    nodes = [
+        {
+            **n,
+            "status": (by_nid.get(n.get("nid")) or {}).get("status"),
+            "vendor": (by_nid.get(n.get("nid")) or {}).get("vendor"),
+        }
+        for n in (raw.get("nodes") or [])
+    ]
+    graph = {"nodes": nodes, "links": raw.get("links") or []}
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "topology.html",
+        {
+            "graph": graph,
+            "received_at": snap.get("received_at"),
+            "inventory": inventory,
+            "changes": db.get_net_changes(days=7),
+        },
+    )
+
+
+@router.get("/netdisco/device/{device_nid}", response_class=HTMLResponse)
+def net_device(request: Request, device_nid: str):
+    """One network device: interfaces, incident links, reachability status and its
+    slice of the change journal. Distinct from /device/{id} (SRP agents)."""
+    d = db.get_net_device(device_nid)
+    if d is None:
+        raise HTTPException(status_code=404, detail="network device not found")
+    changes = [c for c in db.get_net_changes(days=90) if c.get("device_nid") == device_nid]
+    return _TEMPLATES.TemplateResponse(request, "net_device.html", {"d": d, "changes": changes})
 
 
 @router.get("/print", response_class=HTMLResponse)
