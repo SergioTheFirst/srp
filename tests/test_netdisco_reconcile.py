@@ -58,6 +58,9 @@ def test_cycle_persists_links_and_snapshot_for_probed_infra_only():
         replace_links=lambda rows, nodes, received_at=None: captured.update(rows=rows, nodes=nodes),
         store_snapshot=lambda graph, received_at=None: captured.update(graph=graph),
         upsert=lambda dev, received_at=None: captured.setdefault("upserts", []).append(dev),
+        get_prev_snapshot=lambda: None,
+        store_change=lambda *a, **k: None,
+        set_status=lambda *a, **k: None,
     )
     assert res["probed"] == 1 and res["links"] == 1 and res["busy"] == 0
     assert captured["nodes"] == {"nd-chassis-sw1"}  # endpoint never probed
@@ -77,6 +80,9 @@ def test_cycle_skips_non_rfc1918_infra():
         replace_links=lambda *a, **k: None,
         store_snapshot=lambda *a, **k: None,
         upsert=lambda *a, **k: None,
+        get_prev_snapshot=lambda: None,
+        store_change=lambda *a, **k: None,
+        set_status=lambda *a, **k: None,
     )
     assert res["probed"] == 0 and res["links"] == 0
 
@@ -93,3 +99,49 @@ def test_cycle_idempotent_rerun_does_not_duplicate_links(tmp_path: Path):
     assert len(db.get_net_links()) == 1
     reconcile.run_topology_cycle(NetdiscoConfig(enabled=True), **kwargs)
     assert len(db.get_net_links()) == 1  # rerun replaces, never duplicates
+
+
+# --- reachability correlation cycle (§1.5/§3.7) ---
+
+_REACH_DEVICES = [
+    {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "up"},
+    {"device_nid": "gw", "ip": "10.0.0.2", "dev_type": "switch", "status": "up"},
+    {"device_nid": "h1", "ip": "10.0.0.3", "dev_type": "endpoint", "status": "up"},
+]
+_REACH_LINKS = [{"a_nid": "R", "b_nid": "gw"}, {"a_nid": "gw", "b_nid": "h1"}]
+
+
+def test_reachability_noop_when_disabled():
+    res = reconcile.run_reachability_cycle(NetdiscoConfig(enabled=False), get_known=lambda: [])
+    assert res == {"down": 0, "unreachable": 0, "busy": 0}
+
+
+def test_reachability_one_root_cause_and_suppressed_downstream():
+    statuses: dict = {}
+    log: list = []
+    res = reconcile.run_reachability_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=lambda: _REACH_DEVICES,
+        get_links=lambda: _REACH_LINKS,
+        is_alive=lambda ip, **k: ip == "10.0.0.1",  # only the router answers
+        set_status=lambda nid, st: statuses.__setitem__(nid, st),
+        store_change=lambda kind, nid, detail=None, ts=None: log.append((kind, nid)),
+    )
+    assert statuses["gw"] == "down" and statuses["h1"] == "unreachable"
+    assert ("root_cause", "gw") in log  # one cause raised, not a storm
+    assert res == {"down": 1, "unreachable": 1, "busy": 0}
+
+
+def test_reachability_marks_recovered_device_up():
+    statuses: dict = {}
+    reconcile.run_reachability_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=lambda: [
+            {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "down"}
+        ],
+        get_links=lambda: [],
+        is_alive=lambda ip, **k: True,  # back online
+        set_status=lambda nid, st: statuses.__setitem__(nid, st),
+        store_change=lambda *a, **k: None,
+    )
+    assert statuses["R"] == "up"

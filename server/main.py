@@ -219,6 +219,32 @@ async def _netdisco_topology_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+def _run_netdisco_reachability_cycle(cfg: ServerConfig) -> None:
+    """Run one reachability-correlation cycle (via to_thread). Self-guarded so a
+    transient probe error never crashes startup or kills the loop."""
+    try:
+        result = netdisco_reconcile.run_reachability_cycle(cfg.netdisco_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco reachability cycle failed")
+        return
+    if result.get("down") or result.get("unreachable"):
+        _ndlog.info(
+            "netdisco reachability: %d down, %d unreachable (suppressed)",
+            result.get("down", 0),
+            result.get("unreachable", 0),
+        )
+
+
+async def _netdisco_reachability_loop(cfg: ServerConfig) -> None:
+    """Ping known RFC1918 devices and correlate outages (down vs unreachable) every
+    interval (+jitter). Started when netdisco is enabled (unicast liveness, no scan)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.reachability_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_reachability_cycle, cfg)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -243,6 +269,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             tasks.append(asyncio.create_task(_netdisco_loop(cfg)))
             tasks.append(asyncio.create_task(_netdisco_classify_loop(cfg)))
             tasks.append(asyncio.create_task(_netdisco_topology_loop(cfg)))
+            tasks.append(asyncio.create_task(_netdisco_reachability_loop(cfg)))
             # active scan is double-gated: netdisco on AND the active_scan stop-gate
             if cfg.netdisco_config().active_scan:
                 tasks.append(asyncio.create_task(_netdisco_discovery_loop(cfg)))

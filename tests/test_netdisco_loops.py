@@ -69,3 +69,20 @@ def test_topology_cycle_glue_logs_on_links(monkeypatch: pytest.MonkeyPatch) -> N
         lambda _cfg: {"links": 4, "probed": 2, "busy": 0},
     )
     main._run_netdisco_topology_cycle(_CFG)  # exercises the success/log branch
+
+
+def test_reachability_cycle_glue_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(_cfg: object) -> dict:
+        raise RuntimeError("ping blew up")
+
+    monkeypatch.setattr(main.netdisco_reconcile, "run_reachability_cycle", boom)
+    main._run_netdisco_reachability_cycle(_CFG)  # must not raise
+
+
+def test_reachability_cycle_glue_logs_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main.netdisco_reconcile,
+        "run_reachability_cycle",
+        lambda _cfg: {"down": 1, "unreachable": 3, "busy": 0},
+    )
+    main._run_netdisco_reachability_cycle(_CFG)  # exercises the success/log branch

@@ -137,3 +137,9 @@ def test_topology_interval_default_and_clamp() -> None:
     assert load_netdisco_config({"topology_interval_sec": 5}).topology_interval_sec == 60
     assert load_netdisco_config({"topology_interval_sec": 1800}).topology_interval_sec == 1800
     assert load_netdisco_config({"topology_interval_sec": "x"}).topology_interval_sec == 3600
+
+
+def test_reachability_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).reachability_interval_sec == 600
+    assert load_netdisco_config({"reachability_interval_sec": 5}).reachability_interval_sec == 60
+    assert load_netdisco_config({"reachability_interval_sec": 300}).reachability_interval_sec == 300

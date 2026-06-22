@@ -280,6 +280,17 @@ def test_replace_net_links_keeps_links_of_unprobed_nodes(tmp_path: Path) -> None
     assert pairs == {("nd-chassis-sw1", "nd-mac-aa"), ("nd-chassis-sw2", "nd-mac-cc")}
 
 
+def test_set_net_device_status_does_not_touch_last_seen(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_device({"device_nid": "nd-x", "ip": "10.0.0.1", "status": "up"})
+    before = db.get_net_device("nd-x")["last_seen"]
+    db.set_net_device_status("nd-x", "missing")
+    after = db.get_net_device("nd-x")
+    assert after["status"] == "missing"
+    assert after["last_seen"] == before  # status-only update must not revive the ghost clock
+
+
 def test_get_latest_topology_snapshot(tmp_path: Path) -> None:
     p = tmp_path / "srp.db"
     db.init_db(p)
