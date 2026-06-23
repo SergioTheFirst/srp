@@ -1,106 +1,175 @@
 {% extends "base.html" %}
 {% block title %}Печать · SRP{% endblock %}
-{% block subtitle %}аналитика печати{% endblock %}
+{% block subtitle %}печать: компьютер → принтер{% endblock %}
 
 {% block extra_head %}
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 <style>
-.print-toolbar {
-  display: flex; align-items: center; gap: 14px;
-  margin-bottom: 24px; flex-wrap: wrap;
-}
-.days-btns { display: flex; gap: 6px; }
-.days-btns a {
-  font: 600 13px/1 var(--mono);
-  padding: 5px 14px; border-radius: 3px;
-  border: 1px solid var(--line-2);
-  color: var(--muted); text-decoration: none;
-  transition: background .15s, color .15s;
-}
-.days-btns a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
-.days-btns a.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.45); }
-.csv-btn {
-  margin-left: auto;
-  font: 600 13px/1 var(--mono);
-  padding: 6px 16px; border-radius: 3px;
-  background: var(--panel); border: 1px solid var(--line-2);
-  color: var(--muted); cursor: pointer; text-decoration: none;
-  transition: background .15s, color .15s;
-}
-.csv-btn:hover { background: var(--panel-2); color: var(--accent); text-decoration: none; }
-
-.summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
-.scard {
+.filter-panel {
+  position: sticky; top: 0; z-index: 20;
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 5px; padding: 16px 18px;
+  border-radius: 5px; padding: 12px 14px; margin-bottom: 22px;
 }
-.scard .l { font: 600 11px/1 var(--mono); letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
-.scard .n { font: 700 32px/1 var(--mono); color: var(--accent); }
-.delta { font: 600 13px/1 var(--mono); margin-left: 6px; vertical-align: middle; }
-.delta.good { color: var(--good); }
-.delta.bad  { color: var(--bad); }
-.delta.na   { color: var(--muted); }
+.filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.filter-row + .filter-row { margin-top: 10px; }
+.f-label { font: 600 11px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.f-input, .f-select {
+  font: 600 13px/1 var(--mono); padding: 6px 10px; border-radius: 3px;
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text);
+}
+.f-select { max-width: 230px; }
+.days-btns { display: flex; gap: 6px; }
+.days-btns button {
+  font: 600 13px/1 var(--mono); padding: 6px 14px; border-radius: 3px;
+  border: 1px solid var(--line-2); background: transparent;
+  color: var(--muted); cursor: pointer; transition: background .15s, color .15s;
+}
+.days-btns button:hover { background: var(--panel-2); color: var(--text); }
+.days-btns button.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.45); }
+.btn {
+  font: 600 13px/1 var(--mono); padding: 6px 14px; border-radius: 3px;
+  border: 1px solid var(--line-2); background: var(--panel-2);
+  color: var(--muted); cursor: pointer; transition: background .15s, color .15s;
+}
+.btn:hover { background: var(--panel); color: var(--text); }
+.btn.primary { background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.45); }
+.csv-btn {
+  margin-left: auto; font: 600 13px/1 var(--mono);
+  padding: 6px 16px; border-radius: 3px; background: var(--panel-2);
+  border: 1px solid var(--line-2); color: var(--muted); cursor: pointer; text-decoration: none;
+  transition: background .15s, color .15s;
+}
+.csv-btn:hover { background: var(--panel); color: var(--accent); text-decoration: none; }
+.csv-hint { font: 600 10px/1.4 var(--mono); color: var(--muted); opacity: .7; }
+
+.summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 26px; }
+.scard { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 15px 16px; }
+.scard .l { font: 600 11px/1.3 var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.scard .l .hint { font-weight: 600; font-size: 9px; opacity: .7; }
+.scard .n { font: 700 30px/1 var(--mono); color: var(--accent); }
+.scard.named .n { font-size: 17px; line-height: 1.25; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scard.named .sub { font: 600 12px/1 var(--mono); color: var(--accent); margin-top: 7px; min-height: 12px; }
+
+.chart-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 16px 14px; }
+.chart-panel .ch-title { font: 600 11px/1 var(--mono); letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+.ch-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.ch-head .ch-title { margin-bottom: 0; }
+.gran-badge { font: 600 10px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--accent); background: var(--accent-dim); padding: 4px 9px; border-radius: 3px; border: 1px solid rgba(14,165,233,.35); }
+.ch-head .btn { margin-left: auto; padding: 4px 10px; font-size: 11px; }
+.chart-wrap { width: 100%; }
 
 .charts-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
 @media (max-width: 900px) { .charts-2col { grid-template-columns: 1fr; } }
-.chart-panel {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 5px; padding: 16px 14px;
-}
-.chart-panel .ch-title {
-  font: 600 11px/1 var(--mono); letter-spacing: 1.4px;
-  text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
-}
-.chart-wrap { width: 100%; }
 
+.rec-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.search { font: 600 13px/1 var(--mono); padding: 6px 12px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text); min-width: 230px; }
 .ptable { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ptable th { color: var(--muted); font: 600 11px/1 var(--mono); letter-spacing: .8px; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid var(--line-2); text-align: left; }
-.ptable td { padding: 5px 8px; border-bottom: 1px solid var(--line-2); color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.ptable th { color: var(--muted); font: 600 11px/1 var(--mono); letter-spacing: .8px; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--line-2); text-align: left; white-space: nowrap; }
+.ptable th[data-sort] { cursor: pointer; user-select: none; }
+.ptable th[data-sort]:hover { color: var(--text); }
+.ptable td { padding: 5px 8px; border-bottom: 1px solid var(--line-2); color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .ptable tr:last-child td { border-bottom: none; }
-.ptable td:nth-child(2),
-.ptable td:nth-child(3),
-.ptable td:nth-child(4),
-.ptable td:nth-child(5) { text-align: right; }
-.ptable td:nth-child(2) { color: var(--accent); }
-.table-wrap { overflow-x: auto; max-height: 340px; overflow-y: auto; }
+.ptable td.r, .ptable th.r { text-align: right; }
+.ptable td.host { color: var(--accent); }
+.table-wrap { overflow-x: auto; max-height: 460px; overflow-y: auto; }
+.rec-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.rec-pager .info { font: 600 12px/1 var(--mono); color: var(--muted); }
+.rec-pager .btn:disabled { opacity: .4; cursor: default; }
 
-.no-data {
-  text-align: center; padding: 40px 20px;
-  color: var(--muted); font-size: 15px;
-}
+.no-data { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 15px; }
 .loading { color: var(--muted); font-size: 14px; font-family: var(--mono); }
+
+@media print {
+  header.top, .filter-panel, .rec-controls, .rec-pager, #chart-mode-btn { display: none !important; }
+  .table-wrap { max-height: none !important; overflow: visible !important; }
+  .scard, .chart-panel { break-inside: avoid; }
+}
 </style>
 {% endblock %}
 
 {% block body %}
-<div class="print-toolbar">
-  <div class="days-btns">
-    <a href="/print?days=7"  class="{{ 'active' if days == 7 }}">7д</a>
-    <a href="/print?days=14" class="{{ 'active' if days == 14 }}">14д</a>
-    <a href="/print?days=30" class="{{ 'active' if days == 30 or days not in (0, 7, 14, 90) }}">30д</a>
-    <a href="/print?days=90" class="{{ 'active' if days == 90 }}">90д</a>
-    <a href="/print?days=0"  class="{{ 'active' if days == 0 }}">Всё</a>
+<div class="filter-panel">
+  <div class="filter-row">
+    <div class="days-btns" id="presets">
+      <button data-days="7">7д</button>
+      <button data-days="14">14д</button>
+      <button data-days="30">30д</button>
+      <button data-days="90">90д</button>
+      <button data-days="0">Всё</button>
+    </div>
+    <span class="f-label">от</span>
+    <input type="date" class="f-input" id="f-from" value="{{ f_date_from }}">
+    <span class="f-label">до</span>
+    <input type="date" class="f-input" id="f-to" value="{{ f_date_to }}">
+    <a class="csv-btn" id="csv-link" href="/api/v1/fleet/print/export.csv" download>↓ CSV</a>
   </div>
-  <a class="csv-btn" href="/api/v1/fleet/print/export.csv?days={{ days }}" download>
-    ↓ CSV
-  </a>
+  <div class="filter-row">
+    <span class="f-label">компьютер</span>
+    <select class="f-select" id="f-device" data-all="— все —"><option value="">— все —</option></select>
+    <span class="f-label">принтер</span>
+    <select class="f-select" id="f-printer" data-all="— все —"><option value="">— все —</option></select>
+    <span class="f-label">IP</span>
+    <select class="f-select" id="f-ip" data-all="— все —"><option value="">— все —</option></select>
+    <button class="btn primary" id="apply-btn">Применить</button>
+    <button class="btn" id="reset-btn">Сброс</button>
+    <span class="csv-hint">для Excel — откройте CSV</span>
+  </div>
 </div>
 
 <div class="summary-cards" id="summary-cards">
   <div class="scard"><div class="l">Всего страниц</div><div class="n loading">…</div></div>
-  <div class="scard"><div class="l">Заданий</div><div class="n loading">…</div></div>
+  <div class="scard"><div class="l">Заданий <span class="hint">журнал</span></div><div class="n loading">…</div></div>
   <div class="scard"><div class="l">Принтеров</div><div class="n loading">…</div></div>
-  <div class="scard"><div class="l">Пользователей</div><div class="n loading">…</div></div>
+  <div class="scard"><div class="l">Компьютеров</div><div class="n loading">…</div></div>
+  <div class="scard named"><div class="l">Загруженный принтер</div><div class="n loading">…</div><div class="sub"></div></div>
+  <div class="scard named"><div class="l">Активный компьютер</div><div class="n loading">…</div><div class="sub"></div></div>
+  <div class="scard"><div class="l">Ср. стр/задание <span class="hint">журнал</span></div><div class="n loading">…</div></div>
 </div>
 
-{# Timeline #}
+{# Hero: computer -> printer #}
+<div class="chart-panel" style="margin-bottom:22px">
+  <div class="ch-head">
+    <div class="ch-title">Страниц: компьютер → принтер</div>
+    <span class="gran-badge" id="gran-badge">—</span>
+    <button class="btn" id="chart-mode-btn">линии</button>
+  </div>
+  <div class="chart-wrap" id="chart-hero" style="height:420px"><div class="loading">…</div></div>
+</div>
+
+{# Detail table #}
+<div class="section-label">Детально по заданиям</div>
+<div class="chart-panel" style="margin-bottom:26px">
+  <div class="rec-controls">
+    <input type="search" class="search" id="rec-search" placeholder="поиск: компьютер / принтер / IP">
+  </div>
+  <div class="table-wrap">
+    <table class="ptable" id="records-table">
+      <thead><tr>
+        <th data-sort="ts">Дата/время<span class="arrow"></span></th>
+        <th data-sort="hostname">Компьютер<span class="arrow"></span></th>
+        <th data-sort="printer">Принтер<span class="arrow"></span></th>
+        <th data-sort="ip">IP<span class="arrow"></span></th>
+        <th data-sort="pages" class="r">Страниц<span class="arrow"></span></th>
+        <th>Источник</th>
+        <th>Статус</th>
+      </tr></thead>
+      <tbody id="records-body"><tr><td colspan="7" class="loading">…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="rec-pager">
+    <button class="btn" id="rec-prev">← назад</button>
+    <span class="info" id="rec-page-info">…</span>
+    <button class="btn" id="rec-next">вперёд →</button>
+  </div>
+</div>
+
+{# Legacy sections, now driven by the shared date range #}
 <div class="section-label">Динамика печати</div>
 <div class="chart-panel" style="margin-bottom:18px">
   <div class="ch-title">Страниц в день — весь флот</div>
   <div class="chart-wrap" id="chart-timeline" style="height:240px"></div>
 </div>
 
-{# Printers bar + summary table #}
 <div class="charts-2col">
   <div class="chart-panel">
     <div class="ch-title">Страниц по принтерам (топ-10)</div>
@@ -112,7 +181,6 @@
   </div>
 </div>
 
-{# Users + Departments #}
 <div class="charts-2col">
   <div class="chart-panel">
     <div class="ch-title">Топ-20 пользователей по страницам</div>
@@ -126,181 +194,369 @@
 
 <script>
 (function () {
-  var DAYS = {{ days }};
-  var BASE_LAYOUT = {
-    paper_bgcolor: "transparent",
-    plot_bgcolor:  "transparent",
-    font:  { color: "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
-    margin: { t: 10, r: 10, b: 40, l: 10 },
-    xaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
-    yaxis: { gridcolor: "#132030", zerolinecolor: "#132030", tickfont: { size: 11 } },
-    showlegend: false,
-    autosize: true,
-  };
+  var API = "/api/v1/fleet/print";
+  var MONO = "JetBrains Mono, Consolas, monospace";
+  var PALETTE = ["#0ea5e9","#10d97a","#f59e0b","#a855f7","#f43f5e","#22d3ee",
+                 "#84cc16","#fb923c","#e879f9","#38bdf8","#4ade80","#facc15"];
+  var OTHERS_COLOR = "#5878a0";
+  var GRAN_RU = { hour: "по часам", day: "по дням", week: "по неделям", month: "по месяцам" };
+  var chartMode = "bar";            // hero: bar | line
+  var lastSeries = null;            // last /series payload (for mode toggle)
+  var rec = { page: 1, page_size: 50, sort: "ts", dir: "desc", q: "", pages: 1 };
+  var initSel = { "f-device": "", "f-printer": "", "f-ip": "" };  // URL-seeded select values
 
-  function layout(overrides) {
-    return Object.assign({}, BASE_LAYOUT, overrides);
+  function ctrl(id) { return document.getElementById(id); }
+  function num(v) { return (v || 0).toLocaleString("ru"); }
+  function chipClass(c) { return ["good","warn","na","high","bad","accent"].indexOf(c) !== -1 ? c : "na"; }
+
+  // ---- filter state (URL <-> controls) ----------------------------------- //
+  function currentFilters() {
+    var p = new URLSearchParams();
+    var v = { date_from: ctrl("f-from").value, date_to: ctrl("f-to").value,
+              device: ctrl("f-device").value, printer: ctrl("f-printer").value, ip: ctrl("f-ip").value };
+    Object.keys(v).forEach(function (k) { if (v[k]) p.set(k, v[k]); });
+    return p;
   }
-
-  function pctChange(curr, prev) {
-    if (!prev || prev === 0) return null;
-    return Math.round((curr - prev) / prev * 100);
+  function filterQS() { return currentFilters().toString(); }
+  function syncURL() {
+    var qs = filterQS();
+    history.replaceState(null, "", qs ? "/print?" + qs : "/print");
+    ctrl("csv-link").href = API + "/export.csv" + (qs ? "?" + qs : "");
   }
-
-  function deltaSpan(delta) {
-    if (delta === null) return "";
-    var sign = delta > 0 ? "+" : "";
-    var cls  = delta > 0 ? "bad" : (delta < 0 ? "good" : "na");
-    return "<span class=\"delta " + cls + "\">" + sign + delta + "%</span>";
+  function isoLocal(d) {
+    var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return z.toISOString().slice(0, 10);
   }
-
-  function fillSummary(d) {
-    var cards   = document.querySelectorAll("#summary-cards .scard");
-    var pageDelta = pctChange(d.total_pages,  d.prev_total_pages);
-    var jobDelta  = pctChange(d.total_jobs,   d.prev_total_jobs);
-    var items = [
-      { val: (d.total_pages || 0).toLocaleString("ru"),  delta: pageDelta },
-      { val: (d.total_jobs  || 0).toLocaleString("ru"),  delta: jobDelta },
-      { val: (d.printers    || []).length,                delta: null },
-      { val: (d.users       || []).length,                delta: null },
-    ];
-    items.forEach(function (item, i) {
-      var n = cards[i].querySelector(".n");
-      n.classList.remove("loading");
-      n.innerHTML = item.val + (item.delta !== null ? " " + deltaSpan(item.delta) : "");
+  function setPresetDates(n) {
+    if (n === 0) { ctrl("f-from").value = ""; ctrl("f-to").value = ""; }
+    else {
+      var to = new Date(), from = new Date();
+      from.setDate(from.getDate() - (n - 1));
+      ctrl("f-from").value = isoLocal(from);
+      ctrl("f-to").value = isoLocal(to);
+    }
+    markPreset(n);
+  }
+  function markPreset(n) {
+    Array.prototype.forEach.call(ctrl("presets").children, function (b) {
+      b.classList.toggle("active", parseInt(b.dataset.days, 10) === n);
     });
   }
 
+  // ---- select population -------------------------------------------------- //
+  function fillSelect(sel, values, current) {
+    sel.innerHTML = "";
+    var all = document.createElement("option");
+    all.value = ""; all.textContent = sel.dataset.all || "— все —";
+    sel.appendChild(all);
+    var found = false;
+    values.forEach(function (v) {
+      var o = document.createElement("option");
+      if (typeof v === "string") { o.value = v; o.textContent = v; }
+      else { o.value = v.value; o.textContent = v.label; }
+      if (o.value === current) { o.selected = true; found = true; }
+      sel.appendChild(o);            // textContent => no XSS sink
+    });
+    if (current && !found) {         // keep an active filter that fell out of range
+      var o = document.createElement("option");
+      o.value = current; o.textContent = current; o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+  function loadFilterOptions() {
+    var p = new URLSearchParams();
+    if (ctrl("f-from").value) p.set("date_from", ctrl("f-from").value);
+    if (ctrl("f-to").value) p.set("date_to", ctrl("f-to").value);
+    return fetch(API + "/filter-options?" + p.toString())
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        function cur(id) { return ctrl(id).value || initSel[id] || ""; }
+        fillSelect(ctrl("f-device"),
+          (d.devices || []).map(function (x) { return { value: x.device_id, label: x.hostname }; }),
+          cur("f-device"));
+        fillSelect(ctrl("f-printer"), d.printers || [], cur("f-printer"));
+        fillSelect(ctrl("f-ip"), d.ips || [], cur("f-ip"));
+        initSel["f-device"] = initSel["f-printer"] = initSel["f-ip"] = "";  // seed once
+      })
+      .catch(function () {});
+  }
+
+  // ---- summary cards (7) -------------------------------------------------- //
+  function cards() { return document.querySelectorAll("#summary-cards .scard"); }
+  function setNum(i, val) {
+    var n = cards()[i].querySelector(".n");
+    n.classList.remove("loading"); n.textContent = val;          // textContent: safe
+  }
+  function setNamed(i, name, sub) {
+    var c = cards()[i], n = c.querySelector(".n");
+    n.classList.remove("loading"); n.textContent = name;          // textContent: safe
+    c.querySelector(".sub").textContent = sub || "";
+  }
+  function loadSummary() {
+    fetch(API + "/summary?" + filterQS()).then(function (r) { return r.json(); }).then(function (d) {
+      setNum(0, num(d.total_pages));
+      setNum(1, num(d.total_jobs));
+      setNum(2, num(d.active_printers));
+      setNum(3, num(d.active_computers));
+      var bp = d.busiest_printer, mc = d.most_active_computer;
+      setNamed(4, bp ? bp.name : "—", bp ? ((bp.ip ? bp.ip + " · " : "") + num(bp.pages) + " стр") : "");
+      setNamed(5, mc ? mc.hostname : "—", mc ? (num(mc.pages) + " стр") : "");
+      setNum(6, (d.avg_pages_per_job || 0).toLocaleString("ru"));
+    }).catch(function () {});
+  }
+
+  // ---- hero chart (computer -> printer) ----------------------------------- //
+  function legendName(s) {
+    return srpEsc(s.hostname) + " → " + srpEsc(s.printer) + " [" + srpEsc(s.ip || "—") + "]";
+  }
+  function heroTrace(name, points, buckets, color) {
+    if (chartMode === "line") {
+      return { x: buckets, y: points, type: "scatter", mode: "lines+markers", name: name,
+        line: { color: color, width: 2 }, marker: { color: color, size: 4 },
+        hovertemplate: "%{x}<br>%{y} стр<extra>" + name + "</extra>" };
+    }
+    return { x: buckets, y: points, type: "bar", name: name, marker: { color: color },
+      hovertemplate: "%{x}<br>%{y} стр<extra>" + name + "</extra>" };
+  }
+  function renderHero(d) {
+    lastSeries = d;
+    var el = ctrl("chart-hero");
+    ctrl("gran-badge").textContent = GRAN_RU[d.granularity] || d.granularity || "—";
+    var series = d.series || [];
+    if (series.length === 0 && !d.others) {
+      el.innerHTML = "<div class=\"no-data\">Нет данных за период</div>"; return;
+    }
+    var traces = series.map(function (s, i) {
+      return heroTrace(legendName(s), s.points, d.buckets, PALETTE[i % PALETTE.length]);
+    });
+    if (d.others) {
+      traces.push(heroTrace(srpEsc(d.others.label), d.others.points, d.buckets, OTHERS_COLOR));
+    }
+    Plotly.newPlot(el, traces, {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: "#deeef8", family: MONO, size: 12 },
+      barmode: "stack",
+      margin: { t: 8, r: 14, b: 96, l: 56 },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
+      showlegend: true,
+      legend: { orientation: "h", font: { size: 10 }, y: -0.16, x: 0, xanchor: "left", yanchor: "top" },
+      autosize: true,
+    }, { responsive: true, displayModeBar: false });
+  }
+  function loadSeries() {
+    ctrl("chart-hero").innerHTML = "<div class=\"loading\">…</div>";
+    fetch(API + "/series?" + filterQS()).then(function (r) { return r.json(); })
+      .then(renderHero)
+      .catch(function () { ctrl("chart-hero").innerHTML = "<div class=\"no-data\">Ошибка загрузки</div>"; });
+  }
+
+  // ---- detail records table ---------------------------------------------- //
+  function fmtTs(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString("ru", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+  function renderRecords(d) {
+    var body = ctrl("records-body");
+    if (!d.rows || d.rows.length === 0) {
+      body.innerHTML = "<tr><td colspan=\"7\" class=\"no-data\">Нет записей</td></tr>";
+    } else {
+      body.innerHTML = d.rows.map(function (r) {
+        return "<tr>"
+          + "<td>" + srpEsc(fmtTs(r.ts)) + "</td>"
+          + "<td class=\"host\" title=\"" + srpEsc(r.device_id) + "\">" + srpEsc(r.hostname) + "</td>"
+          + "<td title=\"" + srpEsc(r.printer) + "\">" + srpEsc(r.printer || "—") + "</td>"
+          + "<td>" + srpEsc(r.ip || "—") + "</td>"
+          + "<td class=\"r\">" + num(r.pages) + "</td>"
+          + "<td>" + srpEsc(r.source_label || "—") + "</td>"
+          + "<td><span class=\"chip " + chipClass(r.validation_color) + "\">" + srpEsc(r.validation || "—") + "</span></td>"
+          + "</tr>";
+      }).join("");
+    }
+    rec.page = d.page || 1;
+    rec.pages = Math.max(1, Math.ceil((d.total || 0) / (d.page_size || 50)));
+    ctrl("rec-page-info").textContent = "стр " + rec.page + " из " + rec.pages + " · " + (d.total || 0) + " записей";
+    ctrl("rec-prev").disabled = rec.page <= 1;
+    ctrl("rec-next").disabled = rec.page >= rec.pages;
+  }
+  function loadRecords() {
+    var p = currentFilters();
+    p.set("page", rec.page); p.set("page_size", rec.page_size);
+    p.set("sort", rec.sort); p.set("dir", rec.dir);
+    if (rec.q) p.set("q", rec.q);
+    fetch(API + "/records?" + p.toString()).then(function (r) { return r.json(); })
+      .then(renderRecords).catch(function () {});
+  }
+  function updateArrows() {
+    document.querySelectorAll("#records-table th[data-sort]").forEach(function (th) {
+      var a = th.querySelector(".arrow");
+      a.textContent = th.dataset.sort === rec.sort ? (rec.dir === "asc" ? " ▲" : " ▼") : "";
+    });
+  }
+  function sortBy(key) {
+    if (rec.sort === key) { rec.dir = rec.dir === "asc" ? "desc" : "asc"; }
+    else { rec.sort = key; rec.dir = (key === "pages" || key === "ts") ? "desc" : "asc"; }
+    rec.page = 1; updateArrows(); loadRecords();
+  }
+
+  // ---- legacy sections (timeline / printers / users / departments) -------- //
+  function baseLayout(o) {
+    return Object.assign({
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: "#deeef8", family: MONO, size: 12 },
+      margin: { t: 10, r: 10, b: 40, l: 10 },
+      xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
+      showlegend: false, autosize: true,
+    }, o);
+  }
   function detectAnomalies(daily) {
     if (!daily || daily.length < 5) return [];
     var pages = daily.map(function (r) { return r.pages; });
-    var mean  = pages.reduce(function (a, b) { return a + b; }, 0) / pages.length;
-    var vari  = pages.reduce(function (a, b) { return a + Math.pow(b - mean, 2); }, 0) / pages.length;
-    var sigma = Math.sqrt(vari);
-    var thresh = mean + 1.5 * sigma;
+    var mean = pages.reduce(function (a, b) { return a + b; }, 0) / pages.length;
+    var vari = pages.reduce(function (a, b) { return a + Math.pow(b - mean, 2); }, 0) / pages.length;
+    var thresh = mean + 1.5 * Math.sqrt(vari);
     return daily.filter(function (r) { return r.pages > thresh; }).map(function (r) { return r.date; });
   }
-
   function renderTimeline(daily) {
-    var el = document.getElementById("chart-timeline");
+    var el = ctrl("chart-timeline");
     if (!daily || daily.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных за период</div>"; return; }
-    var dates  = daily.map(function (r) { return r.date; });
-    var pages  = daily.map(function (r) { return r.pages; });
     var traces = [{
-      x: dates, y: pages, type: "scatter", mode: "lines+markers",
-      line:  { color: "#0ea5e9", width: 2 },
-      marker: { color: "#0ea5e9", size: 4 },
-      fill: "tozeroy", fillcolor: "rgba(14,165,233,.08)",
+      x: daily.map(function (r) { return r.date; }), y: daily.map(function (r) { return r.pages; }),
+      type: "scatter", mode: "lines+markers", line: { color: "#0ea5e9", width: 2 },
+      marker: { color: "#0ea5e9", size: 4 }, fill: "tozeroy", fillcolor: "rgba(14,165,233,.08)",
       hovertemplate: "%{x}<br><b>%{y}</b> стр<extra></extra>",
     }];
-    var anomalyDates = detectAnomalies(daily);
-    if (anomalyDates.length > 0) {
-      var anom = daily.filter(function (r) { return anomalyDates.indexOf(r.date) !== -1; });
-      traces.push({
-        x: anom.map(function (r) { return r.date; }),
-        y: anom.map(function (r) { return r.pages; }),
-        type: "scatter", mode: "markers",
-        marker: { color: "#f43f5e", size: 9, symbol: "diamond" },
-        hovertemplate: "<b>%{x}</b><br>%{y} стр ⚠ аномалия<extra></extra>",
-        name: "аномалия",
-        showlegend: true,
-      });
+    var an = detectAnomalies(daily);
+    if (an.length > 0) {
+      var pts = daily.filter(function (r) { return an.indexOf(r.date) !== -1; });
+      traces.push({ x: pts.map(function (r) { return r.date; }), y: pts.map(function (r) { return r.pages; }),
+        type: "scatter", mode: "markers", marker: { color: "#f43f5e", size: 9, symbol: "diamond" },
+        hovertemplate: "<b>%{x}</b><br>%{y} стр ⚠ аномалия<extra></extra>", name: "аномалия", showlegend: true });
     }
-    Plotly.newPlot(el, traces, layout({
-      xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
-      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
-      margin: { t: 6, r: 14, b: 44, l: 54 },
-      showlegend: anomalyDates.length > 0,
+    Plotly.newPlot(el, traces, baseLayout({
+      margin: { t: 6, r: 14, b: 44, l: 54 }, showlegend: an.length > 0,
       legend: { font: { size: 11 }, x: 1, y: 1, xanchor: "right" },
+      yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
     }), { responsive: true, displayModeBar: false });
   }
-
-  function renderPrinters(printers) {
-    var el = document.getElementById("chart-printers");
-    if (!printers || printers.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
-    var top   = printers.slice(0, 10);
-    var names = top.map(function (r) { return srpEsc(r.name); }).reverse();
-    var pages = top.map(function (r) { return r.pages; }).reverse();
+  function renderBar(elId, items, nameKey, color) {
+    var el = ctrl(elId);
+    if (!items || items.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
+    var top = items.slice(0, elId === "chart-users" ? 20 : 10);
     Plotly.newPlot(el, [{
-      x: pages, y: names, type: "bar", orientation: "h",
-      marker: { color: "#0ea5e9", opacity: 0.85 },
+      x: top.map(function (r) { return r.pages; }).reverse(),
+      y: top.map(function (r) { return srpEsc(r[nameKey]); }).reverse(),
+      type: "bar", orientation: "h", marker: { color: color, opacity: 0.85 },
       hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
-    }], layout({
+    }], baseLayout({
       margin: { t: 6, r: 14, b: 40, l: 160 },
       xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
-      yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
     }), { responsive: true, displayModeBar: false });
   }
-
   function renderPrinterTable(printers) {
-    var el = document.getElementById("printer-summary-table");
+    var el = ctrl("printer-summary-table");
     if (!printers || printers.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
     var total = printers.reduce(function (s, r) { return s + r.pages; }, 0) || 1;
-    var rows  = printers.slice(0, 12).map(function (r) {
+    var rows = printers.slice(0, 12).map(function (r) {
       var avg = r.jobs > 0 ? (r.pages / r.jobs).toFixed(1) : "—";
       var pct = (100 * r.pages / total).toFixed(1);
       return "<tr><td title=\"" + srpEsc(r.name) + "\">" + srpEsc(r.name.substring(0, 24)) + "</td>"
-        + "<td>" + r.pages.toLocaleString("ru") + "</td>"
-        + "<td>" + r.jobs + "</td>"
-        + "<td>" + avg + "</td>"
-        + "<td>" + pct + "%</td></tr>";
+        + "<td class=\"r\">" + num(r.pages) + "</td><td class=\"r\">" + num(r.jobs) + "</td>"
+        + "<td class=\"r\">" + srpEsc(avg) + "</td><td class=\"r\">" + srpEsc(pct) + "%</td></tr>";
     }).join("");
-    el.innerHTML = "<table class=\"ptable\"><thead><tr>"
-      + "<th>Принтер</th><th>Страниц</th><th>Задания</th><th>Ср/зад</th><th>%</th>"
+    el.innerHTML = "<table class=\"ptable\"><thead><tr><th>Принтер</th>"
+      + "<th class=\"r\">Страниц</th><th class=\"r\">Задания</th><th class=\"r\">Ср/зад</th><th class=\"r\">%</th>"
       + "</tr></thead><tbody>" + rows + "</tbody></table>";
   }
-
-  function renderUsers(users) {
-    var el = document.getElementById("chart-users");
-    if (!users || users.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
-    var top   = users.slice(0, 20);
-    var names = top.map(function (r) { return srpEsc(r.user_name); }).reverse();
-    var pages = top.map(function (r) { return r.pages; }).reverse();
-    Plotly.newPlot(el, [{
-      x: pages, y: names, type: "bar", orientation: "h",
-      marker: { color: "#10d97a", opacity: 0.85 },
-      hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
-    }], layout({
-      margin: { t: 6, r: 14, b: 40, l: 160 },
-      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
-      yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
-    }), { responsive: true, displayModeBar: false });
-  }
-
   function renderDepartments(departments) {
-    var panel = document.getElementById("dept-panel");
-    var el    = document.getElementById("chart-departments");
-    var hasReal = departments && departments.some(function (r) {
-      return r.dept !== "Без отдела" && r.pages > 0;
-    });
+    var panel = ctrl("dept-panel"), el = ctrl("chart-departments");
+    var hasReal = departments && departments.some(function (r) { return r.dept !== "Без отдела" && r.pages > 0; });
     if (!hasReal) { panel.style.display = "none"; return; }
-    var names = departments.map(function (r) { return srpEsc(r.dept); });
-    var pages = departments.map(function (r) { return r.pages; });
+    panel.style.display = "";
     Plotly.newPlot(el, [{
-      x: names, y: pages, type: "bar",
-      marker: { color: "#f59e0b", opacity: 0.85 },
+      x: departments.map(function (r) { return srpEsc(r.dept); }),
+      y: departments.map(function (r) { return r.pages; }),
+      type: "bar", marker: { color: "#f59e0b", opacity: 0.85 },
       hovertemplate: "<b>%{x}</b><br>%{y} стр<extra></extra>",
-    }], layout({
+    }], baseLayout({
       margin: { t: 6, r: 14, b: 80, l: 54 },
       xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, tickangle: -35 },
       yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
     }), { responsive: true, displayModeBar: false });
   }
-
-  fetch("/api/v1/fleet/print/analytics?days=" + DAYS)
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      fillSummary(d);
+  function loadLegacy() {
+    fetch(API + "/analytics?" + filterQS()).then(function (r) { return r.json(); }).then(function (d) {
       renderTimeline(d.daily);
-      renderPrinters(d.printers);
+      renderBar("chart-printers", d.printers, "name", "#0ea5e9");
       renderPrinterTable(d.printers);
-      renderUsers(d.users);
+      renderBar("chart-users", d.users, "user_name", "#10d97a");
       renderDepartments(d.departments);
-    })
-    .catch(function (err) {
-      document.querySelector(".summary-cards").innerHTML =
-        "<div class=\"no-data\">Ошибка загрузки: " + srpEsc(err) + "</div>";
+    }).catch(function () {});
+  }
+
+  // ---- orchestration ------------------------------------------------------ //
+  function loadAllData() {
+    loadSummary(); loadSeries(); loadRecords(); loadLegacy();
+  }
+  function applyFilters() {
+    rec.page = 1; markPreset(-1); syncURL();
+    loadFilterOptions().then(loadAllData);
+  }
+  function resetFilters() {
+    ctrl("f-device").value = ""; ctrl("f-printer").value = ""; ctrl("f-ip").value = "";
+    rec.q = ""; ctrl("rec-search").value = "";
+    setPresetDates(30); rec.page = 1; rec.sort = "ts"; rec.dir = "desc"; updateArrows();
+    syncURL(); loadFilterOptions().then(loadAllData);
+  }
+
+  function bindEvents() {
+    Array.prototype.forEach.call(ctrl("presets").children, function (b) {
+      b.addEventListener("click", function () { setPresetDates(parseInt(b.dataset.days, 10)); applyFilters(); });
     });
+    ctrl("apply-btn").addEventListener("click", applyFilters);
+    ctrl("reset-btn").addEventListener("click", resetFilters);
+    ctrl("chart-mode-btn").addEventListener("click", function () {
+      chartMode = chartMode === "bar" ? "line" : "bar";
+      this.textContent = chartMode === "bar" ? "линии" : "столбцы";
+      if (lastSeries) renderHero(lastSeries);
+    });
+    document.querySelectorAll("#records-table th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () { sortBy(th.dataset.sort); });
+    });
+    var timer = null;
+    ctrl("rec-search").addEventListener("input", function (e) {
+      clearTimeout(timer);
+      var val = e.target.value;
+      timer = setTimeout(function () { rec.q = val.trim(); rec.page = 1; loadRecords(); }, 300);
+    });
+    ctrl("rec-prev").addEventListener("click", function () { if (rec.page > 1) { rec.page--; loadRecords(); } });
+    ctrl("rec-next").addEventListener("click", function () { if (rec.page < rec.pages) { rec.page++; loadRecords(); } });
+  }
+
+  function init() {
+    bindEvents();
+    var url = new URLSearchParams(location.search);
+    initSel["f-device"] = url.get("device") || "";
+    initSel["f-printer"] = url.get("printer") || "";
+    initSel["f-ip"] = url.get("ip") || "";
+    if (!ctrl("f-from").value && !ctrl("f-to").value) { setPresetDates(30); }
+    else { markPreset(-1); }
+    updateArrows();
+    // Populate selects (incl. URL-seeded selection) BEFORE syncing the URL, so
+    // currentFilters() reflects every active filter.
+    loadFilterOptions().then(function () { syncURL(); loadAllData(); });
+  }
+
+  // Defer init until DOMContentLoaded so the deferred Plotly script has run --
+  // otherwise a fast localhost /series can resolve before Plotly is defined and
+  // the hero chart silently fails to draw.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
 </script>
 {% endblock %}
