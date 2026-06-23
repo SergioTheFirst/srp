@@ -12,6 +12,7 @@ module constants, never user input.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import sqlite3
 import threading
@@ -33,6 +34,58 @@ _lock = threading.Lock()
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# --------------------------------------------------------------------------- #
+# Printer-IP resolution (printview): map a print queue NAME to its printer IP.
+# print_jobs stores only the spooler queue name; the agent separately ships
+# {name -> RFC1918 ip} spooler hints in HistoricalPayload.printer_ports. We
+# persist them in printer_ip_map so print views resolve (device_id, queue) -> ip
+# with a plain SQL JOIN. Defense-in-depth: re-validate RFC1918 server-side (the
+# agent already drops public IPs/names, but a direct token-authed poster is not
+# the agent). A queue with no TCP/IP port (WSD/USB/share) has no ip -> stays NULL.
+# --------------------------------------------------------------------------- #
+_PRINTER_PORTS_CAP = 256  # mirrors shared.schema PRINTER_PORTS_MAX
+_PRINTER_NAME_CAP = 256  # mirrors PrinterPortHint.name max_length
+_RFC1918_NETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_PIM_UPSERT = (
+    "INSERT INTO printer_ip_map (device_id, printer, ip, updated_at) VALUES (?,?,?,?) "
+    "ON CONFLICT(device_id, printer) DO UPDATE SET ip=excluded.ip, updated_at=excluded.updated_at"
+)
+
+
+def _is_rfc1918(host: Optional[str]) -> bool:
+    """True only for a literal RFC1918 IPv4 address; names/public/loopback/v6 -> False."""
+    if not host or not isinstance(host, str):
+        return False
+    try:
+        addr = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address):
+        mapped = addr.ipv4_mapped
+        if mapped is None:
+            return False
+        addr = mapped
+    return any(addr in net for net in _RFC1918_NETS)
+
+
+def _clean_port_hint(hint: Any) -> Optional[tuple[str, str]]:
+    """Validate one spooler hint -> (queue_name, rfc1918_ip), or None if unusable."""
+    if not isinstance(hint, dict):
+        return None
+    name = hint.get("name")
+    ip = hint.get("ip")
+    if not isinstance(name, str) or not name or not isinstance(ip, str):
+        return None
+    clean = ip.strip()
+    if not _is_rfc1918(clean):
+        return None
+    return name[:_PRINTER_NAME_CAP], clean
 
 
 _SCHEMA = """
@@ -143,6 +196,14 @@ CREATE TABLE IF NOT EXISTS print_jobs (
 CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup
   ON print_jobs(device_id, job_id) WHERE job_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS printer_ip_map (
+  device_id  TEXT NOT NULL,
+  printer    TEXT NOT NULL,
+  ip         TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (device_id, printer)
+);
+CREATE INDEX IF NOT EXISTS idx_pim_ip ON printer_ip_map(ip);
 CREATE TABLE IF NOT EXISTS printers (
   printer_id   TEXT PRIMARY KEY,
   ip           TEXT,
@@ -263,6 +324,7 @@ def init_db(
         _migrate_legacy_latest_wins(conn)
         conn.executescript(_SCHEMA)
         _migrate_add_columns(conn)
+        _backfill_printer_ip_map(conn)
 
 
 def _connect() -> sqlite3.Connection:
@@ -1053,6 +1115,7 @@ _DEVICE_TABLES: tuple[str, ...] = (
     "acknowledgements",
     "device_source_trust",
     "print_jobs",
+    "printer_ip_map",
     "devices",
 )
 
@@ -1516,6 +1579,93 @@ def get_printer_port_hints() -> list[dict[str, Any]]:
             if isinstance(p, dict) and p.get("ip"):
                 out.append({"name": p.get("name"), "ip": p.get("ip")})
     return out
+
+
+def store_printer_ip_hints(device_id: str, hints: list[dict[str, Any]]) -> int:
+    """Upsert a device's spooler (queue-name -> printer-IP) hints into printer_ip_map.
+
+    Called on every ``historical`` ingest (the hints ride in HistoricalPayload).
+    RFC1918-revalidated; non-routable/empty/oversized entries are skipped. Returns
+    the number of mappings written. The map is the read side for print-view IP
+    resolution; it never feeds trust or scoring.
+    """
+    if not device_id or not isinstance(hints, list) or not hints:
+        return 0
+    now = _now_iso()
+    rows: list[tuple[str, str, str, str]] = []
+    for hint in hints[:_PRINTER_PORTS_CAP]:
+        cleaned = _clean_port_hint(hint)
+        if cleaned is not None:
+            rows.append((device_id, cleaned[0], cleaned[1], now))
+    if not rows:
+        return 0
+    with _lock, _connect() as conn:
+        conn.executemany(_PIM_UPSERT, rows)
+    return len(rows)
+
+
+def iter_printer_port_map() -> list[dict[str, Any]]:
+    """Per-device spooler hints from each device's newest historical payload:
+    ``[{device_id, name, ip}]`` (RFC1918 ip only). Unlike get_printer_port_hints
+    (fleet-flat, device-less, for discovery), this keeps device_id+name so print
+    views resolve (device_id, queue-name) -> printer IP. Offline/diagnostic
+    (full-fleet JSON scan); per-request resolution uses get_printer_ip (indexed)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, payload AS hist_payload FROM historical "
+            "WHERE id IN (SELECT MAX(id) FROM historical GROUP BY device_id)"
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        for hint in (payload.get("printer_ports") or [])[:_PRINTER_PORTS_CAP]:
+            cleaned = _clean_port_hint(hint)
+            if cleaned is not None:
+                out.append({"device_id": r["device_id"], "name": cleaned[0], "ip": cleaned[1]})
+    return out
+
+
+def get_printer_ip(device_id: str, printer: str) -> Optional[str]:
+    """Resolved printer IP for a (device, queue-name), or None when unknown
+    (WSD/USB/shared queue, or no hint received yet)."""
+    if not device_id or not printer:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ip FROM printer_ip_map WHERE device_id=? AND printer=?",
+            (device_id, printer),
+        ).fetchone()
+    return row["ip"] if row else None
+
+
+def _backfill_printer_ip_map(conn: sqlite3.Connection) -> None:
+    """Populate printer_ip_map from existing historical payloads (idempotent).
+
+    Runs once inside init_db so an already-running fleet resolves printer IPs
+    immediately on upgrade, without waiting for the next historical sweep. Uses the
+    caller's connection/transaction.
+    """
+    rows = conn.execute(
+        "SELECT device_id, payload AS hist_payload FROM historical "
+        "WHERE id IN (SELECT MAX(id) FROM historical GROUP BY device_id)"
+    ).fetchall()
+    now = _now_iso()
+    batch: list[tuple[str, str, str, str]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        for hint in (payload.get("printer_ports") or [])[:_PRINTER_PORTS_CAP]:
+            cleaned = _clean_port_hint(hint)
+            if cleaned is not None:
+                batch.append((r["device_id"], cleaned[0], cleaned[1], now))
+    if batch:
+        conn.executemany(_PIM_UPSERT, batch)
+
+
+def backfill_printer_ip_map() -> None:
+    """Public one-shot backfill (opens its own transaction). init_db runs the
+    internal variant with its own connection."""
+    with _lock, _connect() as conn:
+        _backfill_printer_ip_map(conn)
 
 
 def _supply_low_pct(supplies: list[dict[str, Any]]) -> Optional[int]:
