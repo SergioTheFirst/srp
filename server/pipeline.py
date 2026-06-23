@@ -273,6 +273,12 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             clock_drift_sec=drift,
         )
         db.store_historical(did, ts, env.payload, received_at=received_at, clock_drift_sec=drift)
+        # printview: persist spooler {queue-name -> printer-IP} hints so print
+        # views can resolve a print job's printer to its IP (server-side, no agent
+        # or contract change). env.payload is the RAW dict (the validated parse is
+        # not retained here), so store_printer_ip_hints re-applies the RFC1918
+        # filter AND the count/length caps -- it is the operative guard.
+        db.store_printer_ip_hints(did, env.payload.get("printer_ports", []))
     elif env.msg_type == "heartbeat":
         db.touch_device(
             did,
