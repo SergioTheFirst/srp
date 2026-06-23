@@ -16,6 +16,7 @@ import ipaddress
 import json
 import sqlite3
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -2404,6 +2405,88 @@ def store_print_jobs(
             except sqlite3.IntegrityError:
                 pass  # duplicate job_id for this device — already stored
     return inserted
+
+
+# --------------------------------------------------------------------------- #
+# Print query layer (printview): one filter + WHERE builder + base join reused
+# by every print view (series / summary / records / export) so they stay DRY and
+# consistent. Every filter VALUE is a bound parameter -- never interpolated.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class PrintFilter:
+    """Immutable filter for print-job queries. Dates are 'YYYY-MM-DD' local
+    calendar days (inclusive); device is a device_id; printer is a queue name;
+    ip is a resolved printer IP. Any field None = unfiltered on that axis."""
+
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    device: Optional[str] = None
+    printer: Optional[str] = None
+    ip: Optional[str] = None
+
+
+# Canonical FROM for every filtered print query. printer_ip_map PK(device_id,
+# printer) guarantees <=1 row per join key, so the LEFT JOIN never multiplies
+# rows; m.ip is NULL for queues with no resolved IP (WSD/USB/share).
+_PRINT_BASE_FROM = (
+    "print_jobs p "
+    "LEFT JOIN devices d ON d.device_id = p.device_id "
+    "LEFT JOIN printer_ip_map m ON m.device_id = p.device_id AND m.printer = p.printer"
+)
+
+
+def _date_cutoff_utc(date_str: Optional[str], *, end: bool) -> Optional[str]:
+    """'YYYY-MM-DD' local date -> UTC ISO cutoff (no suffix) for lexical compare
+    against stored UTC print ts (mirrors _local_day_start_utc). end=False -> start
+    of that local day; end=True -> start of the NEXT local day (date_to inclusive).
+    Returns None for empty/malformed input (that axis is then left unfiltered)."""
+    if not date_str or not isinstance(date_str, str):
+        return None
+    try:
+        parsed = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    local = parsed.astimezone()  # naive -> interpreted as local midnight
+    if end:
+        local = local + timedelta(days=1)
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _normalize_dates(
+    date_from: Optional[str], date_to: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Swap a reversed [from, to] pair so the range is always well-formed."""
+    if date_from and date_to and date_from > date_to:
+        return date_to, date_from
+    return date_from, date_to
+
+
+def _print_where(f: PrintFilter) -> tuple[str, list[Any]]:
+    """Parameterized WHERE tail + params for a PrintFilter over _PRINT_BASE_FROM
+    (aliases p/d/m). Every value is a bound parameter; the returned string holds
+    only fixed fragments and '?' placeholders -- safe to f-string into the query."""
+    df, dt = _normalize_dates(f.date_from, f.date_to)
+    clauses: list[str] = []
+    params: list[Any] = []
+    lo = _date_cutoff_utc(df, end=False)
+    hi = _date_cutoff_utc(dt, end=True)
+    if lo:
+        clauses.append("p.ts >= ?")
+        params.append(lo)
+    if hi:
+        clauses.append("p.ts < ?")
+        params.append(hi)
+    if f.device:
+        clauses.append("p.device_id = ?")
+        params.append(f.device)
+    if f.printer:
+        clauses.append("p.printer = ?")
+        params.append(f.printer)
+    if f.ip:
+        clauses.append("m.ip = ?")
+        params.append(f.ip)
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
 
 
 def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
