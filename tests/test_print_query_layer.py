@@ -50,6 +50,17 @@ def test_injection_attempt_stays_a_bound_param() -> None:
     assert params[0] == "x'; DROP TABLE print_jobs;--"
 
 
+def test_malformed_date_injection_is_dropped() -> None:
+    from server.db import PrintFilter, _print_where
+
+    # A malformed/injection date is rejected by strptime -> no clause, no param,
+    # so the payload never reaches SQL text (defense-in-depth alongside binding).
+    where, params = _print_where(PrintFilter(date_from="2026-06-01'; DROP TABLE print_jobs;--"))
+    assert "DROP TABLE" not in where
+    assert where == ""
+    assert params == []
+
+
 def test_normalize_dates_swaps_reversed_range() -> None:
     from server.db import _normalize_dates
 
