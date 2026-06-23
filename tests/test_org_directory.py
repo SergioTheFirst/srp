@@ -375,12 +375,16 @@ def test_base_ships_the_shared_escape_helper(client: TestClient) -> None:
 
 @pytest.mark.integration
 def test_print_chart_sinks_escape_agent_controlled_labels(client: TestClient) -> None:
+    # Guards every agent-controlled label sink on the reworked /print page. The
+    # printview rework unified the printers/users bars into one renderBar (so the
+    # escape site is srpEsc(r[nameKey])) and added a hero chart + detail table.
     body = client.get("/print").text
     assert "srpEsc(r.dept)" in body  # CRITICAL (C1): department axis = raw dept_code
-    assert "srpEsc(r.name)" in body  # printers bar (C2)
-    assert "srpEsc(r.user_name)" in body  # users bar
+    assert "srpEsc(r[nameKey])" in body  # printers + users bars (unified renderBar)
     assert "srpEsc(r.name.substring(" in body  # printer summary table cell
-    assert "srpEsc(err)" in body  # error path
+    assert "srpEsc(r.printer" in body  # detail records table: printer cell
+    assert "srpEsc(r.hostname)" in body  # detail records table: hostname cell
+    assert "srpEsc(s.printer)" in body  # hero legend (computer -> printer [ip])
 
 
 @pytest.mark.integration

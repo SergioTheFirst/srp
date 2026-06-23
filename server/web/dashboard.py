@@ -417,10 +417,32 @@ def net_device(request: Request, device_nid: str):
 
 
 @router.get("/print", response_class=HTMLResponse)
-def print_analytics(request: Request, days: int = 30):
-    """Print analytics page — fleet-wide charts (Plotly.js)."""
+def print_analytics(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    device: str = "",
+    printer: str = "",
+    ip: str = "",
+):
+    """Print analytics page (printview rework). Renders the shell + filter panel;
+    all data is pulled client-side from the /fleet/print/* endpoints. Filter state
+    lives in the URL so it survives reload (values are pre-filled here, escaped by
+    autoescape; JS reads the same query string)."""
     days = max(days, 0)
-    return _TEMPLATES.TemplateResponse(request, "print.html", {"days": days})
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "print.html",
+        {
+            "days": days,
+            "f_date_from": date_from,
+            "f_date_to": date_to,
+            "f_device": device,
+            "f_printer": printer,
+            "f_ip": ip,
+        },
+    )
 
 
 @router.get("/printers", response_class=HTMLResponse)
