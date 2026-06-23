@@ -185,6 +185,34 @@ def _clamp_days(days: int) -> int:
     return min(max(days, _DAYS_MIN), _DAYS_MAX)
 
 
+_FILTER_MAX_LEN = 256
+
+
+def _q(value: Optional[str]) -> Optional[str]:
+    """Normalize a query-string filter: strip, length-cap, empty -> None."""
+    if not value:
+        return None
+    capped = value.strip()[:_FILTER_MAX_LEN]
+    return capped or None
+
+
+def _print_filter(
+    date_from: Optional[str],
+    date_to: Optional[str],
+    device: Optional[str],
+    printer: Optional[str],
+    ip: Optional[str],
+) -> db.PrintFilter:
+    """Build a PrintFilter from raw query params (normalized; empty -> unfiltered)."""
+    return db.PrintFilter(
+        date_from=_q(date_from),
+        date_to=_q(date_to),
+        device=_q(device),
+        printer=_q(printer),
+        ip=_q(ip),
+    )
+
+
 @router.get("/devices/{device_id}/print")
 def device_print(device_id: str, days: int = 30) -> dict:
     if db.get_device(device_id) is None:
@@ -222,6 +250,18 @@ def fleet_print_analytics(days: int = 30) -> dict:
     data = db.get_print_analytics(days=_clamp_days(days))
     data["departments"] = _decode_departments(data["departments"])
     return data
+
+
+@router.get("/fleet/print/summary")
+def fleet_print_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> dict:
+    """Headline print metrics (7 summary cards) honoring the print filters."""
+    return db.get_print_summary(_print_filter(date_from, date_to, device, printer, ip))
 
 
 @router.get("/fleet/print/export.csv")

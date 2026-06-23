@@ -2489,6 +2489,67 @@ def _print_where(f: PrintFilter) -> tuple[str, list[Any]]:
     return where, params
 
 
+def get_print_summary(f: PrintFilter) -> dict[str, Any]:
+    """Headline print metrics over a PrintFilter (printview summary cards).
+
+    ``total_jobs`` / ``avg_pages_per_job`` count only event-sourced rows (job_id
+    NOT NULL): counter-mode rows are per-sweep page deltas, not jobs, so they add
+    to ``total_pages`` but must never inflate the job count. ``busiest_printer`` is
+    by queue name across the fleet (ip = a representative resolved address, or
+    None); ``most_active_computer`` is by device. Empty period -> zeros + None.
+    """
+    where, params = _print_where(f)
+    with _connect() as conn:
+        agg = conn.execute(
+            f"SELECT COALESCE(SUM(p.pages),0) AS total_pages,"  # nosec B608
+            " COUNT(p.job_id) AS total_jobs,"
+            " COALESCE(SUM(CASE WHEN p.job_id IS NOT NULL THEN p.pages ELSE 0 END),0) AS ev_pages,"
+            " COUNT(DISTINCT p.printer) AS active_printers,"
+            " COUNT(DISTINCT p.device_id) AS active_computers"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}",
+            params,
+        ).fetchone()
+        printer_row = conn.execute(
+            f"SELECT p.printer AS name, MAX(m.ip) AS ip,"  # nosec B608
+            " COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.printer ORDER BY pages DESC LIMIT 1",
+            params,
+        ).fetchone()
+        device_row = conn.execute(
+            f"SELECT p.device_id, COALESCE(d.hostname, p.device_id) AS hostname,"  # nosec B608
+            " COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.device_id ORDER BY pages DESC LIMIT 1",
+            params,
+        ).fetchone()
+    total_jobs = int(agg["total_jobs"])
+    avg = round(int(agg["ev_pages"]) / total_jobs, 1) if total_jobs else 0.0
+    busiest = (
+        {"name": printer_row["name"], "ip": printer_row["ip"], "pages": int(printer_row["pages"])}
+        if printer_row is not None and printer_row["name"] is not None
+        else None
+    )
+    most_active = (
+        {
+            "device_id": device_row["device_id"],
+            "hostname": device_row["hostname"],
+            "pages": int(device_row["pages"]),
+        }
+        if device_row is not None and device_row["device_id"] is not None
+        else None
+    )
+    return {
+        "total_pages": int(agg["total_pages"]),
+        "total_jobs": total_jobs,
+        "active_printers": int(agg["active_printers"]),
+        "active_computers": int(agg["active_computers"]),
+        "busiest_printer": busiest,
+        "most_active_computer": most_active,
+        "avg_pages_per_job": avg,
+    }
+
+
 def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
     """Print stats for a single device over the last *days* days (0 = all time)."""
     ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
