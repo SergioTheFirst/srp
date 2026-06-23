@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hmac
 import io
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -246,8 +247,16 @@ def _decode_departments(raw: list[dict]) -> list[dict]:
 
 
 @router.get("/fleet/print/analytics")
-def fleet_print_analytics(days: int = 30) -> dict:
-    data = db.get_print_analytics(days=_clamp_days(days))
+def fleet_print_analytics(
+    days: int = 30,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict:
+    """Legacy chart sections. An explicit date_from/date_to range overrides the
+    last-*days* window so every section reacts to the shared printview range."""
+    data = db.get_print_analytics(
+        days=_clamp_days(days), date_from=_q(date_from), date_to=_q(date_to)
+    )
     data["departments"] = _decode_departments(data["departments"])
     return data
 
@@ -264,17 +273,131 @@ def fleet_print_summary(
     return db.get_print_summary(_print_filter(date_from, date_to, device, printer, ip))
 
 
+@router.get("/fleet/print/series")
+def fleet_print_series(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+    granularity: str = "auto",
+    max_series: int = 12,
+) -> dict:
+    """Hero-chart time-series: (computer -> printer) pairs with auto bucket detail."""
+    return db.get_print_series(
+        _print_filter(date_from, date_to, device, printer, ip),
+        granularity=_q(granularity) or "auto",
+        max_series=max_series,
+    )
+
+
+# Operator-facing labels for a print row's data source. Machine value ``source``
+# (events/counter) stays English; these are the Russian prose + chip color the
+# dashboard renders. events = exact (journal); counter = estimate (spooler delta).
+_PRINT_SOURCE_RU = {"events": "журнал", "counter": "счётчик"}
+_PRINT_VALIDATION = {
+    "events": ("точно", "good"),
+    "counter": ("оценка", "warn"),
+}
+
+
+def _label_print_row(row: dict) -> dict:
+    """Add localized source/validation labels to a records row (immutably)."""
+    source = row.get("source") or ""
+    valid, color = _PRINT_VALIDATION.get(source, ("—", "na"))
+    return {
+        **row,
+        "source_label": _PRINT_SOURCE_RU.get(source, "—"),
+        "validation": valid,
+        "validation_color": color,
+    }
+
+
+@router.get("/fleet/print/records")
+def fleet_print_records(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort: str = "ts",
+    dir: str = "desc",
+    q: Optional[str] = None,
+) -> dict:
+    """One page of detailed print rows (events table) honoring the filters."""
+    data = db.get_print_records(
+        _print_filter(date_from, date_to, device, printer, ip),
+        page=page,
+        page_size=page_size,
+        sort=_q(sort) or "ts",
+        direction=dir,
+        q=_q(q),
+    )
+    data["rows"] = [_label_print_row(r) for r in data["rows"]]
+    return data
+
+
+@router.get("/fleet/print/filter-options")
+def fleet_print_filter_options(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict:
+    """Distinct devices/printers/ips for the filter selects, scoped to the period."""
+    return db.get_print_filter_options(_q(date_from), _q(date_to))
+
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: object) -> object:
+    """Defang spreadsheet formula injection: a string cell starting with one of
+    = + - @ (or a tab/CR) gets a leading single quote so Excel/Sheets treat it as
+    text, never a formula. Non-strings pass through untouched."""
+    if isinstance(value, str) and value and value[0] in _CSV_FORMULA_PREFIXES:
+        return "'" + value
+    return value
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _filename_date(value: Optional[str]) -> str:
+    """Compact YYYYMMDD if *value* is a well-formed ISO date, else 'all'. Strict
+    validation here keeps any stray chars (newline/semicolon) out of the
+    Content-Disposition header -- defense against response header injection."""
+    if value and _ISO_DATE_RE.match(value):
+        return value.replace("-", "")
+    return "all"
+
+
+def _export_filename(f: db.PrintFilter) -> str:
+    """CSV filename reflecting the period (print_export_FROM_TO.csv; 'all' if open)."""
+    return f"print_export_{_filename_date(f.date_from)}_{_filename_date(f.date_to)}.csv"
+
+
 @router.get("/fleet/print/export.csv")
-def fleet_print_export(days: int = 30) -> StreamingResponse:
-    rows = db.export_print_rows(days=_clamp_days(days))
+def fleet_print_export(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> StreamingResponse:
+    f = _print_filter(date_from, date_to, device, printer, ip)
+    rows = db.export_print_rows(f)
     directory = org_directory.get_directory()
+    out: list[dict] = []
     for row in rows:
         # Decode names render-time; the legacy free-text `department` column is
-        # kept for the transition (tray spec §7).
+        # kept for the transition (tray spec §7). validation = RU label from source.
         row["org_name"] = directory.org_display(row.get("org_code")).text
         row["dept_name"] = directory.dept_display(
             row.get("org_code"), row.get("dept_code"), row.get("department")
         ).text
+        row["validation"] = _PRINT_VALIDATION.get(row.get("source") or "", ("—", "na"))[0]
+        out.append({k: _csv_safe(v) for k, v in row.items()})
     buf = io.StringIO()
     fieldnames = [
         "ts",
@@ -283,20 +406,22 @@ def fleet_print_export(days: int = 30) -> StreamingResponse:
         "org_name",
         "dept_name",
         "printer",
+        "ip",
         "pages",
         "size_bytes",
         "user_name",
         "department",
         "source",
+        "validation",
     ]
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(out)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=print_export_{days}d.csv"},
+        headers={"Content-Disposition": f"attachment; filename={_export_filename(f)}"},
     )
 
 

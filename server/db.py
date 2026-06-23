@@ -195,6 +195,8 @@ CREATE TABLE IF NOT EXISTS print_jobs (
   source      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
+CREATE INDEX IF NOT EXISTS idx_print_ts ON print_jobs(ts);
+CREATE INDEX IF NOT EXISTS idx_print_printer ON print_jobs(printer);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup
   ON print_jobs(device_id, job_id) WHERE job_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS printer_ip_map (
@@ -2550,6 +2552,224 @@ def get_print_summary(f: PrintFilter) -> dict[str, Any]:
     }
 
 
+# Bucket granularity for the print time-series: auto-scales with the span so the
+# hero chart stays readable from a single day (hourly) up to a year (monthly).
+# These strftime formats are fixed literals from a whitelist -- never user input --
+# so interpolating the chosen one into the grouped query is safe (all filter
+# VALUES stay bound parameters via _print_where).
+_GRAN_FMT = {
+    "hour": "%Y-%m-%d %H:00",
+    "day": "%Y-%m-%d",
+    "week": "%Y-%W",
+    "month": "%Y-%m",
+}
+_SERIES_MAX = 50
+_OTHERS_LABEL = "прочее"
+
+
+def _span_days(date_from: Optional[str], date_to: Optional[str]) -> Optional[int]:
+    """Whole-day span between two 'YYYY-MM-DD' dates, or None if either is unset
+    or malformed (caller then falls back to a safe default granularity)."""
+    try:
+        a = datetime.strptime(str(date_from), "%Y-%m-%d")
+        b = datetime.strptime(str(date_to), "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+    return abs((b - a).days)
+
+
+def _auto_granularity(date_from: Optional[str], date_to: Optional[str]) -> str:
+    """Pick a bucket granularity from the range span (printview Phase 4 thresholds)."""
+    span = _span_days(date_from, date_to)
+    if span is None:
+        return "day"
+    if span <= 2:
+        return "hour"
+    if span <= 45:
+        return "day"
+    if span <= 180:
+        return "week"
+    return "month"
+
+
+def _assemble_series(rows: list[Any], cap: int, gran: str) -> dict[str, Any]:
+    """Fold grouped (device, printer, bucket, pages) rows into aligned series.
+
+    Builds the shared sorted ``buckets`` axis, one points array per pair (0 in
+    empty buckets), keeps the top *cap* pairs by total pages and collapses the
+    rest into a single «прочее» series.
+    """
+    buckets: list[str] = sorted({r["bucket"] for r in rows if r["bucket"] is not None})
+    bucket_idx = {b: i for i, b in enumerate(buckets)}
+    pairs: dict[tuple, dict[str, Any]] = {}
+    for r in rows:
+        key = (r["device_id"], r["printer"])
+        pair = pairs.setdefault(
+            key,
+            {
+                "device_id": r["device_id"],
+                "hostname": r["hostname"],
+                "printer": r["printer"],
+                "ip": r["ip"],
+                "points": [0] * len(buckets),
+                "total": 0,
+            },
+        )
+        if r["bucket"] in bucket_idx:
+            pages = int(r["pages"])
+            pair["points"][bucket_idx[r["bucket"]]] += pages
+            pair["total"] += pages
+    ordered = sorted(pairs.values(), key=lambda p: p["total"], reverse=True)
+    series = [
+        {
+            "device_id": p["device_id"],
+            "hostname": p["hostname"],
+            "printer": p["printer"],
+            "ip": p["ip"],
+            "label": f"{p['hostname']} → {p['printer']}",
+            "points": p["points"],
+        }
+        for p in ordered[:cap]
+    ]
+    others: Optional[dict[str, Any]] = None
+    rest = ordered[cap:]
+    if rest:
+        agg = [0] * len(buckets)
+        for p in rest:
+            for i, v in enumerate(p["points"]):
+                agg[i] += v
+        others = {"label": _OTHERS_LABEL, "points": agg}
+    return {
+        "granularity": gran,
+        "buckets": buckets,
+        "series": series,
+        "others": others,
+        "pair_count": len(pairs),
+    }
+
+
+def get_print_series(
+    f: PrintFilter, granularity: str = "auto", max_series: int = 12
+) -> dict[str, Any]:
+    """Time-series of pages for each (computer -> printer) pair (hero chart data).
+
+    Buckets auto-scale with the range (hour/day/week/month) unless *granularity*
+    pins one explicitly. Pairs beyond the top *max_series* (by total pages) fold
+    into a single «прочее» series so the chart stays readable; every series'
+    points align to the shared, sorted ``buckets`` axis (0 where a pair printed
+    nothing in that bucket). ``ip`` is the resolved printer address or None.
+    """
+    cap = min(max(int(max_series), 1), _SERIES_MAX)
+    where, params = _print_where(f)
+    gran = granularity if granularity in _GRAN_FMT else ""
+    if not gran:
+        df, dt = _normalize_dates(f.date_from, f.date_to)
+        if not (df and dt):
+            with _connect() as conn:
+                span_row = conn.execute(
+                    f"SELECT MIN(p.ts) AS lo, MAX(p.ts) AS hi"  # nosec B608
+                    f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}",
+                    params,
+                ).fetchone()
+            df = df or ((span_row["lo"] or "")[:10] or None)
+            dt = dt or ((span_row["hi"] or "")[:10] or None)
+        gran = _auto_granularity(df, dt)
+    fmt = _GRAN_FMT[gran]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT p.device_id AS device_id,"  # nosec B608
+            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" COALESCE(p.printer, '') AS printer, MAX(m.ip) AS ip,"
+            f" strftime('{fmt}', p.ts) AS bucket,"
+            f" COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.device_id, p.printer, bucket"
+            " ORDER BY bucket",
+            params,
+        ).fetchall()
+    return _assemble_series(rows, cap, gran)
+
+
+# Whitelisted sort columns for the records table -- the key the client sends is
+# looked up here, so only these fixed SQL fragments can ever reach ORDER BY
+# (no user text is interpolated). Unknown keys fall back to ts.
+_RECORDS_SORT = {
+    "ts": "p.ts",
+    "hostname": "COALESCE(d.hostname, p.device_id)",
+    "printer": "p.printer",
+    "ip": "m.ip",
+    "pages": "p.pages",
+}
+_RECORDS_PAGE_DEFAULT = 50
+_RECORDS_PAGE_MAX = 200
+
+
+def get_print_records(
+    f: PrintFilter,
+    page: int = 1,
+    page_size: int = _RECORDS_PAGE_DEFAULT,
+    sort: str = "ts",
+    direction: str = "desc",
+    q: Optional[str] = None,
+) -> dict[str, Any]:
+    """One page of detailed print rows for the events table (server-side paging).
+
+    Search *q* matches hostname/printer/ip (LIKE, bound). ``sort`` is resolved
+    through ``_RECORDS_SORT`` and ``direction`` is asc/desc only, so ORDER BY can
+    never carry user text. ``ip`` is None where the queue has no resolved address.
+    """
+    where, params = _print_where(f)
+    search_clause = ""
+    search_params = list(params)
+    if q:
+        # Escape LIKE metacharacters so the search is a literal substring (a bare
+        # % / _ from the user must not turn into a wildcard); value still bound.
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{esc}%"
+        search_clause = (
+            " AND (COALESCE(d.hostname, p.device_id) LIKE ? ESCAPE '\\'"
+            " OR p.printer LIKE ? ESCAPE '\\' OR COALESCE(m.ip, '') LIKE ? ESCAPE '\\')"
+        )
+        search_params.extend([like, like, like])
+    sort_col = _RECORDS_SORT.get(sort, "p.ts")
+    dir_sql = "ASC" if str(direction).lower() == "asc" else "DESC"
+    page = max(int(page), 1)
+    size = min(max(int(page_size), 1), _RECORDS_PAGE_MAX)
+    offset = (page - 1) * size
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}{search_clause}",  # nosec B608
+            search_params,
+        ).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT p.ts AS ts, p.device_id AS device_id,"  # nosec B608
+            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" COALESCE(p.printer, '') AS printer, m.ip AS ip,"
+            f" p.pages AS pages, COALESCE(p.source, '') AS source"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}{search_clause}"
+            f" ORDER BY {sort_col} {dir_sql}, p.id DESC"
+            " LIMIT ? OFFSET ?",
+            [*search_params, size, offset],
+        ).fetchall()
+    return {
+        "page": page,
+        "page_size": size,
+        "total": int(total),
+        "rows": [
+            {
+                "ts": r["ts"],
+                "device_id": r["device_id"],
+                "hostname": r["hostname"],
+                "printer": r["printer"],
+                "ip": r["ip"],
+                "pages": int(r["pages"]) if r["pages"] is not None else 0,
+                "source": r["source"],
+            }
+            for r in rows
+        ],
+    }
+
+
 def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
     """Print stats for a single device over the last *days* days (0 = all time)."""
     ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
@@ -2669,15 +2889,43 @@ def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
     }
 
 
-def get_print_analytics(days: int = 30) -> dict[str, Any]:
-    """All chart data for the /print analytics page (daily/printers/users/departments)."""
-    ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
-    pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+def get_print_analytics(
+    days: int = 30,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict[str, Any]:
+    """All chart data for the /print analytics page (daily/printers/users/departments).
+
+    When *date_from*/*date_to* are given the old sections honor that explicit
+    range (bound cutoffs, reusing the print-filter date logic) and the
+    period-over-period delta is skipped; otherwise the legacy last-*days* window
+    applies unchanged."""
+    df, dt = _normalize_dates(date_from, date_to)
+    rp: list[Any] = []
+    if df or dt:
+        lo = _date_cutoff_utc(df, end=False)
+        hi = _date_cutoff_utc(dt, end=True)
+        ts_parts, pts_parts = [], []
+        if lo:
+            ts_parts.append("ts >= ?")
+            pts_parts.append("p.ts >= ?")
+            rp.append(lo)
+        if hi:
+            ts_parts.append("ts < ?")
+            pts_parts.append("p.ts < ?")
+            rp.append(hi)
+        ts_f = ("AND " + " AND ".join(ts_parts)) if ts_parts else ""
+        pts_f = ("AND " + " AND ".join(pts_parts)) if pts_parts else ""
+        use_prev = False
+    else:
+        ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+        pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+        use_prev = days > 0
     with _connect() as conn:
         total_row = conn.execute(
             f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE 1=1 {ts_f}",
-            (),
+            rp,
         ).fetchone()
         total_pages = int(total_row["pages"])
         _denom = total_pages if total_pages > 0 else 1
@@ -2687,20 +2935,20 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
             f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
             f" FROM print_jobs WHERE 1=1 {ts_f}"
             " GROUP BY date ORDER BY date",
-            (),
+            rp,
         ).fetchall()
         printer_rows = conn.execute(
             f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
             f" COUNT(DISTINCT device_id) AS devices_count"
             f" FROM print_jobs WHERE 1=1 {ts_f}"
             " GROUP BY printer ORDER BY pages DESC",
-            (),
+            rp,
         ).fetchall()
         user_rows = conn.execute(
             f"SELECT user_name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE user_name IS NOT NULL AND user_name != '' {ts_f}"
             " GROUP BY user_name ORDER BY pages DESC LIMIT 20",
-            (),
+            rp,
         ).fetchall()
         # Raw codes only -- names are decoded render-time from org_directory so
         # a rename reflects across all history without a rewrite (tray spec §7).
@@ -2712,9 +2960,9 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
             " GROUP BY d.org_code, d.dept_code, d.department ORDER BY pages DESC",
-            (),
+            rp,
         ).fetchall()
-        if days > 0:
+        if use_prev:
             prev_row = conn.execute(
                 f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
                 f" FROM print_jobs"
@@ -2771,9 +3019,45 @@ def get_print_analytics(days: int = 30) -> dict[str, Any]:
     }
 
 
-def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
-    """Raw print job rows for CSV export, enriched with hostname + department."""
-    ts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+def get_print_filter_options(
+    date_from: Optional[str] = None, date_to: Optional[str] = None
+) -> dict[str, Any]:
+    """Distinct devices/printers/ips that printed in the period (select lists).
+
+    Scoped to the date window so the dropdowns only offer values with activity;
+    ips come from the resolved printer_ip_map join (queues without a resolved
+    address simply contribute no ip option)."""
+    where, params = _print_where(PrintFilter(date_from=date_from, date_to=date_to))
+    with _connect() as conn:
+        dev_rows = conn.execute(
+            f"SELECT DISTINCT p.device_id AS device_id,"  # nosec B608
+            f" COALESCE(d.hostname, p.device_id) AS hostname"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where} ORDER BY hostname",
+            params,
+        ).fetchall()
+        prn_rows = conn.execute(
+            f"SELECT DISTINCT p.printer AS printer"  # nosec B608
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " AND p.printer IS NOT NULL AND p.printer != '' ORDER BY p.printer",
+            params,
+        ).fetchall()
+        ip_rows = conn.execute(
+            f"SELECT DISTINCT m.ip AS ip"  # nosec B608
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where} AND m.ip IS NOT NULL ORDER BY m.ip",
+            params,
+        ).fetchall()
+    return {
+        "devices": [{"device_id": r["device_id"], "hostname": r["hostname"]} for r in dev_rows],
+        "printers": [r["printer"] for r in prn_rows],
+        "ips": [r["ip"] for r in ip_rows],
+    }
+
+
+def export_print_rows(f: PrintFilter) -> list[dict[str, Any]]:
+    """Raw print job rows for CSV export over a PrintFilter, enriched with
+    hostname, department codes, resolved ip and the machine ``source`` (the API
+    layer adds decoded org/dept names + the validation label, then defangs cells)."""
+    where, params = _print_where(f)
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT p.ts, p.device_id,"  # nosec B608
@@ -2782,13 +3066,14 @@ def export_print_rows(days: int = 30) -> list[dict[str, Any]]:
             f" COALESCE(d.dept_code, '') AS dept_code,"
             f" COALESCE(d.department, '') AS department,"
             f" COALESCE(p.printer, '') AS printer,"
+            f" COALESCE(m.ip, '') AS ip,"
             f" COALESCE(p.user_name, '') AS user_name,"
             f" p.pages, p.size_bytes,"
             f" COALESCE(p.source, '') AS source"
-            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
-            f" WHERE 1=1 {ts_f}"
+            f" FROM {_PRINT_BASE_FROM}"
+            f" WHERE 1=1 {where}"
             " ORDER BY p.ts DESC",
-            (),
+            params,
         ).fetchall()
     return [dict(r) for r in rows]
 
