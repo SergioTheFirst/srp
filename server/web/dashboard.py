@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
 from server import db, org_directory
-from server.analytics.netmap import build_netmap, subnet_context_for
+from server.analytics.netmap import build_netmap, subnet_context_for, subnet_hint
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 
@@ -282,11 +282,6 @@ def _fleet_context(devices: list) -> dict:
     return {"summary": _fleet_summary(enriched), "groups": _group_by_site(enriched)}
 
 
-def _printer_subnet(ip: Optional[str]) -> Optional[str]:
-    parts = (ip or "").split(".")
-    return ".".join(parts[:3]) + ".x" if len(parts) == 4 else None
-
-
 def _attach_printers_to_netmap(m: dict, printers: list) -> dict:
     """Place discovered printers into their subnet cluster (by IP /24) so the map
     shows them as nodes. A printer that duplicates an ARP 'other' node replaces it
@@ -294,7 +289,7 @@ def _attach_printers_to_netmap(m: dict, printers: list) -> dict:
     Pure over already-read inputs (mutates the fresh build_netmap result)."""
     by_subnet: dict[str, list] = {}
     for p in printers:
-        sub = _printer_subnet(p.get("ip"))
+        sub = subnet_hint(p.get("ip"))
         if not sub:
             continue
         by_subnet.setdefault(sub, []).append(

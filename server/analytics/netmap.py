@@ -7,6 +7,11 @@ agentless devices, vendor-hinted via the OUI seed. Per-cluster gateway-probe
 quality powers the subnet anomaly: the whole subnet losing packets points at
 infrastructure (switch/router/uplink), not at individual PCs.
 
+The pure overlay helpers (``subnet_hint``, ``quality_overlay``, ``subnet_anomaly``)
+are the read-side enrichment layer consumed by ``server.netdisco.unified`` (Ф2):
+netmap is not a second topology model -- it contributes overlays to the one
+unified graph.
+
 Read-side only (D7): called from the map page / API / device page -- never from
 recompute_scores, so cross-device work cannot run on every ingest.
 """
@@ -24,9 +29,15 @@ _ANOMALY_SHARE = 0.6
 _DEGRADED_LOSS_PCT = 20.0
 
 
-def _subnet_hint(gateway: str) -> str:
-    parts = gateway.split(".")
-    return ".".join(parts[:3]) + ".x" if len(parts) == 4 else gateway
+def subnet_hint(ip: Optional[str]) -> Optional[str]:
+    """One /24 hint for the whole map (clusters + printer placement, D9).
+
+    ``a.b.c.d`` -> ``a.b.c.x``; anything that is not a dotted quad -> ``None``.
+    The single source of truth -- ``dashboard`` and ``netdisco.unified`` import
+    this, never a parallel copy.
+    """
+    parts = (ip or "").split(".")
+    return ".".join(parts[:3]) + ".x" if len(parts) == 4 else None
 
 
 def _ip_key(ip: Optional[str]) -> tuple:
@@ -72,10 +83,23 @@ def _gateway_quality(snap: dict[str, Any], gateway: str) -> Optional[dict[str, A
     return gw_rows[0]
 
 
+def quality_overlay(snap: dict[str, Any], gateway: str) -> Optional[dict[str, Any]]:
+    """The agent's ICMP quality to *this* gateway as a consumable overlay.
+
+    ``{'loss_pct','latency_ms'}`` or ``None`` when the gateway was never probed or
+    the device is wholly ICMP-ambiguous (D5). Pure, read-side -- consumed by the
+    ``netdisco.unified`` assembler for agent-uplink edge labels.
+    """
+    q = _gateway_quality(snap, gateway)
+    if q is None:
+        return None
+    return {"loss_pct": q.get("loss_pct"), "latency_ms": q.get("latency_ms")}
+
+
 def _new_cluster(gw: str) -> dict[str, Any]:
     return {
         "gateway": gw,
-        "subnet_hint": _subnet_hint(gw),
+        "subnet_hint": subnet_hint(gw),
         "gateway_mac": None,
         "gateway_vendor": None,
         "agents": [],
@@ -130,12 +154,18 @@ def _attach_neighbors(
             c["gateway_vendor"] = vendor_for_mac(mac)
 
 
-def _finalize(c: dict[str, Any]) -> dict[str, Any]:
-    reporting = [a for a in c["agents"] if a["loss_pct"] is not None]
-    degraded = [a for a in reporting if a["loss_pct"] >= _DEGRADED_LOSS_PCT]
-    anomaly = (
-        len(reporting) >= _ANOMALY_MIN_REPORTING
-        and len(degraded) / len(reporting) >= _ANOMALY_SHARE
+def subnet_anomaly(losses: list[Optional[float]]) -> dict[str, Any]:
+    """D9 verdict over one subnet cohort's per-agent gateway losses.
+
+    >=2 reporting agents and >=60% of them losing >=20% to the gateway points at
+    shared infrastructure (switch/router/uplink), not individual PCs. ``None``
+    losses (never reported / ICMP-ambiguous, D5) are excluded from the cohort.
+    Pure -- shared by ``build_netmap`` and the ``netdisco.unified`` assembler.
+    """
+    reporting = [x for x in losses if x is not None]
+    degraded = [x for x in reporting if x >= _DEGRADED_LOSS_PCT]
+    anomaly = len(reporting) >= _ANOMALY_MIN_REPORTING and (
+        len(degraded) / len(reporting) >= _ANOMALY_SHARE
     )
     reason = None
     if anomaly:
@@ -143,6 +173,16 @@ def _finalize(c: dict[str, Any]) -> dict[str, Any]:
             f"{len(degraded)} из {len(reporting)} машин подсети теряют пакеты до шлюза — "
             "похоже на проблему инфраструктуры (свитч/роутер/линк), а не отдельных ПК"
         )
+    return {
+        "reporting": len(reporting),
+        "degraded": len(degraded),
+        "anomaly": anomaly,
+        "reason": reason,
+    }
+
+
+def _finalize(c: dict[str, Any]) -> dict[str, Any]:
+    sa = subnet_anomaly([a["loss_pct"] for a in c["agents"]])
     return {
         "gateway": c["gateway"],
         "subnet_hint": c["subnet_hint"],
@@ -163,13 +203,13 @@ def _finalize(c: dict[str, Any]) -> dict[str, Any]:
             key=lambda n: _ip_key(n.get("ip")),
         ),
         "quality": {
-            "reporting": len(reporting),
-            "degraded": len(degraded),
+            "reporting": sa["reporting"],
+            "degraded": sa["degraded"],
             "median_loss_pct": round(median(c["losses"]), 1) if c["losses"] else None,
             "median_latency_ms": round(median(c["latencies"]), 1) if c["latencies"] else None,
         },
-        "anomaly": anomaly,
-        "anomaly_reason": reason,
+        "anomaly": sa["anomaly"],
+        "anomaly_reason": sa["reason"],
     }
 
 
