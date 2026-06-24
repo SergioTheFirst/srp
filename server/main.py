@@ -24,6 +24,7 @@ from server.api import router as api_router
 from server.config import ServerConfig, load_config
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
+from server.netdisco.cache import GraphCache
 from server.printers import scheduler
 from server.web.dashboard import router as web_router
 
@@ -289,6 +290,10 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
+    # Ф3: the unified network-map graph cache is created up-front (the handler no
+    # longer does the P11-LOW lazy-init on every read). The graph itself still loads
+    # on the first read (within the TTL) so a cold start never blocks on it.
+    app.state.network_map_cache = GraphCache()
     app.add_middleware(_IngestBodySizeMiddleware)
     app.include_router(api_router)
     app.include_router(web_router)

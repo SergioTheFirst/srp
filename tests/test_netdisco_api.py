@@ -40,17 +40,21 @@ def test_netdisco_devices_endpoint_empty_when_no_inventory(client: TestClient) -
     assert resp.json()["devices"] == []
 
 
-def test_topology_graph_endpoint_serves_latest_snapshot(client: TestClient) -> None:
-    db.store_topology_snapshot({"nodes": [{"nid": "a"}], "links": [{"a": "a", "b": "b"}]})
+def test_topology_graph_endpoint_serves_unified_graph(client: TestClient) -> None:
+    db.upsert_net_device({"device_nid": "nd-mac-AA", "dev_type": "switch", "ip": "10.0.0.1"})
     resp = client.get("/api/v1/topology/graph")
     assert resp.status_code == 200
-    assert resp.json()["graph"]["nodes"] == [{"nid": "a"}]
+    g = resp.json()  # Ф3: deprecated alias of /network-map/graph -> unified graph
+    assert "nd-mac-AA" in {n["nid"] for n in g["nodes"]}
+    # the legacy shape is gone: no {graph:{...}} wrapper, no received_at
+    assert "graph" not in g and "received_at" not in g
 
 
-def test_topology_graph_endpoint_empty_when_no_snapshot(client: TestClient) -> None:
+def test_topology_graph_endpoint_empty_when_no_inventory(client: TestClient) -> None:
     resp = client.get("/api/v1/topology/graph")
     assert resp.status_code == 200
-    assert resp.json()["graph"] == {"nodes": [], "links": []}
+    g = resp.json()
+    assert g["nodes"] == [] and g["links"] == []
 
 
 def test_topology_changes_endpoint_returns_journal_and_clamps_days(client: TestClient) -> None:
@@ -118,13 +122,13 @@ def test_topology_poll_runs_a_cycle(client: TestClient) -> None:
 
 
 def test_topology_poll_invalidates_graph_cache(client: TestClient) -> None:
-    # Prime the read-through cache with the (empty) snapshot, then store a fresh one
-    # straight into the DB. Without invalidation the cache would keep serving empty
-    # within its TTL; the force button must clear it so the new graph shows at once.
-    assert client.get("/api/v1/topology/graph").json()["graph"]["nodes"] == []
-    db.store_topology_snapshot({"nodes": [{"nid": "sw1"}], "links": []})
+    # Prime the read-through cache over the (empty) backbone, then add a device straight
+    # into the DB. Without invalidation the cache would keep serving empty within its
+    # TTL; the force button must clear it so the new node shows in the graph at once.
+    assert client.get("/api/v1/topology/graph").json()["nodes"] == []
+    db.upsert_net_device({"device_nid": "nd-mac-sw1", "dev_type": "switch", "ip": "10.0.0.2"})
     assert client.post("/api/v1/topology/poll").status_code == 200
-    assert client.get("/api/v1/topology/graph").json()["graph"]["nodes"] == [{"nid": "sw1"}]
+    assert "nd-mac-sw1" in {n["nid"] for n in client.get("/api/v1/topology/graph").json()["nodes"]}
 
 
 def test_topology_poll_returns_busy_when_a_cycle_is_running(tmp_path) -> None:

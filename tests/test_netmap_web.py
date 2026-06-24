@@ -62,8 +62,11 @@ def test_netmap_api_and_page(client):
     api = client.get("/api/v1/netmap")
     assert api.status_code == 200
     m = api.json()
-    assert m["totals"]["clusters"] == 1 and m["totals"]["agents"] == 2
-    assert m["clusters"][0]["anomaly"] is True
+    # Ф3: /api/v1/netmap is a deprecated alias of the unified graph. The page model
+    # still renders from build_netmap (cluster shape) until Ф4; the API now returns the
+    # superset graph shape with the same fleet facts.
+    assert m["totals"]["agents"] == 2
+    assert any(s["anomaly"] for s in m["subnets"])
 
     page = client.get("/netmap")
     assert page.status_code == 200
