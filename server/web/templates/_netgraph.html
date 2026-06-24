@@ -1,0 +1,517 @@
+{# Ф4: the ONE network-map canvas engine (shared partial).
+   Consumes the unified superset graph ``graph = {nodes, links, subnets, totals}``
+   (Ф2 assembler, served via the Ф3 GraphCache). Renders every device type as a
+   glyph, real L2/L3 + agent-uplink edges, wireless/quality/anomaly overlays from
+   netmap, plus zoom/pan/pin/search/theme/textContent-tooltip. Vanilla canvas, zero
+   deps. Currently included by ``/netmap``; ``/topology`` (Ф10) will adopt it when
+   the old page is dismantled.
+
+   XSS: every agent/SNMP string reaches the DOM only via ``textContent``; the graph
+   is embedded through ``| tojson`` (autoescape on -> ``<``/``>``/``&`` escaped, a
+   hostile hostname cannot terminate the JSON <script> island). Click-through uses
+   the assembler-provided ``card_url`` (agent>printer>net-infra), never a raw
+   attacker-controlled href. #}
+<style>
+.netgraph-stage {
+  position: relative; margin-bottom: 20px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r-card);
+  background:
+    radial-gradient(1100px 460px at 28% -12%, var(--accent-dim), transparent 62%),
+    radial-gradient(900px 420px at 88% 118%, var(--na-dim), transparent 58%),
+    var(--panel);
+  box-shadow: var(--shadow-card);
+}
+#netgraph-canvas { display: block; width: 100%; }
+.netgraph-legend {
+  position: absolute; top: 10px; right: 12px; z-index: 5;
+  display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center;
+  max-width: 64%;
+  font: 600 11px/1 var(--mono); letter-spacing: .3px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 8px 11px; opacity: .94;
+}
+.ng-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ng-dia { width: 9px; height: 9px; background: var(--accent); border-radius: 2px; transform: rotate(45deg); flex-shrink: 0; }
+.ng-sq  { width: 9px; height: 9px; background: var(--accent); border-radius: 1px; flex-shrink: 0; }
+.ng-tri { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid var(--accent); flex-shrink: 0; }
+.ng-ci  { width: 9px; height: 9px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
+.ng-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--na); flex-shrink: 0; }
+.ng-wifi { width: 14px; height: 0; border-top: 2px dashed var(--muted); flex-shrink: 0; }
+.netgraph-hint {
+  position: absolute; left: 12px; bottom: 8px; z-index: 5; pointer-events: none;
+  font: 500 11px/1.5 var(--mono); color: var(--muted); opacity: .75;
+}
+.netgraph-tip {
+  position: absolute; z-index: 30; pointer-events: none;
+  background: var(--panel); border: 1px solid var(--line-2);
+  border-left: 3px solid var(--accent); border-radius: var(--r-card);
+  padding: 9px 12px; max-width: 320px;
+  font: 500 12.5px/1.55 var(--mono); color: var(--text);
+  box-shadow: 0 10px 28px rgba(0,0,0,.35);
+}
+.netgraph-tip .t-head  { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+.netgraph-tip .t-muted { color: var(--muted); }
+.netgraph-tip .t-good  { color: var(--good); }
+.netgraph-tip .t-warn  { color: var(--warn); }
+.netgraph-tip .t-bad   { color: var(--bad); }
+</style>
+
+{% if graph.nodes %}
+<div class="netgraph-stage" id="netgraph-stage">
+  <canvas id="netgraph-canvas" role="img"
+          aria-label="Интерактивная карта сети: маршрутизаторы, коммутаторы, точки доступа, агенты, принтеры и устройства, связанные настоящими L2/L3-линками и звёздными связями до шлюза; подробности в таблице ниже"></canvas>
+  <div class="netgraph-legend">
+    <span class="ng-key"><i class="ng-dia"></i>маршрутизатор</span>
+    <span class="ng-key"><i class="ng-sq"></i>коммутатор</span>
+    <span class="ng-key"><i class="ng-tri"></i>точка доступа</span>
+    <span class="ng-key"><i class="ng-ci"></i>агент</span>
+    <span class="ng-key"><i class="ng-sq" style="background:var(--na)"></i>принтер</span>
+    <span class="ng-key"><i class="ng-dot"></i>устройство</span>
+    <span class="ng-key"><i class="ng-wifi"></i>беспроводная связь</span>
+  </div>
+  <div class="netgraph-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по узлу — карточка</div>
+</div>
+{% else %}
+<p class="muted">Сетевые данные ещё не собраны — карта появится после первого цикла обнаружения (инвентарь/линки/качество). Можно собрать её прямо сейчас кнопкой «⟳ Собрать карту сейчас» вверху.</p>
+{% endif %}
+
+<div class="netgraph-tip" id="netgraph-tip" hidden></div>
+<script id="netgraph-data" type="application/json">{{ graph | tojson }}</script>
+
+<script>
+/* ─── Единый движок карты сети: force-граф на чистом canvas, ноль зависимостей ──
+   Один движок для «Карты сети» (Ф4). Узлы — глифы по типу (router=ромб,
+   switch=квадрат, ap=треугольник, agent=круг цвета здоровья, принтер=квадрат,
+   server=шестиугольник, phone=малый треугольник, прочее=точка); цвет по статусу
+   достижимости, для агента — по потерям до шлюза. Рёбра — настоящие L2/L3 И
+   звёздные agent-uplink; цвет по уверенности ИЛИ по качеству (потерям), пунктир
+   для wireless/ambiguous. Кольца подсетей, пульс «пакета» на измеренных линках,
+   кольца-аномалии на шлюзах деградировавших подсетей. Темы из CSS-переменных;
+   reduced-motion рисует один кадр. Клик — каноническая карточка (card_url). */
+(function () {
+  "use strict";
+  var cv = document.getElementById("netgraph-canvas");
+  var dataEl = document.getElementById("netgraph-data");
+  if (!cv || !dataEl) return;
+  var G;
+  try { G = JSON.parse(dataEl.textContent); } catch (e) { return; }
+  if (!G || !G.nodes || !G.nodes.length) return;
+
+  var stage = document.getElementById("netgraph-stage");
+  var tip = document.getElementById("netgraph-tip");
+  var ctx = cv.getContext("2d");
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var C = {};
+  function readTheme() {
+    var s = getComputedStyle(document.body);
+    ["good", "warn", "bad", "na", "accent", "muted", "text", "line"].forEach(function (n) {
+      C[n] = s.getPropertyValue("--" + n).trim() || "#888";
+    });
+    C.mono = s.getPropertyValue("--mono").trim() || "monospace";
+  }
+  readTheme();
+
+  function hashStr(s) {
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+    return h;
+  }
+  function mulberry(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function statusColor(s) {
+    return s === "up" ? "good" : s === "down" ? "bad"
+         : s === "unreachable" ? "warn" : s === "missing" ? "na" : "muted";
+  }
+  function lossClass(loss) {
+    return loss == null ? "na" : loss >= 20 ? "bad" : loss >= 5 ? "warn" : "good";
+  }
+  function confAlpha(c) { return c === "high" ? 0.7 : c === "medium" ? 0.45 : 0.22; }
+
+  /* — качество agent-uplink: индекс nid-агента -> {loss, lat} — */
+  var qualityByNode = {};
+  (G.links || []).forEach(function (l) {
+    if (l && l.link_kind === "agent-uplink" && l.quality) {
+      qualityByNode[l.a] = l.quality;
+    }
+  });
+  /* — аномальные подсети (для колец тревоги на их шлюзах) — */
+  var anomalousSubnets = {};
+  (G.subnets || []).forEach(function (s) {
+    if (s && s.anomaly && s.subnet_hint) anomalousSubnets[s.subnet_hint] = 1;
+  });
+
+  function nodeRadius(t) {
+    return t === "router" ? 12 : t === "switch" ? 11 : t === "ap" ? 10
+         : t === "agent" ? 9 : t === "server" ? 10 : t === "printer" ? 8
+         : t === "phone" ? 7 : 4.5;
+  }
+
+  var rnd = mulberry(hashStr(String(G.nodes.length)));
+  var byId = {};
+  var nodes = G.nodes.map(function (n) {
+    var t = n.dev_type || "unknown";
+    /* агент с измеренным линком — цвет по здоровью; иначе по статусу достижимости */
+    var q = n.device_id ? qualityByNode[n.nid] : null;
+    var cls = q ? lossClass(q.loss_pct) : statusColor(n.status);
+    var node = {
+      nid: n.nid, type: t, subtype: n.subtype,
+      ip: n.ip, hostname: n.hostname, mac: n.mac, vendor: n.vendor,
+      status: n.status, model: n.model, subnet: n.subnet,
+      device_id: n.device_id, printer_id: n.printer_id, card_url: n.card_url,
+      provenance: n.provenance || [], quality: q,
+      cls: cls, r: nodeRadius(t),
+      x: (rnd() - 0.5) * 600, y: (rnd() - 0.5) * 400, vx: 0, vy: 0,
+      filter: ((n.hostname || "") + " " + (n.ip || "") + " " + (n.mac || "") +
+              " " + (n.nid || "")).toLowerCase()
+    };
+    byId[n.nid] = node;
+    return node;
+  });
+  var links = [];
+  (G.links || []).forEach(function (l) {
+    var a = byId[l.a], b = byId[l.b];
+    if (a && b && a !== b) {
+      links.push({
+        a: a, b: b, conf: l.confidence, kind: l.link_kind,
+        ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality,
+        via: l.via_source, a_port: l.a_port, b_port: l.b_port, idx: links.length
+      });
+    }
+  });
+
+  /* — физика: пружины линков, отталкивание, гравитация к центру — */
+  var W = Math.max(stage.clientWidth || 900, 320), H = 560;
+  var alpha = 1;
+  function tick() {
+    var i, j, n, m, dx, dy, d2, d, f, L;
+    for (i = 0; i < links.length; i++) {
+      L = links[i];
+      var rest = L.kind === "agent-uplink" ? 96 : 120;
+      var k = L.kind === "agent-uplink" ? 0.05 : 0.04;
+      dx = L.b.x - L.a.x; dy = L.b.y - L.a.y;
+      d = Math.sqrt(dx * dx + dy * dy) || 1;
+      f = (d - rest) * k * alpha;
+      L.a.vx += (dx / d) * f; L.a.vy += (dy / d) * f;
+      L.b.vx -= (dx / d) * f; L.b.vy -= (dy / d) * f;
+    }
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      for (j = i + 1; j < nodes.length; j++) {
+        m = nodes[j];
+        dx = m.x - n.x; dy = m.y - n.y;
+        if (dx > 240 || dx < -240 || dy > 240 || dy < -240) continue;
+        d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = 0.5; dy = 0.5; d2 = 0.5; }
+        f = (1400 / d2) * alpha; if (f > 5) f = 5;
+        d = Math.sqrt(d2);
+        n.vx -= (dx / d) * f; n.vy -= (dy / d) * f;
+        m.vx += (dx / d) * f; m.vy += (dy / d) * f;
+      }
+      n.vx += -n.x * 0.008 * alpha; n.vy += -n.y * 0.008 * alpha;
+    }
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; continue; }
+      n.vx *= 0.86; n.vy *= 0.86;
+      if (n.vx > 6) n.vx = 6; if (n.vx < -6) n.vx = -6;
+      if (n.vy > 6) n.vy = 6; if (n.vy < -6) n.vy = -6;
+      n.x += n.vx; n.y += n.vy;
+    }
+    alpha *= 0.985;
+  }
+  var preMax = nodes.length > 350 ? 140 : 280;
+  for (var pre = 0; pre < preMax && alpha > 0.02; pre++) tick();
+
+  /* — вьюпорт — */
+  var view = { x: 0, y: 0, k: 1 };
+  function fit() {
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    nodes.forEach(function (n) {
+      if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+    });
+    var bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1);
+    var k = Math.min((W - 110) / bw, (H - 110) / bh);
+    view.k = Math.max(0.4, Math.min(1.6, k));
+    view.x = W / 2 - (minX + bw / 2) * view.k;
+    view.y = H / 2 - (minY + bh / 2) * view.k;
+  }
+  function resize() {
+    W = Math.max(stage.clientWidth || 900, 320);
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cv.style.height = H + "px";
+    invalidate();
+  }
+
+  var FILTER = "", hover = null;
+  function matches(n) { return !FILTER || n.filter.indexOf(FILTER) !== -1; }
+
+  /* — кольца подсетей: центроид + охватывающая окружность по позициям узлов — */
+  function drawSubnetRings() {
+    if (!G.subnets || !G.subnets.length || nodes.length > 400) return;
+    var groups = {};
+    nodes.forEach(function (n) {
+      if (n.subnet) (groups[n.subnet] = groups[n.subnet] || []).push(n);
+    });
+    Object.keys(groups).forEach(function (sub) {
+      var g = groups[sub];
+      if (g.length < 2) return;  /* одиночный узел — без кольца */
+      var cx = 0, cy = 0;
+      g.forEach(function (n) { cx += n.x; cy += n.y; });
+      cx /= g.length; cy /= g.length;
+      var R = 0;
+      g.forEach(function (n) { var dx = n.x - cx, dy = n.y - cy; var dd = dx * dx + dy * dy; if (dd > R) R = dd; });
+      R = Math.sqrt(R) + 26;
+      var anom = anomalousSubnets[sub] === 1;
+      ctx.globalAlpha = anom ? 0.12 : 0.06;
+      ctx.strokeStyle = anom ? C.bad : C.text;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(anom ? [3, 5] : []);
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.2832); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.4; ctx.fillStyle = C.muted;
+      ctx.font = "600 10px " + C.mono; ctx.textAlign = "center";
+      ctx.fillText("подсеть " + sub, cx, cy - R - 8);
+    });
+  }
+
+  function drawNode(n, dimN) {
+    var col = C[n.cls];
+    ctx.globalAlpha = dimN ? 0.08 : 1;
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
+    ctx.shadowColor = col; ctx.shadowBlur = (hover === n ? 16 : 6) * view.k;
+    var r = n.r, t = n.type;
+
+    /* аномалия подсети: расходящиеся кольца тревоги на её шлюзе/роутере */
+    if (n.subnet && anomalousSubnets[n.subnet] === 1 &&
+        (t === "router" || n.provenance.indexOf("gateway") !== -1) && !reduceMotion && !dimN) {
+      for (var k2 = 0; k2 < 2; k2++) {
+        var ph = (((window.__ngNow || 0) / 2800) + k2 / 2) % 1;
+        ctx.globalAlpha = (1 - ph) * 0.45;
+        ctx.strokeStyle = C.bad; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 4 + ph * 46, 0, 6.2832); ctx.stroke();
+      }
+      ctx.globalAlpha = dimN ? 0.08 : 1; ctx.strokeStyle = col; ctx.fillStyle = col;
+    }
+
+    if (t === "router") {
+      ctx.save(); ctx.translate(n.x, n.y); ctx.rotate(Math.PI / 4);
+      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fillRect(-r, -r, r * 2, r * 2);
+      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.strokeRect(-r, -r, r * 2, r * 2);
+      ctx.restore();
+    } else if (t === "switch" || t === "printer") {
+      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
+      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.strokeRect(n.x - r, n.y - r, r * 2, r * 2);
+    } else if (t === "server") {
+      /* шестиугольник — отличить от switch/printer */
+      ctx.beginPath();
+      for (var s = 0; s < 6; s++) {
+        var a6 = Math.PI / 3 * s - Math.PI / 6;
+        var hx = n.x + Math.cos(a6) * r, hy = n.y + Math.sin(a6) * r;
+        if (s === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fill();
+      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+    } else if (t === "ap" || t === "phone") {
+      ctx.beginPath();
+      ctx.moveTo(n.x, n.y - r); ctx.lineTo(n.x + r, n.y + r); ctx.lineTo(n.x - r, n.y + r);
+      ctx.closePath();
+      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fill();
+      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+    } else if (t === "agent") {
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 6.2832);
+      ctx.globalAlpha = dimN ? 0.06 : 0.16; ctx.fill();
+      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+    } else {
+      ctx.globalAlpha = dimN ? 0.05 : 0.8;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 6.2832); ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+
+    /* подпись для крупных узлов */
+    if (view.k > 0.6 && n.r >= 8) {
+      var name = t === "printer" ? "🖨 " + (n.hostname || n.ip || n.nid || "")
+                : (n.hostname || n.ip || n.nid || "");
+      if (name.length > 18) name = name.slice(0, 17) + "…";
+      ctx.globalAlpha = dimN ? 0.06 : 0.85;
+      ctx.fillStyle = C.text; ctx.font = "500 10px " + C.mono; ctx.textAlign = "center";
+      ctx.fillText(name, n.x, n.y + n.r + 13);
+    }
+  }
+
+  function draw(now) {
+    window.__ngNow = now || 0;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.translate(view.x, view.y);
+    ctx.scale(view.k, view.k);
+
+    drawSubnetRings();
+
+    /* линки */
+    for (var i = 0; i < links.length; i++) {
+      var L = links[i];
+      var dim = FILTER && !(matches(L.a) || matches(L.b));
+      var focus = hover && (hover === L.a || hover === L.b);
+      /* качество agent-uplink -> цвет по потерям; иначе по уверенности */
+      var qloss = L.quality ? L.quality.loss_pct : null;
+      var lcls = L.kind === "agent-uplink" && qloss != null ? lossClass(qloss)
+               : (L.conf === "high" ? "accent" : L.conf === "medium" ? "warn" : "muted");
+      ctx.globalAlpha = dim ? 0.04 : (focus ? 0.9 : (L.kind === "agent-uplink" ? 0.4 : confAlpha(L.conf)));
+      ctx.strokeStyle = C[lcls];
+      ctx.lineWidth = lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1;
+      ctx.setLineDash((L.medium === "wireless" || L.ambiguous) ? [4, 4] : []);
+      ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
+      ctx.setLineDash([]);
+      /* пульс пакета: бежит к шлюзу; на плохом линке гибнет на полпути */
+      if (!reduceMotion && qloss != null && !dim) {
+        var t = ((now / 2400) + L.idx * 0.37) % 1;
+        var die = lcls === "bad" ? 0.55 : lcls === "warn" ? 0.8 : 1.01;
+        if (t < die) {
+          var px = L.a.x + (L.b.x - L.a.x) * t, py = L.a.y + (L.b.y - L.a.y) * t;
+          ctx.globalAlpha = (focus ? 0.95 : 0.75) * (t > die - 0.12 ? (die - t) / 0.12 : 1);
+          ctx.fillStyle = C[lcls];
+          ctx.beginPath(); ctx.arc(px, py, 2.1, 0, 6.2832); ctx.fill();
+        }
+      }
+    }
+
+    /* узлы */
+    for (var j = 0; j < nodes.length; j++) drawNode(nodes[j], FILTER && !matches(nodes[j]));
+
+    /* hover-кольцо */
+    if (hover) {
+      ctx.globalAlpha = 0.9; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 4]); ctx.lineDashOffset = reduceMotion ? 0 : -now / 50;
+      ctx.beginPath(); ctx.arc(hover.x, hover.y, hover.r + 6, 0, 6.2832); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  var running = false;
+  function loop(now) {
+    if (alpha > 0.02) tick();
+    draw(now || 0);
+    /* пульс пакета / кольца-аномалии требуют постоянного кадра; при reduce-motion
+       рисуем один кадр на изменение — loop гасит running, invalidate зажигает */
+    if (!reduceMotion || alpha > 0.02) requestAnimationFrame(loop);
+    else running = false;
+  }
+  function invalidate() { if (running) return; running = true; requestAnimationFrame(loop); }
+  new MutationObserver(function () { readTheme(); invalidate(); })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  function toWorld(e) {
+    var b = cv.getBoundingClientRect();
+    return { x: (e.clientX - b.left - view.x) / view.k, y: (e.clientY - b.top - view.y) / view.k };
+  }
+  function pick(p) {
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      var n = nodes[i], dx = n.x - p.x, dy = n.y - p.y, rr = n.r + 6;
+      if (dx * dx + dy * dy <= rr * rr) return n;
+    }
+    return null;
+  }
+  function typeRu(t) {
+    return { router: "маршрутизатор", switch: "коммутатор", ap: "точка доступа",
+             agent: "агент", printer: "принтер", server: "сервер",
+             phone: "телефон", endpoint: "устройство" }[t] || "неизвестно";
+  }
+  function statusRu(s) {
+    return { up: "на связи", down: "недоступен", unreachable: "за недоступным узлом",
+             missing: "пропал" }[s] || "неизвестно";
+  }
+  var SAFE_CLS = { good: 1, warn: 1, bad: 1, na: 1, accent: 1 };
+  function tipCls(c) { return SAFE_CLS[c] === 1 ? "t-" + c : "t-muted"; }
+  function row(cls, t) {
+    var d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = t;  /* textContent: данные не попадают в HTML-sink */
+    tip.appendChild(d);
+  }
+  function fmtLoss(v) { return v == null ? "н/д" : Math.round(v) + "%"; }
+  function fmtLat(v) { return v == null ? "—" : Math.round(v) + " мс"; }
+  function showTip(n, e) {
+    tip.textContent = "";
+    row("t-head", n.hostname || n.ip || n.nid);
+    row("t-muted", typeRu(n.type) + " · " + statusRu(n.status));
+    if (n.ip) row("", "IP: " + n.ip);
+    if (n.mac) row("t-muted", "MAC: " + n.mac);
+    if (n.vendor) row("t-muted", n.vendor);
+    if (n.subnet) row("t-muted", "подсеть " + n.subnet);
+    if (n.quality) {
+      row(tipCls(lossClass(n.quality.loss_pct)),
+          "потери до шлюза: " + fmtLoss(n.quality.loss_pct) + " · задержка: " + fmtLat(n.quality.latency_ms));
+      if (n.quality.loss_pct == null) row("t-muted", "проба не отвечала — возможно, ICMP закрыт");
+    }
+    if (n.subnet && anomalousSubnets[n.subnet] === 1)
+      row("t-bad", "⚠ подсеть деградирована — похоже на инфраструктуру");
+    if (n.card_url) row("t-muted", "клик — карточка устройства");
+    var sb = stage.getBoundingClientRect();
+    var x = e.clientX - sb.left + 16, y = e.clientY - sb.top + 14;
+    tip.hidden = false;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > sb.width - 8) x = e.clientX - sb.left - tw - 12;
+    if (y + th > sb.height - 8) y = e.clientY - sb.top - th - 10;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+
+  var dragNode = null, panning = false, downPt = null, moved = false;
+  cv.addEventListener("mousedown", function (e) {
+    var p = toWorld(e); downPt = { x: e.clientX, y: e.clientY }; moved = false;
+    var n = pick(p);
+    if (n) { dragNode = n; n.fx = n.x; n.fy = n.y; alpha = Math.max(alpha, 0.25); }
+    else panning = true;
+    invalidate(); e.preventDefault();
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (downPt && (Math.abs(e.clientX - downPt.x) > 4 || Math.abs(e.clientY - downPt.y) > 4)) moved = true;
+    if (dragNode) {
+      var p = toWorld(e); dragNode.fx = p.x; dragNode.fy = p.y;
+      alpha = Math.max(alpha, 0.2); tip.hidden = true; invalidate(); return;
+    }
+    if (panning) { view.x += e.movementX; view.y += e.movementY; tip.hidden = true; invalidate(); return; }
+    if (e.target !== cv) { if (hover) { hover = null; tip.hidden = true; invalidate(); } return; }
+    var n = pick(toWorld(e));
+    if (n !== hover) { hover = n; invalidate(); }
+    if (n) showTip(n, e); else tip.hidden = true;
+    cv.style.cursor = n ? "pointer" : "grab";
+  });
+  window.addEventListener("mouseup", function () {
+    if (dragNode) { dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15); }
+    /* клик — каноническая карточка (agent>printer>net-infra), url из ассемблера */
+    if (dragNode && !moved && dragNode.card_url) {
+      window.location.href = dragNode.card_url;
+    }
+    dragNode = null; panning = false; downPt = null; invalidate();
+  });
+  cv.addEventListener("dblclick", function (e) { fit(); invalidate(); e.preventDefault(); });
+  cv.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+    var k2 = Math.max(0.3, Math.min(2.8, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    view.x = mx - ((mx - view.x) / view.k) * k2;
+    view.y = my - ((my - view.y) / view.k) * k2;
+    view.k = k2; invalidate();
+  }, { passive: false });
+  cv.addEventListener("mouseleave", function () { hover = null; tip.hidden = true; invalidate(); });
+
+  var search = document.getElementById("netgraph-search");
+  if (search) search.addEventListener("input", function () {
+    FILTER = search.value.trim().toLowerCase(); invalidate();
+  });
+
+  if (window.ResizeObserver) new ResizeObserver(function () { resize(); fit(); }).observe(stage);
+  resize(); fit(); invalidate();
+})();
+</script>

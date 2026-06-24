@@ -76,6 +76,8 @@ def _node_from_net_device(d: dict[str, Any]) -> _Node:
     dev_type = d.get("dev_type") or "unknown"
     if device_id and dev_type == "unknown":
         dev_type = "agent"  # a linked agent gets the agent glyph, not "unknown"
+    elif printer_id and dev_type == "unknown":
+        dev_type = "printer"  # a linked printer gets the printer glyph (symmetric)
     prov = ["net"] + (["agent"] if device_id else []) + (["printer"] if printer_id else [])
     return {
         "nid": nid,
