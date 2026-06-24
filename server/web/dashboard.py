@@ -16,9 +16,34 @@ from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
 from server import db, org_directory
-from server.analytics.netmap import build_netmap, subnet_context_for, subnet_hint
+from server.analytics.netmap import subnet_context_for, subnet_hint
+from server.netdisco.cache import GraphCache
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
+
+_EMPTY_GRAPH = {
+    "nodes": [],
+    "links": [],
+    "subnets": [],
+    "totals": {
+        "nodes": 0,
+        "links": 0,
+        "agents": 0,
+        "printers": 0,
+        "anomalies": 0,
+        "wireless_links": 0,
+    },
+}
+
+
+def _unified_map_graph(request: Request) -> dict:
+    """Ф4: the unified network-map graph for ``/netmap`` (Ф2 assembler via the Ф3
+    GraphCache). Same cache instance the API serves; a well-formed empty graph when
+    the fleet is empty so the SSR inventory/canvas both degrade gracefully. The cache
+    is created up-front in ``create_app``; the fallback only covers an app built
+    outside it."""
+    cache = getattr(request.app.state, "network_map_cache", None) or GraphCache()
+    return cache.get() or _EMPTY_GRAPH
 
 
 def health_color(v: Optional[float]) -> str:
@@ -361,11 +386,19 @@ def device(request: Request, device_id: str):
 
 @router.get("/netmap", response_class=HTMLResponse)
 def network_map(request: Request):
-    """Network map page (SSR + canvas). Discovered printers are placed into their
-    subnet cluster so they show on the map alongside agents and ARP devices."""
-    m = build_netmap(db.get_network_snapshots())
-    m = _attach_printers_to_netmap(m, db.get_printers())
-    return _TEMPLATES.TemplateResponse(request, "netmap.html", {"m": m})
+    """Network map page (SSR + the unified canvas engine). Ф4: ``/netmap`` now serves
+    the ONE unified graph (Ф2 assembler via the Ф3 GraphCache) -- real L2/L3 links +
+    agent-uplink + ICMP quality + subnet/anomaly overlays -- through ``_netgraph``.
+    The old ephemeral cluster model (``build_netmap``) is retired here; the unified
+    superset is the single contract for the canvas and the API. Inventory rows link to
+    the canonical card (``card_url``, agent>printer>net-infra). All agent/SNMP strings
+    reach the DOM only via ``| tojson`` (autoescape on) / ``textContent``."""
+    graph = _unified_map_graph(request)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "netmap.html",
+        {"graph": graph, "changes": db.get_net_changes(days=7)},
+    )
 
 
 @router.get("/topology", response_class=HTMLResponse)
