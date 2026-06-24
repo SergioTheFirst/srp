@@ -246,7 +246,9 @@ CREATE TABLE IF NOT EXISTS net_devices (
   site_code     TEXT,
   status        TEXT,
   first_seen    TEXT,
-  last_seen     TEXT
+  last_seen     TEXT,
+  device_id     TEXT,
+  printer_id    TEXT
 );
 CREATE TABLE IF NOT EXISTS net_interfaces (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,6 +329,10 @@ def init_db(
         _migrate_legacy_latest_wins(conn)
         conn.executescript(_SCHEMA)
         _migrate_add_columns(conn)
+        # net_devices link columns exist now on both paths (fresh: schema above;
+        # legacy: ALTER in _migrate_add_columns) -- index device_id only after that.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_netdev_mac ON net_devices(mac)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_netdev_device_id ON net_devices(device_id)")
         _backfill_printer_ip_map(conn)
 
 
@@ -420,6 +426,8 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("department", "TEXT"),
     ),
     "print_jobs": (("source", "TEXT"),),
+    # Phase 1 net-map unification: FK link to the agent (devices) / printer record.
+    "net_devices": (("device_id", "TEXT"), ("printer_id", "TEXT")),
 }
 _BACKFILL: dict[str, str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
@@ -449,7 +457,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
             if col not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")  # nosec B608
                 added = True
-        if added:
+        if added and table in _BACKFILL:
             conn.execute(_BACKFILL[table])
 
 
@@ -821,6 +829,38 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
         )
 
 
+def set_net_device_links(
+    device_nid: str,
+    device_id: Optional[str] = None,
+    printer_id: Optional[str] = None,
+) -> None:
+    """FK-link a network device to its agent (``devices``) / printer record (Phase 1).
+
+    COALESCE-preserve: a ``None`` argument keeps the stored link, so an inventory
+    cycle that resolves only one side (or transiently neither) never wipes a known
+    FK -- the link does not flap. A no-op when ``device_nid`` is unknown."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE net_devices
+               SET device_id  = COALESCE(?, device_id),
+                   printer_id = COALESCE(?, printer_id)
+             WHERE device_nid = ?
+            """,
+            (device_id, printer_id, device_nid),
+        )
+
+
+def get_net_device_links(device_nid: str) -> Optional[dict[str, Any]]:
+    """The ``{device_id, printer_id}`` FK pair for a network device, None if absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT device_id, printer_id FROM net_devices WHERE device_nid=?",
+            (device_nid,),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def store_net_device_reading(
     device_nid: str,
     detail: dict[str, Any],
@@ -1130,6 +1170,11 @@ def _delete_device_rows(conn: sqlite3.Connection, device_id: str) -> None:
     for table in _DEVICE_TABLES:
         # B608: table names are fixed module literals, never user input.
         conn.execute(f"DELETE FROM {table} WHERE device_id=?", (device_id,))  # nosec B608
+    # net_devices rows are MAC-keyed network nodes, NOT agent-owned -- so they are
+    # deliberately absent from _DEVICE_TABLES. Clear the soft agent FK instead of
+    # deleting the node: a purged agent leaves no dangling link (cleanup-not-
+    # continuity) while the network node itself survives.
+    conn.execute("UPDATE net_devices SET device_id=NULL WHERE device_id=?", (device_id,))
 
 
 def delete_device(device_id: str) -> bool:
@@ -1981,6 +2026,8 @@ def delete_unconfirmed_arp_printers() -> int:
         for pid in victims:
             conn.execute("DELETE FROM printer_readings WHERE printer_id=?", (pid,))
             conn.execute("DELETE FROM printers WHERE printer_id=?", (pid,))
+            # keep the network node, drop its now-dangling printer FK
+            conn.execute("UPDATE net_devices SET printer_id=NULL WHERE printer_id=?", (pid,))
     return len(victims)
 
 

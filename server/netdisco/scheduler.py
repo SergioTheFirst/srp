@@ -25,7 +25,7 @@ from server.netdisco.config import NetdiscoConfig
 from server.netdisco.credentials import default_store, resolve_community
 from server.netdisco.discovery import gather_candidates
 from server.netdisco.drivers import select_driver
-from server.netdisco.identity import device_nid
+from server.netdisco.identity import device_nid, link_identities
 from server.netdisco.inventory import build_inventory, persist_inventory
 from server.netdisco.models import DeviceProfile
 from server.printers.discovery import is_rfc1918
@@ -37,6 +37,7 @@ _poll_lock = threading.Lock()  # serialize cycles: one inventory/discovery pass 
 GetSnapshots = Callable[[], list[dict[str, Any]]]
 GetKnownFn = Callable[[], list[dict[str, Any]]]
 UpsertFn = Callable[[dict[str, Any]], None]
+SetLinksFn = Callable[[str, Optional[str], Optional[str]], None]
 ScanFn = Callable[[NetdiscoConfig], List[str]]
 
 
@@ -44,21 +45,55 @@ def run_inventory_cycle(
     *,
     get_snapshots: GetSnapshots = db.get_network_snapshots,
     upsert: UpsertFn = db.upsert_net_device,
+    get_net_devices: GetKnownFn = db.get_net_devices,
+    get_printers: GetKnownFn = db.get_printers,
+    set_links: SetLinksFn = db.set_net_device_links,
 ) -> dict[str, int]:
-    """Rebuild + persist the inventory from current snapshots (serialized).
+    """Rebuild + persist the inventory, then FK-link each device to its agent /
+    printer record by normalised MAC (Phase 1) -- all under one cycle lock.
 
-    Returns ``{"persisted": N, "busy": 0}`` normally, or ``{"persisted": 0,
-    "busy": 1}`` when another cycle holds the lock. Dependencies are injectable so
-    tests exercise the cycle without the DB/network.
+    Returns ``{"persisted": N, "linked": M, "busy": 0}`` normally, or
+    ``{"persisted": 0, "linked": 0, "busy": 1}`` when another cycle holds the lock.
+    Dependencies are injectable so tests exercise the cycle without the DB/network.
     """
     if not _poll_lock.acquire(blocking=False):
-        return {"persisted": 0, "busy": 1}
+        return {"persisted": 0, "linked": 0, "busy": 1}
     try:
-        devices = build_inventory(get_snapshots())
+        snapshots = get_snapshots()
+        devices = build_inventory(snapshots)
         persisted = persist_inventory(devices, upsert=upsert)
-        return {"persisted": persisted, "busy": 0}
+        try:
+            linked = _link_inventory_identities(
+                snapshots,
+                get_net_devices=get_net_devices,
+                get_printers=get_printers,
+                set_links=set_links,
+            )
+        except Exception:  # link = best-effort enrichment; persisted inventory stays intact
+            _log.exception("identity link step failed; persisted inventory is intact")
+            linked = 0
+        return {"persisted": persisted, "linked": linked, "busy": 0}
     finally:
         _poll_lock.release()
+
+
+def _link_inventory_identities(
+    snapshots: list[dict[str, Any]],
+    *,
+    get_net_devices: GetKnownFn,
+    get_printers: GetKnownFn,
+    set_links: SetLinksFn,
+) -> int:
+    """FK-link the freshly-persisted ``net_devices`` to agent / printer records.
+
+    Join key = normalised agent-adapter MAC (one source of truth,
+    ``netmap.agent_mac_index``); IP is the reserve only for MAC-less rows. A
+    transient miss never wipes a known FK (COALESCE-preserve in
+    ``set_net_device_links``). Returns the number of rows linked."""
+    links = link_identities(get_net_devices(), netmap.agent_mac_index(snapshots), get_printers())
+    for nid, fk in links.items():
+        set_links(nid, fk.get("device_id"), fk.get("printer_id"))
+    return len(links)
 
 
 def poll_now() -> dict[str, int]:
@@ -166,7 +201,7 @@ StoreInterfacesFn = Callable[[str, List[dict]], None]
 
 def _fleet_agent_macs() -> set:
     """Every SRP agent's adapter MACs (identity layer) -- never probe our own."""
-    return set(netmap._agent_macs(db.get_network_snapshots()))
+    return set(netmap.agent_mac_index(db.get_network_snapshots()))
 
 
 def _make_session(ip: str, cfg: NetdiscoConfig) -> SnmpSession:

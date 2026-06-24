@@ -128,6 +128,23 @@ def test_delete_unconfirmed_arp_printers(db_init):
     assert ids == ["prn-sn-CNX-1"]  # only the real printer survives
 
 
+def test_delete_unconfirmed_arp_printers_nulls_net_link(db_init):
+    """Purging a phantom printer clears any net_devices->printer soft FK but keeps
+    the network node (symmetric with delete_device's agent-FK clearing)."""
+    db = db_init
+    db.store_printer_reading(
+        "prn-mac-AABBCCDDEE77", _arp_shell("192.168.1.77", "AA-BB-CC-DD-EE-77")
+    )
+    db.upsert_net_device({"device_nid": "nd-mac-AABBCCDDEE77", "mac": "AA-BB-CC-DD-EE-77"})
+    db.set_net_device_links("nd-mac-AABBCCDDEE77", printer_id="prn-mac-AABBCCDDEE77")
+
+    assert db.delete_unconfirmed_arp_printers() == 1
+
+    row = db.get_net_device("nd-mac-AABBCCDDEE77")
+    assert row is not None  # the network node survives the printer purge
+    assert row["printer_id"] is None  # the dangling printer FK is cleared
+
+
 def test_overview_hides_unconfirmed_arp_printers(db_init):
     db = db_init
     db.store_printer_reading("prn-sn-CNX-1", _reading())

@@ -68,8 +68,16 @@ def _count(db, table: str, device_id: str) -> int:
 # --------------------------------------------------------------------------- #
 # _DEVICE_TABLES is complete (the safety net)
 # --------------------------------------------------------------------------- #
+# net_devices.device_id is a cross-domain *soft FK*: a network node (keyed by MAC)
+# optionally linked to an agent, NOT an agent-owned row. On delete the link is
+# cleared to NULL (the node survives) rather than row-deleted, so net_devices is
+# intentionally outside _DEVICE_TABLES -- see test_delete_device_nulls_net_link.
+_FK_LINK_TABLES = {"net_devices"}
+
+
 def test_device_tables_constant_matches_schema(db_init):
-    """Every table with a device_id column must be registered for deletion."""
+    """Every table with a device_id column is either registered for row-deletion
+    (_DEVICE_TABLES) or a documented soft-FK link table cleared to NULL."""
     db = db_init
     with db._connect() as conn:
         tables = [
@@ -83,7 +91,23 @@ def test_device_tables_constant_matches_schema(db_init):
             for t in tables
             if any(c["name"] == "device_id" for c in conn.execute(f"PRAGMA table_info({t})"))
         }
-    assert with_device_col == set(db._DEVICE_TABLES)
+    assert with_device_col - _FK_LINK_TABLES == set(db._DEVICE_TABLES)
+    assert with_device_col >= _FK_LINK_TABLES  # the exception really carries the column
+
+
+def test_delete_device_nulls_net_link(db_init):
+    """delete_device clears a net_devices->agent soft FK but keeps the node: a
+    purged agent leaves no dangling link, the network node itself survives."""
+    db = db_init
+    db.upsert_device("dev-gone", "2026-06-24T00:00:00+00:00", "1.0")
+    db.upsert_net_device({"device_nid": "nd-mac-AA", "mac": "AA", "dev_type": "agent"})
+    db.set_net_device_links("nd-mac-AA", device_id="dev-gone")
+
+    assert db.delete_device("dev-gone") is True
+
+    row = db.get_net_device("nd-mac-AA")
+    assert row is not None  # the MAC-keyed network node is NOT deleted
+    assert row["device_id"] is None  # the dangling agent FK is cleared
 
 
 # --------------------------------------------------------------------------- #

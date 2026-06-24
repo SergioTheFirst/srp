@@ -19,21 +19,10 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from server import db
+from server.analytics.netmap import agent_mac_index
 from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco.identity import device_nid
 from server.netdisco.models import NetDevice
-
-
-def _agent_macs(snapshots: list[dict[str, Any]]) -> set[str]:
-    """Every adapter MAC of every reporting agent (the identity layer)."""
-    macs: set[str] = set()
-    for snap in snapshots:
-        for adapter in snap.get("adapters") or []:
-            if isinstance(adapter, dict):
-                mac = normalize_mac(adapter.get("mac"))
-                if mac:
-                    macs.add(mac)
-    return macs
 
 
 def _primary_adapter(adapters: list[dict[str, Any]]) -> dict[str, Any]:
@@ -135,7 +124,7 @@ def build_inventory(snapshots: list[dict[str, Any]]) -> list[NetDevice]:
     """Derive the network-device inventory from per-agent network snapshots."""
     by_nid: dict[str, dict[str, Any]] = {}
     _add_agents(snapshots, by_nid)  # agents first, so their MACs win the identity layer
-    _add_neighbors(snapshots, by_nid, _agent_macs(snapshots))
+    _add_neighbors(snapshots, by_nid, set(agent_mac_index(snapshots)))
     return [_to_device(by_nid[nid]) for nid in sorted(by_nid)]
 
 
