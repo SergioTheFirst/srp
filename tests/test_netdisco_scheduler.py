@@ -30,10 +30,41 @@ _SNAP: dict[str, Any] = {
 
 def test_run_inventory_cycle_builds_and_persists() -> None:
     captured: list[dict[str, Any]] = []
-    result = scheduler.run_inventory_cycle(get_snapshots=lambda: [_SNAP], upsert=captured.append)
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=captured.append,
+        get_net_devices=lambda: [],
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+    )
     assert result["busy"] == 0
     # one agent + one agentless gateway endpoint = 2 devices persisted
     assert result["persisted"] == len(captured) == 2
+    assert result["linked"] == 0  # no records to link against
+
+
+def test_run_inventory_cycle_links_identities_by_mac() -> None:
+    # The net_devices the inventory just persisted: the reporting agent's own node
+    # and a printer node, each carrying the shared MAC of its record. The cycle
+    # must FK-link both (agent by MAC -> device_id, printer by MAC -> printer_id).
+    amac = "AA-BB-CC-DD-EE-01"  # _SNAP's adapter MAC -> dev-A
+    pmac = "11-22-33-44-55-66"
+    net_devices = [
+        {"device_nid": "nd-mac-" + amac, "mac": amac, "ip": "10.0.0.10"},
+        {"device_nid": "nd-mac-" + pmac, "mac": pmac, "ip": "10.0.0.50"},
+    ]
+    printers = [{"printer_id": "prn-sn-XYZ", "mac": pmac, "ip": "10.0.0.50"}]
+    written: list[tuple] = []
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: net_devices,
+        get_printers=lambda: printers,
+        set_links=lambda nid, did, pid: written.append((nid, did, pid)),
+    )
+    assert result["linked"] == 2
+    assert ("nd-mac-" + amac, "dev-A", None) in written
+    assert ("nd-mac-" + pmac, None, "prn-sn-XYZ") in written
 
 
 def test_run_inventory_cycle_returns_busy_when_a_cycle_is_running() -> None:

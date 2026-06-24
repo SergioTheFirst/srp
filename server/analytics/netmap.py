@@ -36,8 +36,12 @@ def _ip_key(ip: Optional[str]) -> tuple:
         return (1, (ip or "",))
 
 
-def _agent_macs(snapshots: list[dict[str, Any]]) -> dict[str, str]:
-    """MAC -> device_id over every adapter of every agent (identity layer, D2)."""
+def agent_mac_index(snapshots: list[dict[str, Any]]) -> dict[str, str]:
+    """MAC -> device_id over every adapter of every agent (identity layer, D2).
+
+    The single source of truth for the agent-MAC identity layer: ``inventory`` and
+    ``scheduler`` derive their MAC sets from this map's keys (no parallel copy).
+    """
     out: dict[str, str] = {}
     for snap in snapshots:
         for a in snap.get("adapters") or []:
@@ -171,7 +175,7 @@ def _finalize(c: dict[str, Any]) -> dict[str, Any]:
 
 def build_netmap(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     """The whole-fleet map: clusters by gateway + agentless unclustered tail."""
-    mac_to_device = _agent_macs(snapshots)
+    mac_to_device = agent_mac_index(snapshots)
     clusters: dict[str, dict[str, Any]] = {}
     unclustered: list[dict[str, Any]] = []
 
