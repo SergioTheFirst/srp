@@ -15,7 +15,6 @@ from shared.schema import Envelope, utcnow_iso
 
 from server import db, org_directory
 from server.analytics.diagnostics import compute_diagnostics
-from server.analytics.netmap import build_netmap
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
@@ -90,9 +89,29 @@ def metrics() -> dict:
 
 
 @router.get("/netmap")
-def netmap() -> dict:
-    """Phase-2 network map: gateway clusters, agentless neighbors, subnet anomalies."""
-    return build_netmap(db.get_network_snapshots())
+def netmap(request: Request) -> dict:
+    """DEPRECATED alias of ``/api/v1/network-map/graph`` (Ф3 unification).
+
+    Returns the SAME unified superset graph (nodes/links/subnets/totals) -- not the
+    legacy cluster model -- so every map consumer speaks one contract. The dedicated
+    canvas (Ф4) and the panel (Ф5) read ``/api/v1/network-map/graph`` directly; this
+    route is kept so older links/scripts keep working during the unification."""
+    return _network_map_graph(request)
+
+
+@router.get("/network-map/graph")
+def network_map_graph(request: Request) -> dict:
+    """Ф3: the ONE unified network-map graph (netdisco backbone + Phase-1 identity FKs
+    + netmap overlays), served from a short-TTL cache so a polling dashboard does not
+    re-query the DB or re-run the assembler on every request."""
+    return _network_map_graph(request)
+
+
+def _network_map_graph(request: Request) -> dict:
+    # ``app.state.network_map_cache`` is created up-front in ``create_app`` (main.py);
+    # the fallback only covers an app built outside ``create_app``.
+    cache = getattr(request.app.state, "network_map_cache", None) or GraphCache()
+    return cache.get() or {}
 
 
 @router.get("/netdisco/devices")
@@ -103,7 +122,7 @@ def netdisco_devices(dev_type: Optional[str] = None, site: Optional[str] = None)
 
 
 @router.post("/discovery/poll")
-def poll_discovery() -> dict:
+def poll_discovery(request: Request) -> dict:
     """Force one netdisco inventory cycle now (dashboard button). The endpoint is
     unauthenticated, so it is rate-limited (a single shared bucket) AND bounded by
     the scheduler's anti-DoS lock -- a concurrent call returns busy, not a second
@@ -111,22 +130,21 @@ def poll_discovery() -> dict:
     # namespaced key: never collides with a real device_id in the shared limiter
     if not check_rate_limit("endpoint:discovery_poll"):
         raise HTTPException(status_code=429, detail="discovery poll rate exceeded")
-    return netdisco_scheduler.poll_now()
+    result = netdisco_scheduler.poll_now()
+    # A fresh inventory can change the graph (new/retyped devices, FK identity links)
+    # -- drop the unified-map cache so the next read rebuilds over the new backbone.
+    _invalidate_network_map_cache(request)
+    return result
 
 
 @router.get("/topology/graph")
 def topology_graph(request: Request) -> dict:
-    """Latest L2 topology graph (nodes + resolved links), served from a short-TTL
-    cache so a polling dashboard does not re-query the DB on every request."""
-    cache = getattr(request.app.state, "netdisco_graph_cache", None)
-    if cache is None:
-        cache = GraphCache()
-        request.app.state.netdisco_graph_cache = cache
-    snap = cache.get() or {}
-    return {
-        "graph": snap.get("graph") or {"nodes": [], "links": []},
-        "received_at": snap.get("received_at"),
-    }
+    """DEPRECATED alias of ``/api/v1/network-map/graph`` (Ф3 unification).
+
+    Returns the SAME unified superset graph (the stored snapshot graph was a subset
+    of it). Kept so existing topology links/scripts keep working during the
+    unification."""
+    return _network_map_graph(request)
 
 
 @router.post("/topology/poll")
@@ -145,10 +163,17 @@ def poll_topology(request: Request) -> dict:
 
         cfg = load_netdisco_config(None)
     result = netdisco_reconcile.run_topology_cycle(cfg)
-    cache = getattr(request.app.state, "netdisco_graph_cache", None)
-    if cache is not None:
-        cache.invalidate()  # the next /topology/graph read reflects the fresh snapshot
+    # The reconcile may have written fresh net_links/snapshots -> drop the unified-map
+    # cache so the next read reflects the new edges at once (not after the TTL lapses).
+    _invalidate_network_map_cache(request)
     return result
+
+
+def _invalidate_network_map_cache(request: Request) -> None:
+    """Drop the unified-map cache if one was lazily created on this app."""
+    cache = getattr(request.app.state, "network_map_cache", None)
+    if cache is not None:
+        cache.invalidate()
 
 
 @router.get("/topology/changes")
