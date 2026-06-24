@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from server.analytics.netmap import build_netmap, subnet_context_for
+from server.analytics.netmap import (
+    build_netmap,
+    quality_overlay,
+    subnet_anomaly,
+    subnet_context_for,
+    subnet_hint,
+)
 from server.analytics.oui import normalize_mac, vendor_for_mac
 
 pytestmark = pytest.mark.unit
@@ -181,3 +187,41 @@ def test_no_gateway_goes_unclustered_and_context_annotation():
     note = subnet_context_for(snaps, "d1")
     assert note is not None and "192.168.1.x" in note
     assert subnet_context_for(snaps, "d3") is None
+
+
+# --- Ф2: extracted pure overlay helpers (consumed by netdisco.unified) ---
+
+
+def test_subnet_hint_quad_or_none():
+    assert subnet_hint("192.168.1.50") == "192.168.1.x"
+    assert subnet_hint("10.0.0.1") == "10.0.0.x"
+    assert subnet_hint("not-an-ip") is None
+    assert subnet_hint(None) is None
+
+
+def test_quality_overlay_reports_loss_latency_or_none():
+    snap = _snap("d1", loss=12.0, lat=3.0)
+    assert quality_overlay(snap, "192.168.1.1") == {"loss_pct": 12.0, "latency_ms": 3.0}
+    assert quality_overlay(snap, "10.9.9.9") is None  # no probe to this gateway
+    filtered = _snap(
+        "d2",
+        quality=[
+            {
+                "target_kind": "gateway",
+                "target": "192.168.1.1",
+                "latency_ms": None,
+                "loss_pct": 100.0,
+            }
+        ],
+    )
+    assert quality_overlay(filtered, "192.168.1.1") is None  # ICMP-ambiguous (D5)
+
+
+def test_subnet_anomaly_cohort_and_threshold():
+    bad = subnet_anomaly([30.0, 40.0])
+    assert bad["anomaly"] is True
+    assert bad["reporting"] == 2 and bad["degraded"] == 2
+    assert "инфраструктур" in bad["reason"]
+    assert subnet_anomaly([30.0, 0.0, 0.0])["anomaly"] is False
+    assert subnet_anomaly([90.0])["anomaly"] is False  # cohort < 2 never alarms
+    assert subnet_anomaly([])["anomaly"] is False
