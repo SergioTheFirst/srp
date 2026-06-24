@@ -19,3 +19,6 @@
 - [Сертификаты: subject-группировка + окна 14дн/4ч, 7дн/1×день](cert-subject-grouping.md) — преемник того же Subject гасит напоминания старого; после истечения 1/день × 7, потом тишина
 - [Печать: авторежим events⇄counter](print-counter-fallback.md) — выбор режима каждый sweep по IsEnabled; counter = дельты TotalPagesPrinted c reset-detect; source additive
 - [Справочник орг/отделов: файл, имена render-time](org-directory-render-time.md) — имена никогда не в БД; переименование мгновенно на всю историю; devices.department DEPRECATED
+- [Тред: объединение карты сети](netmap-unification.md) — netdisco+netmap → одна интерактивная карта; статус Ф1✅Ф2✅→Ф3..Ф10, архитектура и как продолжить
+- [Ф1: MAC-FK хребет идентичности](netmap-identity-spine.md) — net_devices +device_id/printer_id soft-FK; link_identities; cleanup обнуляет FK, узел остаётся
+- [Ф2: единый ассемблер карты](netmap-unified-assembler.md) — netdisco/unified.build_network_map: чистый суперсет-граф, дедуп по device_nid, nd-unknown не размещается
