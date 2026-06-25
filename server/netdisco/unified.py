@@ -201,9 +201,22 @@ def _synth_agent_node(nid: str, snap: dict[str, Any], did: str) -> _Node:
 
 
 def _enrich_agent(node: _Node, snap: dict[str, Any], did: str) -> None:
+    a0 = _primary_adapter(snap)
+    ip0 = (a0.get("ipv4") or [None])[0]
+    mac0 = normalize_mac(a0.get("mac"))
     node["device_id"] = did
     if node.get("dev_type") in (None, "unknown"):
         node["dev_type"] = "agent"
+    if not node.get("ip"):
+        node["ip"] = ip0
+    if not node.get("mac"):
+        node["mac"] = mac0
+    if not node.get("vendor"):
+        node["vendor"] = vendor_for_mac(mac0)
+    if not node.get("status") and a0:
+        node["status"] = "up" if a0.get("up") else None
+    if not node.get("subnet"):
+        node["subnet"] = subnet_hint(ip0)
     if not node.get("hostname"):
         node["hostname"] = snap.get("hostname")
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"agent"})
@@ -259,12 +272,20 @@ def _synth_printer_node(nid: str, p: dict[str, Any], pid: str) -> _Node:
 
 
 def _enrich_printer(node: _Node, p: dict[str, Any], pid: str) -> None:
+    mac = normalize_mac(p.get("mac"))
     node["printer_id"] = pid
     node["subtype"] = "printer"
     if node.get("dev_type") in (None, "unknown"):
         node["dev_type"] = "printer"
-    node["vendor"] = node.get("vendor") or p.get("vendor")
+    if not node.get("ip"):
+        node["ip"] = p.get("ip")
+    if not node.get("mac"):
+        node["mac"] = mac
+    node["vendor"] = node.get("vendor") or p.get("vendor") or vendor_for_mac(mac)
     node["model"] = node.get("model") or p.get("model")
+    node["status"] = node.get("status") or p.get("status")
+    if not node.get("subnet"):
+        node["subnet"] = subnet_hint(p.get("ip"))
     if not node.get("hostname"):
         node["hostname"] = p.get("hostname")
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"printer"})

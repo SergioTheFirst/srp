@@ -193,6 +193,43 @@ def test_printer_synthesized_when_not_discovered():
     assert by[pr]["card_url"] == "/printers/p2"
 
 
+def test_linked_agent_enriches_sparse_net_device_facts():
+    # Ф1 FK may link an already-known net_device row that has only identity. The
+    # unified node must still show agent facts already present in the telemetry.
+    nid = "nd-chassis-SPARSE-AGENT"
+    g = build_network_map(
+        [_nd(nid, "unknown", ip=None, mac=None, status=None, device_id="d1")],
+        [],
+        [_snap("d1", A1, ip="192.168.1.44")],
+        [],
+    )
+    n = _by_nid(g)[nid]
+    assert n["dev_type"] == "agent"
+    assert n["ip"] == "192.168.1.44"
+    assert n["mac"] == "AA-BB-CC-00-00-01"
+    assert n["status"] == "up"
+    assert n["subnet"] == "192.168.1.x"
+    assert n["hostname"] == "pc-d1"
+
+
+def test_linked_printer_enriches_sparse_net_device_facts():
+    nid = "nd-sn-SPARSE-PRINTER"
+    g = build_network_map(
+        [_nd(nid, "unknown", ip=None, mac=None, status=None, printer_id="p1")],
+        [],
+        [],
+        [_printer("p1", mac=PR, ip="192.168.1.55", vendor="HP", model="LJ", status="idle")],
+    )
+    n = _by_nid(g)[nid]
+    assert n["dev_type"] == "printer"
+    assert n["ip"] == "192.168.1.55"
+    assert n["mac"] == "00-11-22-33-44-55"
+    assert n["vendor"] == "HP"
+    assert n["model"] == "LJ"
+    assert n["status"] == "idle"
+    assert n["subnet"] == "192.168.1.x"
+
+
 def test_card_url_priority_agent_printer_infra():
     rt, a1, pr = device_nid(mac=RT), device_nid(mac=A1), device_nid(mac=PR)
     net_devices = [

@@ -560,4 +560,8 @@ def poll_printers(request: Request) -> dict:
         from server.printers.config import load_printer_config
 
         printer_cfg = load_printer_config(None)
-    return scheduler.poll_now(printer_cfg)
+    result = scheduler.poll_now(printer_cfg)
+    # Printers are first-class nodes in the unified network map; a manual printer
+    # poll should be visible on the next map read, not after the graph TTL expires.
+    _invalidate_network_map_cache(request)
+    return result

@@ -373,14 +373,19 @@
   }
   /* — ребро прошло фильтры среда/уверенность + слои — */
   function linkMedium(L) { return L.medium || "wired"; }
+  function isAgentUplink(L) { return L.kind === "agent-uplink"; }
+  function isL3Link(L) {
+    return linkMedium(L) === "l3" || L.kind === "l3" || (L.kind || "").indexOf("l3") !== -1;
+  }
   function linkOk(L) {
     if (!state.medium[linkMedium(L)]) return false;
     var c = L.conf || "low";
     if (!state.conf[c]) return false;
-    /* слои: по роду ребра + среда */
-    if (L.kind === "l2-edge" || L.kind === "l2-trunk") { if (!state.layers.l2) return false; }
-    else if (L.kind === "l3" || (L.kind || "").indexOf("l3") !== -1) { if (!state.layers.l3) return false; }
-    else if (L.kind === "agent-uplink") { if (!state.layers.uplink) return false; }
+    /* Layers: anything that is not L3 or an agent uplink is a physical/L2-ish edge,
+       including legacy snapshot kinds such as "ethernet". */
+    if (isL3Link(L)) { if (!state.layers.l3) return false; }
+    else if (isAgentUplink(L)) { if (!state.layers.uplink) return false; }
+    else if (!state.layers.l2) return false;
     if (linkMedium(L) === "wireless" && !state.layers.wireless) return false;
     return true;
   }
@@ -860,7 +865,7 @@
       var w = document.createElement("div"); w.className = "ng-info bad"; w.textContent = "⚠ подсеть деградирована"; side.appendChild(w);
     }
     var ar = document.createElement("div"); ar.className = "ng-actions-row";
-    var bIso = document.createElement("button"); bIso.textContent = "изоляция"; bIso.onclick = function () { setMode("isolate"); state.isolateRoot = n.nid; invalidate(); updateNavInfo(); };
+    var bIso = document.createElement("button"); bIso.textContent = "изоляция"; bIso.onclick = function () { setMode("isolate"); state.isolateRoot = n.nid; recomputeNav(); invalidate(); updateNavInfo(); };
     var bPath = document.createElement("button"); bPath.textContent = "отсюда путь"; bPath.onclick = function () { setMode("path"); state.pathSel = [n.nid]; updateNavInfo(); };
     ar.appendChild(bIso); ar.appendChild(bPath);
     side.appendChild(ar);
@@ -919,8 +924,14 @@
   });
   window.addEventListener("mouseup", function (e) {
     if (dragNode) {
-      dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15);
-      if (!moved) handleClick(dragNode); else persistPositions();
+      alpha = Math.max(alpha, 0.15);
+      if (!moved) {
+        dragNode.fx = null; dragNode.fy = null;
+        handleClick(dragNode);
+      } else {
+        dragNode.fx = dragNode.x; dragNode.fy = dragNode.y;
+        persistPositions();
+      }
     }
     dragNode = null; panning = false; downPt = null; invalidate();
   });

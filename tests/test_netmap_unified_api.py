@@ -159,6 +159,28 @@ def test_topology_poll_invalidates_network_map_cache(client: TestClient) -> None
     assert "nd-mac-DEADBEEF0077" in _nodes(g)
 
 
+def test_printer_poll_invalidates_network_map_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The unified graph includes printers, so the printer force button must also
+    # invalidate the shared map cache. We use a direct DB insert as the visible
+    # cache-staleness probe and stub the poller to avoid network work.
+    assert client.get("/api/v1/network-map/graph").json()["totals"]["nodes"] == 0
+    db.upsert_net_device(
+        {"device_nid": "nd-mac-DEADBEEF0066", "dev_type": "printer", "ip": "10.0.0.66"}
+    )
+    import server.api as api
+
+    monkeypatch.setattr(
+        api.scheduler,
+        "poll_now",
+        lambda cfg: {"polled": 0, "online": 0, "unreachable": 0, "errors": 0, "skipped": 0},
+    )
+    assert client.post("/api/v1/printers/poll").status_code == 200
+    g = client.get("/api/v1/network-map/graph").json()
+    assert "nd-mac-DEADBEEF0066" in _nodes(g)
+
+
 def test_network_map_graph_hostile_hostname_round_trips_intact(client: TestClient) -> None:
     # XSS invariant for the API layer: the response is application/json (never parsed
     # as HTML, so a "</script>" substring in the raw JSON body is inert), and a

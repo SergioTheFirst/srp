@@ -402,3 +402,25 @@ def test_netmap_time_machine_plaque_on_ssr_route(client):
     g = _embedded_graph(client.get(f"/netmap?at={sid}").text)
     assert g["history_at"] == sid  # the marker the canvas keys the plaque off of
     assert g["received_at"]
+
+
+def test_netmap_l2_layer_covers_legacy_physical_link_kinds(client):
+    """The L2 layer toggle must hide every physical edge, not just current
+    ``l2-edge``/``l2-trunk`` names. Historical snapshots can carry legacy kinds like
+    ``ethernet``; those still belong to the L2 layer."""
+    _ingest(client, "map-l2", _net_payload())
+    body = client.get("/netmap").text
+    assert "function isL3Link(L)" in body
+    assert 'including legacy snapshot kinds such as "ethernet"' in body
+    assert "else if (!state.layers.l2) return false" in body
+
+
+def test_netmap_side_panel_isolate_and_drag_persistence_are_wired(client):
+    """Regression pins for two Ф5 interaction bugs: side-panel isolate must recompute
+    the cached BFS set after assigning the selected root, and drag end must persist
+    the final fixed coordinates instead of clearing ``fx/fy`` before saving."""
+    _ingest(client, "map-drag", _net_payload())
+    body = client.get("/netmap").text
+    assert "state.isolateRoot = n.nid; recomputeNav(); invalidate(); updateNavInfo();" in body
+    assert "dragNode.fx = dragNode.x; dragNode.fy = dragNode.y;" in body
+    assert "persistPositions();" in body
