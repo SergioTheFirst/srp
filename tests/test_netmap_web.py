@@ -266,3 +266,139 @@ def test_netmap_renders_all_glyph_types(client):
     types = {n["dev_type"] for n in g["nodes"]}
     for t in ("router", "switch", "ap", "agent", "printer", "server", "phone", "endpoint"):
         assert t in types, f"missing glyph type on the map: {t}"
+
+
+# --------------------------------------------------------------------------- #
+# Ф5: control panel (filters / layers / layout / side panel / export / time)
+# --------------------------------------------------------------------------- #
+def test_netmap_page_renders_control_panel(client):
+    """Ф5 panel scaffold is present: the panel container, filter sections, layers,
+    layout select, side panel, and export/save buttons."""
+    _ingest(client, "map-p1", _net_payload())
+    body = client.get("/netmap").text
+    assert 'id="ng-panel"' in body
+    # filter sections
+    assert 'id="ng-f-types"' in body and 'id="ng-f-status"' in body
+    assert 'id="ng-f-medium"' in body and 'id="ng-f-conf"' in body
+    assert 'id="ng-f-prov"' in body and 'id="ng-f-subnet"' in body
+    # presets + layers + layout + nav + view
+    assert 'id="ng-presets"' in body and 'id="ng-layers"' in body
+    assert 'id="ng-layout"' in body and 'id="ng-side"' in body
+    assert 'id="ng-save-view"' in body
+    assert 'id="ng-export-png"' in body and 'id="ng-export-csv"' in body and 'id="ng-export-json"' in body
+    # ADV navigation
+    assert 'id="ng-isolate"' in body and 'id="ng-path"' in body and 'id="ng-cause"' in body
+
+
+def test_netmap_presets_include_hide_unconfirmed(client):
+    """The 'hide unconfirmed' preset reinterprets 'hide ARP-only' for the unified
+    graph (ARP-only nodes are already excluded; net-only identity remains)."""
+    _ingest(client, "map-p2", _net_payload())
+    body = client.get("/netmap").text
+    assert "скрыть неподтверждённые" in body
+    assert "только инфра" in body
+    assert "сбросить фильтры" in body
+
+
+def test_netmap_time_machine_mount_and_snapshots_island(client):
+    """The snapshots list is rendered to the SSR page + a JSON island drives the
+    time-machine select. With no snapshots present the mount is absent (graceful)."""
+    from server import db
+
+    db.store_topology_snapshot({"nodes": [], "links": []}, received_at="2026-06-20T00:00:00+00:00")
+    _ingest(client, "map-p3", _net_payload())
+    body = client.get("/netmap").text
+    assert 'id="ng-timemachine"' in body  # mount present only when snapshots exist
+    assert 'id="netmap-snapshots"' in body  # JSON island
+    assert '"received_at"' in body  # a snapshot row serialized
+
+
+def test_netmap_time_machine_historical_frame_renders(client):
+    """?at=<id> renders the historical frame with the unified graph + a plaque and
+    the no-overlays note (live overlays are not computed for a past frame)."""
+    from server import db
+
+    graph = {
+        "nodes": [{"nid": "nd-r1", "dev_type": "router", "ip": "10.0.0.1"}],
+        "links": [],
+    }
+    db.store_topology_snapshot(graph, received_at="2026-06-20T00:00:00+00:00")
+    sid = db.list_topology_snapshots(limit=1)[0]["id"]
+    body = client.get(f"/netmap?at={sid}").text
+    assert 'id="netgraph-canvas"' in body
+    g = _embedded_graph(body)
+    assert g["totals"]["nodes"] == 1
+    # the page marks the frame historical (SSR note from the `history` context)
+    assert "исторический кадр" in body
+    assert "Live-оверлеи" in body  # the no-overlays note for a past frame
+
+
+def test_netmap_page_no_innerhtml_in_engine(client):
+    """Ф5 hardens the XSS boundary: the new sinks (side panel, edge tooltip, export,
+    history plaque) reach the DOM only via textContent -- no innerHTML /
+    insertAdjacentHTML / outerHTML in the engine script."""
+    _ingest(client, "map-p4", _net_payload())
+    body = client.get("/netmap").text
+    # the engine island is a single <script>...</script>; extract it loosely
+    assert ".innerHTML" not in body
+    assert "insertAdjacentHTML" not in body
+    assert "outerHTML" not in body
+
+
+def test_netmap_panel_inert_against_event_handler_payload(client):
+    """Hardens Ф4's XSS-pin across the new Ф5 sinks: an event-handler payload
+    (img onerror / svg onload / javascript:) reaches the page inert. The side panel,
+    edge tooltip and history plaque build DOM via textContent, the SSR table escapes
+    ``<``, and the canvas never injects HTML -- so the raw payload cannot execute."""
+    inv = healthy("inventory")
+    inv["hostname"] = "<img src=x onerror=alert(1)><svg onload=alert(2)>"
+    r = client.post(
+        "/api/v1/ingest",
+        json={
+            "device_id": "map-p5",
+            "agent_version": "0.1.0",
+            "msg_type": "inventory",
+            "payload": inv,
+        },
+    )
+    assert r.status_code == 200, r.text
+    _ingest(client, "map-p5", _net_payload())
+    body = client.get("/netmap").text
+    # no un-escaped executable tag reaches the DOM anywhere (panel + SSR + island)
+    assert "<img" not in body
+    assert "<svg onload" not in body
+    assert "<script>alert" not in body
+    assert "javascript:" not in body
+    # autoescape turned ``<`` into ``&lt;`` (passed through safely, not stripped)
+    assert "&lt;img" in body
+
+
+def test_netmap_path_engine_terminates(client):
+    """Regression pin for the Ф5 pathBfs infinite-loop (code-review CRITICAL): the BFS
+    back-pointer map MUST use a computed key (``prev[a] = null``), not an object literal
+    ``{ a: null }`` -- the latter keyed the literal string "a", so the root never got a
+    ``null`` sentinel and chain reconstruction never terminated (the tab froze). pytest
+    can't run JS, so we pin the corrected *source*: the literal-key form is absent and
+    the computed-key sentinel is present."""
+    _ingest(client, "map-path", _net_payload())
+    body = client.get("/netmap").text
+    assert "{ a: null }" not in body  # the buggy literal-key form is gone
+    assert "prev[a] = null" in body  # computed-key sentinel is present -> terminates
+    # also: ADV results are cached (recomputed only on state change), not per frame
+    assert "function recomputeNav()" in body
+    assert "navCache.iso = isolateSet()" in body
+
+
+def test_netmap_time_machine_plaque_on_ssr_route(client):
+    """Regression pin for the Ф5 history-plaque divergence (code-review HIGH): the SSR
+    ``/netmap?at=<id>`` route must carry ``history_at`` (via the shared
+    ``historical_graph_from_snapshot`` normaliser) so the in-canvas time-machine plaque
+    renders on the route users actually hit -- not only via the API."""
+    from server import db
+
+    graph = {"nodes": [{"nid": "nd-r1", "dev_type": "router", "ip": "10.0.0.1"}], "links": []}
+    db.store_topology_snapshot(graph, received_at="2026-06-20T00:00:00+00:00")
+    sid = db.list_topology_snapshots(limit=1)[0]["id"]
+    g = _embedded_graph(client.get(f"/netmap?at={sid}").text)
+    assert g["history_at"] == sid  # the marker the canvas keys the plaque off of
+    assert g["received_at"]

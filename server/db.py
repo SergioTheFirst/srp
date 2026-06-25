@@ -1121,6 +1121,62 @@ def get_latest_topology_snapshot() -> Optional[dict[str, Any]]:
     }
 
 
+def list_topology_snapshots(limit: int = 200) -> list[dict[str, Any]]:
+    """Topology snapshots (newest first) for the time-machine slider -- id/received_at
+    + counts only (the graph blob itself is heavy; ``get_topology_snapshot`` loads one).
+
+    *limit* is clamped 1..500 so a hostile/large value cannot force a giant read. Read
+    side for the Ф5 panel; parameterised (no interpolation)."""
+    capped = max(1, min(int(limit), 500))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, received_at, node_count, link_count FROM net_topology_snapshots "
+            "ORDER BY id DESC LIMIT ?",
+            (capped,),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "received_at": r["received_at"],
+            "node_count": r["node_count"],
+            "link_count": r["link_count"],
+        }
+        for r in rows
+    ]
+
+
+def get_topology_snapshot(snapshot_id: int) -> Optional[dict[str, Any]]:
+    """One historical topology snapshot by id (parsed graph), or None when absent.
+
+    The graph stored at topology-cycle time is a subset of the unified shape (nodes/
+    links only; the live overlays -- ICMP quality, subnet anomaly -- are derived per
+    request and were never persisted, so a historical frame carries none, by design).
+    Read side for the Ф5 time machine; bound integer, parameterised query."""
+    if snapshot_id is None:
+        return None
+    try:
+        sid = int(snapshot_id)
+    except (TypeError, ValueError):
+        return None
+    if sid < 1:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, received_at, node_count, link_count, graph "
+            "FROM net_topology_snapshots WHERE id=?",
+            (sid,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "received_at": row["received_at"],
+        "node_count": row["node_count"],
+        "link_count": row["link_count"],
+        "graph": json.loads(row["graph"]) if row["graph"] else {},
+    }
+
+
 def get_net_changes(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
     """Topology-change journal within the last *days* (newest first, capped).
 

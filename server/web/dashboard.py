@@ -18,6 +18,7 @@ from shared.schema import parse_version
 from server import db, org_directory
 from server.analytics.netmap import subnet_context_for, subnet_hint
 from server.netdisco.cache import GraphCache
+from server.netdisco.unified import historical_graph_from_snapshot
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 
@@ -385,19 +386,47 @@ def device(request: Request, device_id: str):
 
 
 @router.get("/netmap", response_class=HTMLResponse)
-def network_map(request: Request):
+def network_map(request: Request, at: Optional[str] = None):
     """Network map page (SSR + the unified canvas engine). Ф4: ``/netmap`` now serves
     the ONE unified graph (Ф2 assembler via the Ф3 GraphCache) -- real L2/L3 links +
     agent-uplink + ICMP quality + subnet/anomaly overlays -- through ``_netgraph``.
     The old ephemeral cluster model (``build_netmap``) is retired here; the unified
     superset is the single contract for the canvas and the API. Inventory rows link to
     the canonical card (``card_url``, agent>printer>net-infra). All agent/SNMP strings
-    reach the DOM only via ``| tojson`` (autoescape on) / ``textContent``."""
-    graph = _unified_map_graph(request)
+    reach the DOM only via ``| tojson`` (autoescape on) / ``textContent``.
+
+    Ф5: ``?at=<snapshot_id>`` renders a HISTORICAL frame instead -- read straight from
+    the snapshot store (never the live cache), with a plaque identifying it as a past
+    frame. The slider list (``snapshots``) is always passed so the time-machine panel
+    works on the live page too."""
+    history = None
+    if at is not None and at != "":
+        try:
+            sid = int(at)
+        except (TypeError, ValueError):
+            sid = -1
+        snap = db.get_topology_snapshot(sid)
+        if snap is not None:
+            # ONE source of truth: the same normaliser the API uses, so the canvas
+            # ``history_at`` marker (=> the time-machine plaque) renders on the SSR
+            # route too -- the two paths can never drift.
+            graph = historical_graph_from_snapshot(snap)
+            history = {
+                "at": snap.get("id"),
+                "received_at": snap.get("received_at"),
+                "label": "исторический кадр",
+            }
+    if history is None:
+        graph = _unified_map_graph(request)
     return _TEMPLATES.TemplateResponse(
         request,
         "netmap.html",
-        {"graph": graph, "changes": db.get_net_changes(days=7)},
+        {
+            "graph": graph,
+            "changes": db.get_net_changes(days=7),
+            "snapshots": db.list_topology_snapshots(limit=200),
+            "history": history,
+        },
     )
 
 
