@@ -100,11 +100,44 @@ def netmap(request: Request) -> dict:
 
 
 @router.get("/network-map/graph")
-def network_map_graph(request: Request) -> dict:
+def network_map_graph(request: Request, at: Optional[str] = None) -> dict:
     """Ф3: the ONE unified network-map graph (netdisco backbone + Phase-1 identity FKs
     + netmap overlays), served from a short-TTL cache so a polling dashboard does not
-    re-query the DB or re-run the assembler on every request."""
+    re-query the DB or re-run the assembler on every request.
+
+    Ф5: ``?at=<snapshot_id>`` returns the HISTORICAL frame stored at that topology
+    cycle instead. It bypasses the live cache (a historical frame must never poison
+    it) and carries no live overlays (ICMP quality / subnet anomaly are derived per
+    request and were never persisted -- D5: no false confidence in a stale frame)."""
+    if at is not None and at != "":
+        return _historical_map_graph(at)
     return _network_map_graph(request)
+
+
+def _historical_map_graph(at: str) -> dict:
+    """Ф5 time machine: one stored snapshot normalised into the unified shape (via the
+    shared ``historical_graph_from_snapshot`` assembler helper, so the API and the SSR
+    route stay byte-identical). It bypasses the live GraphCache (a historical frame must
+    never poison it) and carries no live overlays (D5)."""
+    try:
+        sid = int(at)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="snapshot not found") from exc
+    snap = db.get_topology_snapshot(sid)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="snapshot not found")
+    from server.netdisco.unified import historical_graph_from_snapshot
+
+    return historical_graph_from_snapshot(snap)
+
+
+@router.get("/network-map/snapshots")
+def network_map_snapshots(limit: int = 200) -> dict:
+    """Ф5 time machine: list of topology snapshots (newest first) for the slider.
+
+    ``limit`` is clamped inside the reader (1..500). Ids/received_at/counts only -- the
+    graph blob is fetched on demand via ``/network-map/graph?at=<id>``."""
+    return {"snapshots": db.list_topology_snapshots(limit=limit)}
 
 
 def _network_map_graph(request: Request) -> dict:

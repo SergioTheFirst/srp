@@ -23,3 +23,4 @@
 - [Ф1: MAC-FK хребет идентичности](netmap-identity-spine.md) — net_devices +device_id/printer_id soft-FK; link_identities; cleanup обнуляет FK, узел остаётся
 - [Ф2: единый ассемблер карты](netmap-unified-assembler.md) — netdisco/unified.build_network_map: чистый суперсет-граф, дедуп по device_nid, nd-unknown не размещается
 - [Ф3: единый API карты](netmap-unified-api.md) — /api/v1/network-map/graph через GraphCache(loader→ассемблер); /netmap·/topology/graph = deprecated-алиасы; invalidate после poll; cache в create_app
+- [Ф5: панель управления карты](netmap-control-panel.md) — фильтры/слои/раскладки/боковая-панель/сохранить-вид/экспорт + ADVANCED (изоляция/путь/первопричина/машина-времени ?at=<id>); всё клиентское, исторический кадр минует GraphCache

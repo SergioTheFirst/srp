@@ -31,6 +31,38 @@ _Node = dict[str, Any]
 _Index = dict[str, str]
 
 
+def historical_graph_from_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
+    """Ф5 time machine: normalise ONE stored topology snapshot into the unified shape.
+
+    The stored graph is a subset (nodes/links only); the live overlays -- ICMP quality,
+    subnet anomaly, identity FKs -- are derived per request and were never persisted, so
+    a historical frame carries none (D5: no false confidence in a stale frame). We lift
+    nodes/links verbatim and add empty overlays + a totals block keyed like
+    ``build_network_map``'s, plus ``history_at``/``received_at`` so the single canvas
+    (Ф4) renders a past frame with the same contract and shows the time-machine plaque.
+
+    ONE source of truth for this shape -- the API and the SSR ``/netmap?at=`` route both
+    call it, so the plaque marker can never drift between them."""
+    raw = snap.get("graph") or {}
+    nodes = list(raw.get("nodes") or [])
+    links = list(raw.get("links") or [])
+    return {
+        "nodes": nodes,
+        "links": links,
+        "subnets": [],
+        "totals": {
+            "nodes": len(nodes),
+            "links": len(links),
+            "agents": 0,
+            "printers": 0,
+            "anomalies": 0,
+            "wireless_links": 0,
+        },
+        "history_at": snap.get("id"),
+        "received_at": snap.get("received_at"),
+    }
+
+
 def _card_url(device_id: Optional[str], printer_id: Optional[str], nid: str) -> Optional[str]:
     """Canonical card per Ф2 priority: agent > printer > net-infra (Ф6 adds redirects)."""
     if device_id:

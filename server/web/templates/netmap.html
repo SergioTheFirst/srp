@@ -41,12 +41,21 @@ table.net-inv th { position: static; }
          placeholder="фильтр: имя / IP / MAC / тип…" autocomplete="off">
   <button class="net-poll-btn" id="net-poll-btn" onclick="pollNetworkMap()">⟳ Собрать карту сейчас</button>
   <span id="net-poll-result" class="net-poll-result"></span>
+  {% if snapshots %}
+  <span id="ng-timemachine" class="net-poll-result"></span>
+  {% endif %}
   <div class="cards" style="margin-left:auto">
     <div class="stat"><div class="n">{{ graph.totals.nodes }}</div><div class="l">узлов</div></div>
     <div class="stat"><div class="n">{{ graph.totals.links }}</div><div class="l">связей</div></div>
     <div class="stat"><div class="n {{ 'bad' if graph.totals.anomalies }}">{{ graph.totals.anomalies }}</div><div class="l">аномалий</div></div>
   </div>
 </div>
+{% if history %}
+<p class="muted small" style="margin-bottom:8px">
+  Показан исторический кадр топологии ({{ history.received_at[:16]|replace('T',' ') if history.received_at else '—' }}).
+  Live-оверлеи (качество, аномалии) для него не считаются — вернитесь к живой карте для актуальных данных.
+</p>
+{% endif %}
 
 {# Ф4: единый canvas-движок (один граф — реальные L2/L3 + agent-uplink + качество/кластеры/аномалии). #}
 {% include "_netgraph.html" %}
@@ -87,6 +96,15 @@ table.net-inv th { position: static; }
 {% else %}
 <p class="muted small">За последние 7 дней изменений топологии не зафиксировано.</p>
 {% endif %}
+
+<script id="netmap-snapshots" type="application/json">{{ snapshots | tojson }}</script>
+<script>
+/* Список снимков топологии для машины времени (Ф5). |tojson (autoescape on). */
+window.__NETMAP_SNAPSHOTS = (function () {
+  try { return JSON.parse(document.getElementById("netmap-snapshots").textContent) || []; }
+  catch (e) { return []; }
+})();
+</script>
 
 <script>
 /* Кнопка «собрать карту сейчас»: форсирует один цикл сбора топологии на сервере

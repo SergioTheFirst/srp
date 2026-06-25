@@ -1,16 +1,18 @@
-{# Ф4: the ONE network-map canvas engine (shared partial).
+{# Ф4+Ф5: the ONE network-map canvas engine (shared partial).
    Consumes the unified superset graph ``graph = {nodes, links, subnets, totals}``
    (Ф2 assembler, served via the Ф3 GraphCache). Renders every device type as a
    glyph, real L2/L3 + agent-uplink edges, wireless/quality/anomaly overlays from
-   netmap, plus zoom/pan/pin/search/theme/textContent-tooltip. Vanilla canvas, zero
-   deps. Currently included by ``/netmap``; ``/topology`` (Ф10) will adopt it when
-   the old page is dismantled.
+   netmap, plus zoom/pan/pin/search/theme/textContent-tooltip. Ф5 adds the operator
+   control panel: filters, layer toggles, layouts (+ persisted positions), a side
+   panel on click, save-view, export, and ADVANCED navigation (isolate / path /
+   root-cause / time machine). Vanilla canvas + DOM, zero deps.
 
-   XSS: every agent/SNMP string reaches the DOM only via ``textContent``; the graph
-   is embedded through ``| tojson`` (autoescape on -> ``<``/``>``/``&`` escaped, a
-   hostile hostname cannot terminate the JSON <script> island). Click-through uses
-   the assembler-provided ``card_url`` (agent>printer>net-infra), never a raw
-   attacker-controlled href. #}
+   XSS: every agent/SNMP string reaches the DOM only via ``textContent`` (the side
+   panel, edge tooltip, history plaque, export); the graph is embedded through
+   ``| tojson`` (autoescape on -> ``<``/``>``/``&`` escaped, a hostile hostname
+   cannot terminate the JSON <script> island). Click-through uses the
+   assembler-provided ``card_url`` (agent>printer>net-infra), never a raw
+   attacker-controlled href. CSV export neutralises formula injection. #}
 <style>
 .netgraph-stage {
   position: relative; margin-bottom: 20px; overflow: hidden;
@@ -54,40 +56,180 @@
 .netgraph-tip .t-good  { color: var(--good); }
 .netgraph-tip .t-warn  { color: var(--warn); }
 .netgraph-tip .t-bad   { color: var(--bad); }
+
+/* ── Ф5 control panel ── */
+.net-controls { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; }
+.net-controls > .net-canvas-wrap { flex: 1; min-width: 320px; }
+.ng-panel {
+  width: 230px; flex-shrink: 0;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 10px 12px;
+  font: 500 12px/1.5 var(--mono); color: var(--text);
+  max-height: 580px; overflow-y: auto;
+}
+.ng-panel.collapsed { max-height: 38px; overflow: hidden; }
+.ng-panel h4 {
+  margin: 0 0 6px; font-size: 11px; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--muted); cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+}
+.ng-panel h4 .chev { transition: transform .15s; }
+.ng-panel.collapsed h4 .chev { transform: rotate(-90deg); }
+.ng-section { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.ng-section:last-child { border-bottom: none; margin-bottom: 0; }
+.ng-section > .ng-stitle { font-weight: 700; font-size: 11.5px; color: var(--accent); margin-bottom: 4px; }
+.ng-checks { display: flex; flex-wrap: wrap; gap: 3px 10px; }
+.ng-checks label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11.5px; }
+.ng-checks input { accent-color: var(--accent); }
+.ng-presets { display: flex; flex-wrap: wrap; gap: 5px; }
+.ng-presets button, .ng-actions button, .ng-actions select {
+  font: 600 11px/1 var(--mono); padding: 5px 9px; border-radius: var(--r-btn);
+  background: var(--bg, var(--panel)); border: 1px solid var(--line-2); color: var(--text); cursor: pointer;
+}
+.ng-presets button:hover, .ng-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.ng-actions { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.ng-actions select { padding: 4px 6px; }
+.ng-btn-primary {
+  background: var(--accent-dim) !important; border-color: rgba(14,165,233,.45) !important; color: var(--accent) !important;
+}
+.ng-info { font: 500 11px/1.4 var(--mono); color: var(--muted); margin-top: 4px; }
+.ng-info.good { color: var(--good); } .ng-info.bad { color: var(--bad); } .ng-info.warn { color: var(--warn); }
+
+/* ── Ф5 side panel (facts on click) ── */
+.ng-side {
+  width: 230px; flex-shrink: 0;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
+  padding: 12px; font: 500 12.5px/1.55 var(--mono); color: var(--text);
+  align-self: flex-start;
+}
+.ng-side[hidden] { display: none; }
+.ng-side .ng-side-head { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.ng-side .ng-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.ng-side .ng-row .k { color: var(--muted); }
+.ng-side .ng-card-btn {
+  display: inline-block; margin-top: 8px; text-decoration: none;
+  font: 600 12px/1 var(--mono); padding: 7px 12px; border-radius: var(--r-btn);
+  background: var(--accent-dim); border: 1px solid rgba(14,165,233,.45); color: var(--accent);
+}
+.ng-side .ng-actions-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+.ng-side .ng-actions-row button {
+  font: 600 11px/1 var(--mono); padding: 5px 8px; border-radius: var(--r-btn);
+  background: var(--panel); border: 1px solid var(--line-2); color: var(--text); cursor: pointer;
+}
+.ng-side .ng-actions-row button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Ф5 history plaque (time machine) ── */
+.ng-history-plaque {
+  position: absolute; top: 10px; left: 12px; z-index: 6;
+  background: var(--warn); color: #1a1300; border-radius: var(--r-card);
+  padding: 6px 10px; font: 700 12px/1.2 var(--mono);
+  box-shadow: 0 4px 14px rgba(0,0,0,.3); max-width: 70%;
+}
+.ng-history-plaque a {
+  color: #1a1300; text-decoration: underline; margin-left: 8px; cursor: pointer;
+}
 </style>
 
 {% if graph.nodes %}
-<div class="netgraph-stage" id="netgraph-stage">
-  <canvas id="netgraph-canvas" role="img"
-          aria-label="Интерактивная карта сети: маршрутизаторы, коммутаторы, точки доступа, агенты, принтеры и устройства, связанные настоящими L2/L3-линками и звёздными связями до шлюза; подробности в таблице ниже"></canvas>
-  <div class="netgraph-legend">
-    <span class="ng-key"><i class="ng-dia"></i>маршрутизатор</span>
-    <span class="ng-key"><i class="ng-sq"></i>коммутатор</span>
-    <span class="ng-key"><i class="ng-tri"></i>точка доступа</span>
-    <span class="ng-key"><i class="ng-ci"></i>агент</span>
-    <span class="ng-key"><i class="ng-sq" style="background:var(--na)"></i>принтер</span>
-    <span class="ng-key"><i class="ng-dot"></i>устройство</span>
-    <span class="ng-key"><i class="ng-wifi"></i>беспроводная связь</span>
+<div class="net-controls" id="net-controls">
+  <div class="net-canvas-wrap">
+    <div class="netgraph-stage" id="netgraph-stage">
+      <canvas id="netgraph-canvas" role="img"
+              aria-label="Интерактивная карта сети: маршрутизаторы, коммутаторы, точки доступа, агенты, принтеры и устройства, связанные настоящими L2/L3-линками и звёздными связями до шлюза; подробности в таблице ниже"></canvas>
+      <div class="netgraph-legend">
+        <span class="ng-key"><i class="ng-dia"></i>маршрутизатор</span>
+        <span class="ng-key"><i class="ng-sq"></i>коммутатор</span>
+        <span class="ng-key"><i class="ng-tri"></i>точка доступа</span>
+        <span class="ng-key"><i class="ng-ci"></i>агент</span>
+        <span class="ng-key"><i class="ng-sq" style="background:var(--na)"></i>принтер</span>
+        <span class="ng-key"><i class="ng-dot"></i>устройство</span>
+        <span class="ng-key"><i class="ng-wifi"></i>беспроводная связь</span>
+      </div>
+      <div class="netgraph-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по узлу — детали и карточка</div>
+    </div>
   </div>
-  <div class="netgraph-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по узлу — карточка</div>
+  <aside class="ng-panel" id="ng-panel">
+    <h4 onclick="document.getElementById('ng-panel').classList.toggle('collapsed')">Панель карты <span class="chev">▾</span></h4>
+    <div class="ng-section">
+      <div class="ng-stitle">Типы</div>
+      <div class="ng-checks" id="ng-f-types"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Статус</div>
+      <div class="ng-checks" id="ng-f-status"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Среда / уверенность</div>
+      <div class="ng-checks" id="ng-f-medium"></div>
+      <div class="ng-checks" id="ng-f-conf" style="margin-top:4px"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Источник</div>
+      <div class="ng-checks" id="ng-f-prov"></div>
+      <label style="display:flex;gap:4px;align-items:center;margin-top:4px;cursor:pointer">
+        <input type="checkbox" id="ng-f-confirmed"> только подтверждённые (агент/принтер/шлюз)
+      </label>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Подсеть</div>
+      <select id="ng-f-subnet" class="ng-presets" style="padding:4px 6px;background:var(--panel);border:1px solid var(--line-2);color:var(--text);border-radius:var(--r-btn);font:500 12px/1 var(--mono)"></select>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Пресеты</div>
+      <div class="ng-presets" id="ng-presets"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Слои</div>
+      <div class="ng-checks" id="ng-layers"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Раскладка</div>
+      <select id="ng-layout" class="ng-presets" style="padding:4px 6px;background:var(--panel);border:1px solid var(--line-2);color:var(--text);border-radius:var(--r-btn);font:500 12px/1 var(--mono)">
+        <option value="free">свободно</option>
+        <option value="subnet">по подсети</option>
+        <option value="type">по типу</option>
+      </select>
+      <div class="ng-actions" style="margin-top:5px">
+        <button id="ng-pin">📌 закрепить всё</button>
+        <button id="ng-reset-layout">↺ сброс</button>
+      </div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Навигация (ADV)</div>
+      <div class="ng-actions">
+        <button id="ng-isolate">изоляция N-hop</button>
+        <select id="ng-isolate-n" style="padding:4px 4px"><option>1</option><option selected>2</option><option>3</option></select>
+        <button id="ng-path">режим: путь</button>
+        <button id="ng-cause">🔎 первопричина</button>
+      </div>
+      <div class="ng-info" id="ng-nav-info"></div>
+    </div>
+    <div class="ng-section">
+      <div class="ng-stitle">Вид</div>
+      <div class="ng-actions">
+        <button id="ng-save-view" class="ng-btn-primary">💾 сохранить вид</button>
+        <button id="ng-export-png">PNG</button>
+        <button id="ng-export-csv">CSV</button>
+        <button id="ng-export-json">JSON</button>
+      </div>
+    </div>
+  </aside>
+  <aside class="ng-side" id="ng-side" hidden></aside>
 </div>
+
+<div class="netgraph-tip" id="netgraph-tip" hidden></div>
 {% else %}
 <p class="muted">Сетевые данные ещё не собраны — карта появится после первого цикла обнаружения (инвентарь/линки/качество). Можно собрать её прямо сейчас кнопкой «⟳ Собрать карту сейчас» вверху.</p>
 {% endif %}
 
-<div class="netgraph-tip" id="netgraph-tip" hidden></div>
 <script id="netgraph-data" type="application/json">{{ graph | tojson }}</script>
 
 <script>
 /* ─── Единый движок карты сети: force-граф на чистом canvas, ноль зависимостей ──
-   Один движок для «Карты сети» (Ф4). Узлы — глифы по типу (router=ромб,
-   switch=квадрат, ap=треугольник, agent=круг цвета здоровья, принтер=квадрат,
-   server=шестиугольник, phone=малый треугольник, прочее=точка); цвет по статусу
-   достижимости, для агента — по потерям до шлюза. Рёбра — настоящие L2/L3 И
-   звёздные agent-uplink; цвет по уверенности ИЛИ по качеству (потерям), пунктир
-   для wireless/ambiguous. Кольца подсетей, пульс «пакета» на измеренных линках,
-   кольца-аномалии на шлюзах деградировавших подсетей. Темы из CSS-переменных;
-   reduced-motion рисует один кадр. Клик — каноническая карточка (card_url). */
+   Ф4: один движок для «Карты сети». Ф5 добавляет операторскую панель: фильтры,
+   слои, раскладки (+ персист позиций), боковую панель, сохранить-вид, экспорт,
+   и ADVANCED-навигацию (изоляция/путь/первопричина/машина времени).
+   XSS: ВСЕ строки (имя/IP/MAC/порт/...) попадают в DOM только через textContent;
+   граф — через |tojson (autoescape). Никакого innerHTML. */
 (function () {
   "use strict";
   var cv = document.getElementById("netgraph-canvas");
@@ -96,6 +238,7 @@
   var G;
   try { G = JSON.parse(dataEl.textContent); } catch (e) { return; }
   if (!G || !G.nodes || !G.nodes.length) return;
+  var IS_HISTORY = !!G.history_at;
 
   var stage = document.getElementById("netgraph-stage");
   var tip = document.getElementById("netgraph-tip");
@@ -138,9 +281,7 @@
   /* — качество agent-uplink: индекс nid-агента -> {loss, lat} — */
   var qualityByNode = {};
   (G.links || []).forEach(function (l) {
-    if (l && l.link_kind === "agent-uplink" && l.quality) {
-      qualityByNode[l.a] = l.quality;
-    }
+    if (l && l.link_kind === "agent-uplink" && l.quality) qualityByNode[l.a] = l.quality;
   });
   /* — аномальные подсети (для колец тревоги на их шлюзах) — */
   var anomalousSubnets = {};
@@ -158,7 +299,6 @@
   var byId = {};
   var nodes = G.nodes.map(function (n) {
     var t = n.dev_type || "unknown";
-    /* агент с измеренным линком — цвет по здоровью; иначе по статусу достижимости */
     var q = n.device_id ? qualityByNode[n.nid] : null;
     var cls = q ? lossClass(q.loss_pct) : statusColor(n.status);
     var node = {
@@ -186,12 +326,79 @@
       });
     }
   });
+  /* adjacency for ADV navigation (BFS) */
+  var adj = {};
+  nodes.forEach(function (n) { adj[n.nid] = []; });
+  links.forEach(function (L) {
+    adj[L.a.nid].push(L.b.nid); adj[L.b.nid].push(L.a.nid);
+  });
 
-  /* — физика: пружины линков, отталкивание, гравитация к центру — */
+  /* ═════════ Ф5 STATE ═════════ */
+  var TYPES = ["router","switch","ap","agent","printer","server","phone","endpoint","unknown"];
+  var STATUS = ["up","down","unreachable","missing"];
+  var MED = ["wired","wireless","l3"];
+  var CONF = ["high","medium","low"];
+  var PROV = ["agent","printer","gateway","net"];
+  var state = {
+    types: {}, status: {}, medium: {}, conf: {}, prov: {},
+    confirmedOnly: false, subnet: "",
+    layers: { l2: true, l3: true, uplink: true, wireless: true, quality: true, groups: true, ports: true },
+    layout: "free", mode: null,           /* null | "path" | "isolate" | "cause" */
+    pathSel: [], isolateRoot: null, isolateN: 2
+  };
+  TYPES.forEach(function (t) { state.types[t] = true; });
+  STATUS.forEach(function (s) { state.status[s] = true; });
+  MED.forEach(function (m) { state.medium[m] = true; });
+  CONF.forEach(function (c) { state.conf[c] = true; });
+  PROV.forEach(function (p) { state.prov[p] = true; });
+
+  var FILTER = "", hover = null, hoverEdge = null, selected = null;
+
+  /* — узел прошёл фильтры (текстовый поиск + чекбоксы) — */
+  function nodeOk(n) {
+    if (FILTER && n.filter.indexOf(FILTER) === -1) return false;
+    if (!state.types[n.type]) return false;
+    if (n.status && !state.status[n.status]) return false;
+    if (n.subnet && state.subnet && n.subnet !== state.subnet) return false;
+    if (state.confirmedOnly) {
+      var pv = n.provenance || [];
+      var ok = pv.indexOf("agent") !== -1 || pv.indexOf("printer") !== -1 || pv.indexOf("gateway") !== -1;
+      if (!ok) return false;
+    }
+    if (n.provenance && n.provenance.length) {
+      var anyProv = n.provenance.some(function (p) { return state.prov[p]; });
+      if (!anyProv) return false;
+    } else if (!state.prov.net) return false;
+    return true;
+  }
+  /* — ребро прошло фильтры среда/уверенность + слои — */
+  function linkMedium(L) { return L.medium || "wired"; }
+  function linkOk(L) {
+    if (!state.medium[linkMedium(L)]) return false;
+    var c = L.conf || "low";
+    if (!state.conf[c]) return false;
+    /* слои: по роду ребра + среда */
+    if (L.kind === "l2-edge" || L.kind === "l2-trunk") { if (!state.layers.l2) return false; }
+    else if (L.kind === "l3" || (L.kind || "").indexOf("l3") !== -1) { if (!state.layers.l3) return false; }
+    else if (L.kind === "agent-uplink") { if (!state.layers.uplink) return false; }
+    if (linkMedium(L) === "wireless" && !state.layers.wireless) return false;
+    return true;
+  }
+
+  /* ═════════ физика + раскладки ═════════ */
   var W = Math.max(stage.clientWidth || 900, 320), H = 560;
   var alpha = 1;
   function tick() {
     var i, j, n, m, dx, dy, d2, d, f, L;
+    /* subnet/type layout: лёгкое притяжение к целевой точке */
+    if (state.layout !== "free") {
+      var layoutTargets = computeLayoutTargets();
+      for (i = 0; i < nodes.length; i++) {
+        n = nodes[i];
+        var tgt = layoutTargets[n.nid];
+        if (tgt) { n.vx += (tgt.x - n.x) * 0.02 * alpha; n.vy += (tgt.y - n.y) * 0.02 * alpha; }
+      }
+    }
     for (i = 0; i < links.length; i++) {
       L = links[i];
       var rest = L.kind === "agent-uplink" ? 96 : 120;
@@ -227,17 +434,40 @@
     }
     alpha *= 0.985;
   }
+  /* целевые точки для раскладки subnet (вертикальные колонки) / type (ряды) */
+  function computeLayoutTargets() {
+    var out = {};
+    if (state.layout === "subnet") {
+      var subs = {}; nodes.forEach(function (n) { if (n.subnet) (subs[n.subnet] = subs[n.subnet] || []).push(n); });
+      var subList = Object.keys(subs).sort();
+      subList.forEach(function (s, ci) {
+        subs[s].forEach(function (n, ri) {
+          out[n.nid] = { x: (ci - subList.length / 2) * 200, y: (ri - subs[s].length / 2) * 60 };
+        });
+      });
+    } else if (state.layout === "type") {
+      TYPES.forEach(function (t, ri) {
+        var grp = nodes.filter(function (n) { return n.type === t; });
+        grp.forEach(function (n, ci) {
+          out[n.nid] = { x: (ci - grp.length / 2) * 80, y: (ri - TYPES.length / 2) * 90 };
+        });
+      });
+    }
+    return out;
+  }
   var preMax = nodes.length > 350 ? 140 : 280;
   for (var pre = 0; pre < preMax && alpha > 0.02; pre++) tick();
 
-  /* — вьюпорт — */
+  /* ═════════ вьюпорт ═════════ */
   var view = { x: 0, y: 0, k: 1 };
   function fit() {
-    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, any = false;
     nodes.forEach(function (n) {
+      if (!nodeOk(n)) return; any = true;
       if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
       if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
     });
+    if (!any) { minX = -300; maxX = 300; minY = -200; maxY = 200; }
     var bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1);
     var k = Math.min((W - 110) / bw, (H - 110) / bh);
     view.k = Math.max(0.4, Math.min(1.6, k));
@@ -251,19 +481,16 @@
     invalidate();
   }
 
-  var FILTER = "", hover = null;
-  function matches(n) { return !FILTER || n.filter.indexOf(FILTER) !== -1; }
-
   /* — кольца подсетей: центроид + охватывающая окружность по позициям узлов — */
   function drawSubnetRings() {
-    if (!G.subnets || !G.subnets.length || nodes.length > 400) return;
+    if (!state.layers.groups || !G.subnets || !G.subnets.length || nodes.length > 400) return;
     var groups = {};
     nodes.forEach(function (n) {
-      if (n.subnet) (groups[n.subnet] = groups[n.subnet] || []).push(n);
+      if (nodeOk(n) && n.subnet) (groups[n.subnet] = groups[n.subnet] || []).push(n);
     });
     Object.keys(groups).forEach(function (sub) {
       var g = groups[sub];
-      if (g.length < 2) return;  /* одиночный узел — без кольца */
+      if (g.length < 2) return;
       var cx = 0, cy = 0;
       g.forEach(function (n) { cx += n.x; cy += n.y; });
       cx /= g.length; cy /= g.length;
@@ -283,35 +510,34 @@
     });
   }
 
-  function drawNode(n, dimN) {
+  function drawNode(n, dimN, highlight) {
     var col = C[n.cls];
-    ctx.globalAlpha = dimN ? 0.08 : 1;
+    var dimmed = dimN;
+    ctx.globalAlpha = dimmed ? 0.08 : 1;
     ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
-    ctx.shadowColor = col; ctx.shadowBlur = (hover === n ? 16 : 6) * view.k;
+    ctx.shadowColor = col; ctx.shadowBlur = (highlight ? 18 : hover === n ? 16 : 6) * view.k;
     var r = n.r, t = n.type;
 
-    /* аномалия подсети: расходящиеся кольца тревоги на её шлюзе/роутере */
     if (n.subnet && anomalousSubnets[n.subnet] === 1 &&
-        (t === "router" || n.provenance.indexOf("gateway") !== -1) && !reduceMotion && !dimN) {
+        (t === "router" || n.provenance.indexOf("gateway") !== -1) && !reduceMotion && !dimmed) {
       for (var k2 = 0; k2 < 2; k2++) {
         var ph = (((window.__ngNow || 0) / 2800) + k2 / 2) % 1;
         ctx.globalAlpha = (1 - ph) * 0.45;
         ctx.strokeStyle = C.bad; ctx.lineWidth = 1.6;
         ctx.beginPath(); ctx.arc(n.x, n.y, r + 4 + ph * 46, 0, 6.2832); ctx.stroke();
       }
-      ctx.globalAlpha = dimN ? 0.08 : 1; ctx.strokeStyle = col; ctx.fillStyle = col;
+      ctx.globalAlpha = dimmed ? 0.08 : 1; ctx.strokeStyle = col; ctx.fillStyle = col;
     }
 
     if (t === "router") {
       ctx.save(); ctx.translate(n.x, n.y); ctx.rotate(Math.PI / 4);
-      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fillRect(-r, -r, r * 2, r * 2);
-      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.strokeRect(-r, -r, r * 2, r * 2);
+      ctx.globalAlpha = dimmed ? 0.06 : 0.18; ctx.fillRect(-r, -r, r * 2, r * 2);
+      ctx.globalAlpha = dimmed ? 0.08 : 0.95; ctx.strokeRect(-r, -r, r * 2, r * 2);
       ctx.restore();
     } else if (t === "switch" || t === "printer") {
-      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
-      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.strokeRect(n.x - r, n.y - r, r * 2, r * 2);
+      ctx.globalAlpha = dimmed ? 0.06 : 0.18; ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
+      ctx.globalAlpha = dimmed ? 0.08 : 0.95; ctx.strokeRect(n.x - r, n.y - r, r * 2, r * 2);
     } else if (t === "server") {
-      /* шестиугольник — отличить от switch/printer */
       ctx.beginPath();
       for (var s = 0; s < 6; s++) {
         var a6 = Math.PI / 3 * s - Math.PI / 6;
@@ -319,33 +545,111 @@
         if (s === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
       }
       ctx.closePath();
-      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fill();
-      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+      ctx.globalAlpha = dimmed ? 0.06 : 0.18; ctx.fill();
+      ctx.globalAlpha = dimmed ? 0.08 : 0.95; ctx.stroke();
     } else if (t === "ap" || t === "phone") {
       ctx.beginPath();
       ctx.moveTo(n.x, n.y - r); ctx.lineTo(n.x + r, n.y + r); ctx.lineTo(n.x - r, n.y + r);
       ctx.closePath();
-      ctx.globalAlpha = dimN ? 0.06 : 0.18; ctx.fill();
-      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+      ctx.globalAlpha = dimmed ? 0.06 : 0.18; ctx.fill();
+      ctx.globalAlpha = dimmed ? 0.08 : 0.95; ctx.stroke();
     } else if (t === "agent") {
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 6.2832);
-      ctx.globalAlpha = dimN ? 0.06 : 0.16; ctx.fill();
-      ctx.globalAlpha = dimN ? 0.08 : 0.95; ctx.stroke();
+      ctx.globalAlpha = dimmed ? 0.06 : 0.16; ctx.fill();
+      ctx.globalAlpha = dimmed ? 0.08 : 0.95; ctx.stroke();
     } else {
-      ctx.globalAlpha = dimN ? 0.05 : 0.8;
+      ctx.globalAlpha = dimmed ? 0.05 : 0.8;
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 6.2832); ctx.fill();
     }
     ctx.shadowBlur = 0;
 
-    /* подпись для крупных узлов */
+    if (selected === n) {
+      ctx.globalAlpha = 0.95; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.8;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r + 5, 0, 6.2832); ctx.stroke();
+    }
     if (view.k > 0.6 && n.r >= 8) {
       var name = t === "printer" ? "🖨 " + (n.hostname || n.ip || n.nid || "")
                 : (n.hostname || n.ip || n.nid || "");
       if (name.length > 18) name = name.slice(0, 17) + "…";
-      ctx.globalAlpha = dimN ? 0.06 : 0.85;
+      ctx.globalAlpha = dimmed ? 0.06 : 0.85;
       ctx.fillStyle = C.text; ctx.font = "500 10px " + C.mono; ctx.textAlign = "center";
       ctx.fillText(name, n.x, n.y + n.r + 13);
     }
+  }
+
+  /* — N-hop-окрестность корня изоляции — */
+  function isolateSet() {
+    if (state.mode !== "isolate" || !state.isolateRoot) return null;
+    var root = state.isolateRoot, N = state.isolateN, seen = {};
+    seen[root] = 0; var frontier = [root];
+    for (var hop = 0; hop < N; hop++) {
+      var next = [];
+      for (var i = 0; i < frontier.length; i++) {
+        var nbrs = adj[frontier[i]] || [];
+        for (var j = 0; j < nbrs.length; j++) {
+          if (!(nbrs[j] in seen)) { seen[nbrs[j]] = hop + 1; next.push(nbrs[j]); }
+        }
+      }
+      frontier = next;
+    }
+    return seen;
+  }
+  /* — кратчайший путь между двумя nid (BFS) — */
+  function pathBfs(a, b) {
+    if (a === b) return [a];
+    var prev = {}; prev[a] = null;  /* computed key: root's back-pointer sentinel */
+    var queue = [a];
+    while (queue.length) {
+      var cur = queue.shift();
+      if (cur === b) {
+        var chain = [], step = b;
+        while (step != null) { chain.push(step); step = prev[step]; }  /* null|undefined ends */
+        return chain.reverse();
+      }
+      var nbrs = adj[cur] || [];
+      for (var i = 0; i < nbrs.length; i++) if (!(nbrs[i] in prev)) { prev[nbrs[i]] = cur; queue.push(nbrs[i]); }
+    }
+    return null;
+  }
+  function onPath(a, b) {
+    var p = pathBfs(a, b); if (!p) return {};
+    var s = {}; p.forEach(function (n) { s[n] = 1; }); return s;
+  }
+  /* — первопричина: down-узлы; roots = router/agent/gateway; causes касаются up-reachable — */
+  function causeResult() {
+    var downs = nodes.filter(function (n) { return n.status === "down" || n.status === "unreachable"; });
+    if (!downs.length) return null;
+    var downSet = {}; downs.forEach(function (n) { downSet[n.nid] = 1; });
+    var roots = nodes.filter(function (n) {
+      return n.type === "router" || n.type === "agent" || (n.provenance.indexOf("gateway") !== -1);
+    }).map(function (n) { return n.nid; });
+    /* up-reachable: BFS от roots, не входя в downSet */
+    var reachable = {}, q = [];
+    roots.forEach(function (r) { if (!(r in downSet) && !(r in reachable)) { reachable[r] = 1; q.push(r); } });
+    while (q.length) {
+      var cur = q.shift(), nbrs = adj[cur] || [];
+      for (var i = 0; i < nbrs.length; i++) {
+        if (!(nbrs[i] in downSet) && !(nbrs[i] in reachable)) { reachable[nbrs[i]] = 1; q.push(nbrs[i]); }
+      }
+    }
+    /* causes: down-узел, соседний с up-reachable, ИЛИ сам root-down */
+    var causes = {};
+    downs.forEach(function (n) {
+      var isCause = roots.indexOf(n.nid) !== -1;
+      if (!isCause) { var nbrs = adj[n.nid] || []; for (var i = 0; i < nbrs.length; i++) if (nbrs[i] in reachable) { isCause = true; break; } }
+      if (isCause) causes[n.nid] = 1;
+    });
+    return { downSet: downSet, causes: causes, roots: roots, downs: downs };
+  }
+
+  /* ADV results are frame-invariant (depend only on state/adj) -> compute once per
+     state change, never per animation frame. Recomputed by recomputeNav(). */
+  var navCache = { iso: null, pathNodes: null, cause: null };
+  function recomputeNav() {
+    navCache.iso = isolateSet();
+    navCache.pathNodes = (state.mode === "path" && state.pathSel.length === 2)
+      ? onPath(state.pathSel[0], state.pathSel[1]) : null;
+    navCache.cause = (state.mode === "cause") ? causeResult() : null;
   }
 
   function draw(now) {
@@ -357,23 +661,43 @@
 
     drawSubnetRings();
 
-    /* линки */
+    var iso = navCache.iso;
+    var pathNodes = navCache.pathNodes;
+    var cause = navCache.cause;
+    var neighHi = {};
+    if (selected && (adj[selected.nid] || []).length) {
+      neighHi[selected.nid] = 1; (adj[selected.nid] || []).forEach(function (nb) { neighHi[nb] = 1; });
+    }
+    function nodeFilteredOut(n) {
+      if (!nodeOk(n)) return true;
+      if (iso && !(n.nid in iso)) return true;
+      return false;
+    }
+
     for (var i = 0; i < links.length; i++) {
       var L = links[i];
-      var dim = FILTER && !(matches(L.a) || matches(L.b));
-      var focus = hover && (hover === L.a || hover === L.b);
-      /* качество agent-uplink -> цвет по потерям; иначе по уверенности */
+      if (!linkOk(L)) continue;
+      var bothOk = nodeOk(L.a) && nodeOk(L.b);
+      var dim = !bothOk;
+      if (iso) dim = dim || !(L.a.nid in iso) || !(L.b.nid in iso);
+      var onP = pathNodes && (pathNodes[L.a.nid] && pathNodes[L.b.nid]);
+      var focus = hover && (hover === L.a || hover === L.b) || hoverEdge === L;
+      var neighFocus = selected && (neighHi[L.a.nid] && neighHi[L.b.nid]);
       var qloss = L.quality ? L.quality.loss_pct : null;
       var lcls = L.kind === "agent-uplink" && qloss != null ? lossClass(qloss)
                : (L.conf === "high" ? "accent" : L.conf === "medium" ? "warn" : "muted");
-      ctx.globalAlpha = dim ? 0.04 : (focus ? 0.9 : (L.kind === "agent-uplink" ? 0.4 : confAlpha(L.conf)));
+      if (cause) {
+        var aC = cause.causes[L.a.nid], bC = cause.causes[L.b.nid];
+        if (cause.downSet[L.a.nid] || cause.downSet[L.b.nid]) lcls = aC || bC ? "bad" : "warn";
+      }
+      var baseAlpha = dim ? 0.04 : (focus || onP ? 0.95 : neighFocus ? 0.85 : (L.kind === "agent-uplink" ? 0.4 : confAlpha(L.conf)));
+      ctx.globalAlpha = baseAlpha;
       ctx.strokeStyle = C[lcls];
-      ctx.lineWidth = lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1;
-      ctx.setLineDash((L.medium === "wireless" || L.ambiguous) ? [4, 4] : []);
+      ctx.lineWidth = onP ? 3.2 : lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1;
+      ctx.setLineDash((L.medium === "wireless" || L.ambiguous) && !onP ? [4, 4] : []);
       ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
       ctx.setLineDash([]);
-      /* пульс пакета: бежит к шлюзу; на плохом линке гибнет на полпути */
-      if (!reduceMotion && qloss != null && !dim) {
+      if (!reduceMotion && qloss != null && state.layers.quality && !dim) {
         var t = ((now / 2400) + L.idx * 0.37) % 1;
         var die = lcls === "bad" ? 0.55 : lcls === "warn" ? 0.8 : 1.01;
         if (t < die) {
@@ -385,10 +709,14 @@
       }
     }
 
-    /* узлы */
-    for (var j = 0; j < nodes.length; j++) drawNode(nodes[j], FILTER && !matches(nodes[j]));
+    for (var j = 0; j < nodes.length; j++) {
+      var n = nodes[j];
+      var out = nodeFilteredOut(n);
+      var causeHi = cause && cause.causes[n.nid];
+      var pathHi = pathNodes && pathNodes[n.nid];
+      drawNode(n, out || (cause && cause.downSet[n.nid] && !causeHi), causeHi || pathHi);
+    }
 
-    /* hover-кольцо */
     if (hover) {
       ctx.globalAlpha = 0.9; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.4;
       ctx.setLineDash([5, 4]); ctx.lineDashOffset = reduceMotion ? 0 : -now / 50;
@@ -402,8 +730,6 @@
   function loop(now) {
     if (alpha > 0.02) tick();
     draw(now || 0);
-    /* пульс пакета / кольца-аномалии требуют постоянного кадра; при reduce-motion
-       рисуем один кадр на изменение — loop гасит running, invalidate зажигает */
     if (!reduceMotion || alpha > 0.02) requestAnimationFrame(loop);
     else running = false;
   }
@@ -417,8 +743,22 @@
   }
   function pick(p) {
     for (var i = nodes.length - 1; i >= 0; i--) {
-      var n = nodes[i], dx = n.x - p.x, dy = n.y - p.y, rr = n.r + 6;
+      var n = nodes[i]; if (nodeFilteredOut(n)) continue;
+      var dx = n.x - p.x, dy = n.y - p.y, rr = n.r + 6;
       if (dx * dx + dy * dy <= rr * rr) return n;
+    }
+    return null;
+  }
+  function pickEdge(p) {
+    for (var i = 0; i < links.length; i++) {
+      var L = links[i]; if (!linkOk(L)) continue;
+      var dx = L.b.x - L.a.x, dy = L.b.y - L.a.y, len2 = dx * dx + dy * dy;
+      if (len2 < 1) continue;
+      var t = ((p.x - L.a.x) * dx + (p.y - L.a.y) * dy) / len2;
+      if (t < 0 || t > 1) continue;
+      var px = L.a.x + t * dx, py = L.a.y + t * dy;
+      var dd = (p.x - px) * (p.x - px) + (p.y - py) * (p.y - py);
+      if (dd < 16) return L;
     }
     return null;
   }
@@ -456,7 +796,26 @@
     }
     if (n.subnet && anomalousSubnets[n.subnet] === 1)
       row("t-bad", "⚠ подсеть деградирована — похоже на инфраструктуру");
-    if (n.card_url) row("t-muted", "клик — карточка устройства");
+    if (n.card_url) row("t-muted", "клик — детали и карточка устройства");
+    positionTip(e);
+  }
+  function showEdgeTip(L, e) {
+    tip.textContent = "";
+    row("t-head", "связь");
+    row("t-muted", "тип: " + (L.kind === "agent-uplink" ? "аплинк агента" :
+        (L.kind === "l3" || (L.kind || "").indexOf("l3") !== -1) ? "L3-маршрут" : "L2-линк"));
+    if (L.via) row("t-muted", "источник: " + L.via);
+    if (L.conf) row(tipCls(L.conf === "high" ? "good" : L.conf === "medium" ? "warn" : "muted"), "уверенность: " + L.conf);
+    if (L.medium) row("t-muted", "среда: " + (L.medium === "wireless" ? "беспроводная" :
+        L.medium === "l3" ? "L3" : "проводная"));
+    if (L.ambiguous) row("t-warn", "неоднозначная связь");
+    if (state.layers.ports && (L.a_port || L.b_port))
+      row("t-muted", "порты: " + (L.a_port || "?") + " ↔ " + (L.b_port || "?"));
+    if (L.quality) row(tipCls(lossClass(L.quality.loss_pct)),
+        "потери: " + fmtLoss(L.quality.loss_pct) + " · задержка: " + fmtLat(L.quality.latency_ms));
+    positionTip(e);
+  }
+  function positionTip(e) {
     var sb = stage.getBoundingClientRect();
     var x = e.clientX - sb.left + 16, y = e.clientY - sb.top + 14;
     tip.hidden = false;
@@ -466,6 +825,74 @@
     tip.style.left = x + "px"; tip.style.top = y + "px";
   }
 
+  /* ═════════ Ф5 side panel (facts on click) — textContent only ═════════ */
+  var side = document.getElementById("ng-side");
+  function escText(v) { return v == null ? "" : String(v); }
+  function kv(parent, key, val, valClass) {
+    var r = document.createElement("div"); r.className = "ng-row";
+    var k = document.createElement("span"); k.className = "k"; k.textContent = key;
+    var v = document.createElement("span");
+    if (valClass) v.className = valClass;
+    v.textContent = escText(val);
+    r.appendChild(k); r.appendChild(v); parent.appendChild(r);
+  }
+  function showSide(n) {
+    if (!side) return;
+    side.textContent = "";
+    side.hidden = false;
+    var head = document.createElement("div"); head.className = "ng-side-head";
+    head.textContent = n.hostname || n.ip || n.nid;
+    side.appendChild(head);
+    kv(side, "тип", typeRu(n.type));
+    kv(side, "статус", statusRu(n.status), n.status === "down" ? "ng-info bad" : "");
+    if (n.ip) kv(side, "IP", n.ip);
+    if (n.mac) kv(side, "MAC", n.mac);
+    if (n.vendor) kv(side, "производитель", n.vendor);
+    if (n.model) kv(side, "модель", n.model);
+    if (n.subnet) kv(side, "подсеть", n.subnet);
+    if (n.provenance && n.provenance.length) kv(side, "источник", n.provenance.join(", "));
+    if (n.quality) {
+      kv(side, "потери до шлюза", fmtLoss(n.quality.loss_pct), "ng-info " +
+         (n.quality.loss_pct == null ? "" : lossClass(n.quality.loss_pct) === "bad" ? "bad" : lossClass(n.quality.loss_pct) === "warn" ? "warn" : "good"));
+      kv(side, "задержка", fmtLat(n.quality.latency_ms));
+    }
+    if (n.subnet && anomalousSubnets[n.subnet] === 1) {
+      var w = document.createElement("div"); w.className = "ng-info bad"; w.textContent = "⚠ подсеть деградирована"; side.appendChild(w);
+    }
+    var ar = document.createElement("div"); ar.className = "ng-actions-row";
+    var bIso = document.createElement("button"); bIso.textContent = "изоляция"; bIso.onclick = function () { setMode("isolate"); state.isolateRoot = n.nid; invalidate(); updateNavInfo(); };
+    var bPath = document.createElement("button"); bPath.textContent = "отсюда путь"; bPath.onclick = function () { setMode("path"); state.pathSel = [n.nid]; updateNavInfo(); };
+    ar.appendChild(bIso); ar.appendChild(bPath);
+    side.appendChild(ar);
+    if (n.card_url) {
+      var a = document.createElement("a"); a.className = "ng-card-btn"; a.href = n.card_url;
+      a.textContent = "→ карточка устройства";
+      side.appendChild(a);
+    }
+  }
+  function setMode(m) {
+    state.mode = m;
+    if (m !== "path") state.pathSel = [];
+    if (m !== "isolate") state.isolateRoot = null;
+    recomputeNav(); invalidate(); updateNavInfo();
+  }
+  function updateNavInfo() {
+    var info = document.getElementById("ng-nav-info");
+    if (!info) return;
+    info.textContent = "";
+    info.className = "ng-info";
+    if (state.mode === "isolate") {
+      info.textContent = state.isolateRoot ? "изоляция " + state.isolateN + "-hop от выбранного узла" : "выберите узел для изоляции";
+    } else if (state.mode === "path") {
+      info.textContent = state.pathSel.length === 1 ? "выберите второй узел (путь)" : state.pathSel.length === 2 ? "путь построен" : "выберите два узла";
+    } else if (state.mode === "cause") {
+      var cr = navCache.cause;
+      info.textContent = cr ? ("первопричин: " + Object.keys(cr.causes).length + " · симптомов: " + (Object.keys(cr.downSet).length - Object.keys(cr.causes).length)) : "сбоев не обнаружено";
+      if (cr && Object.keys(cr.causes).length) info.className = "ng-info bad";
+    }
+  }
+
+  /* ═════════ взаимодействие ═════════ */
   var dragNode = null, panning = false, downPt = null, moved = false;
   cv.addEventListener("mousedown", function (e) {
     var p = toWorld(e); downPt = { x: e.clientX, y: e.clientY }; moved = false;
@@ -481,20 +908,35 @@
       alpha = Math.max(alpha, 0.2); tip.hidden = true; invalidate(); return;
     }
     if (panning) { view.x += e.movementX; view.y += e.movementY; tip.hidden = true; invalidate(); return; }
-    if (e.target !== cv) { if (hover) { hover = null; tip.hidden = true; invalidate(); } return; }
-    var n = pick(toWorld(e));
-    if (n !== hover) { hover = n; invalidate(); }
-    if (n) showTip(n, e); else tip.hidden = true;
-    cv.style.cursor = n ? "pointer" : "grab";
+    if (e.target !== cv) { if (hover) { hover = null; hoverEdge = null; tip.hidden = true; invalidate(); } return; }
+    var wp = toWorld(e);
+    var n = pick(wp), ed = n ? null : pickEdge(wp);
+    if (n !== hover) hover = n;
+    if (ed !== hoverEdge) hoverEdge = ed;
+    invalidate();
+    if (n) showTip(n, e); else if (ed) showEdgeTip(ed, e); else tip.hidden = true;
+    cv.style.cursor = n ? "pointer" : ed ? "help" : "grab";
   });
-  window.addEventListener("mouseup", function () {
-    if (dragNode) { dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15); }
-    /* клик — каноническая карточка (agent>printer>net-infra), url из ассемблера */
-    if (dragNode && !moved && dragNode.card_url) {
-      window.location.href = dragNode.card_url;
+  window.addEventListener("mouseup", function (e) {
+    if (dragNode) {
+      dragNode.fx = null; dragNode.fy = null; alpha = Math.max(alpha, 0.15);
+      if (!moved) handleClick(dragNode); else persistPositions();
     }
     dragNode = null; panning = false; downPt = null; invalidate();
   });
+  function handleClick(n) {
+    selected = n;
+    if (state.mode === "isolate") { state.isolateRoot = n.nid; recomputeNav(); updateNavInfo(); invalidate(); return; }
+    if (state.mode === "path") {
+      if (state.pathSel.length >= 2) state.pathSel = [n.nid];
+      else if (state.pathSel[0] === n.nid) state.pathSel = [];
+      else state.pathSel.push(n.nid);
+      recomputeNav(); updateNavInfo(); invalidate(); return;
+    }
+    /* default: side panel holds context; navigate only via its card button */
+    showSide(n);
+    invalidate();
+  }
   cv.addEventListener("dblclick", function (e) { fit(); invalidate(); e.preventDefault(); });
   cv.addEventListener("wheel", function (e) {
     e.preventDefault();
@@ -504,14 +946,235 @@
     view.y = my - ((my - view.y) / view.k) * k2;
     view.k = k2; invalidate();
   }, { passive: false });
-  cv.addEventListener("mouseleave", function () { hover = null; tip.hidden = true; invalidate(); });
+  cv.addEventListener("mouseleave", function () { hover = null; hoverEdge = null; tip.hidden = true; invalidate(); });
+
+  /* горячие клавиши */
+  window.addEventListener("keydown", function (e) {
+    if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    var k = (e.key || "").toLowerCase();
+    if (k === "f") { fit(); invalidate(); }
+    else if (k === "r") { resetLayout(); }
+    else if (k === "escape") { selected = null; setMode(null); if (side) side.hidden = true; tip.hidden = true; invalidate(); }
+  });
+
+  /* ═════════ построение панели (checkbox/select из данных) ═════════ */
+  function buildChecks(containerId, items, stateMap, labelFn) {
+    var c = document.getElementById(containerId); if (!c) return;
+    items.forEach(function (it) {
+      var lbl = document.createElement("label");
+      var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!stateMap[it];
+      cb.onchange = function () { stateMap[it] = cb.checked; fit(); invalidate(); };
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(labelFn ? labelFn(it) : it));
+      c.appendChild(lbl);
+    });
+  }
+  buildChecks("ng-f-types", TYPES, state.types, typeRu);
+  buildChecks("ng-f-status", STATUS, state.status, statusRu);
+  buildChecks("ng-f-medium", MED, state.medium, function (m) {
+    return m === "wireless" ? "беспроводная" : m === "l3" ? "L3" : "проводная";
+  });
+  buildChecks("ng-f-conf", CONF, state.conf, function (c) {
+    return c === "high" ? "высокая" : c === "medium" ? "средняя" : "низкая";
+  });
+  buildChecks("ng-f-prov", PROV, state.prov, function (p) {
+    return { agent: "агент", printer: "принтер", gateway: "шлюз", net: "сеть" }[p] || p;
+  });
+  var subSel = document.getElementById("ng-f-subnet");
+  if (subSel) {
+    var subs = {}; nodes.forEach(function (n) { if (n.subnet) subs[n.subnet] = 1; });
+    var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "(все подсети)"; subSel.appendChild(opt0);
+    Object.keys(subs).sort().forEach(function (s) { var o = document.createElement("option"); o.value = s; o.textContent = s; subSel.appendChild(o); });
+    subSel.onchange = function () { state.subnet = subSel.value; invalidate(); };
+  }
+  var confirmedCb = document.getElementById("ng-f-confirmed");
+  if (confirmedCb) confirmedCb.onchange = function () { state.confirmedOnly = confirmedCb.checked; invalidate(); };
+
+  /* пресеты */
+  var presets = [
+    { id: "infra", label: "только инфра", apply: function () { TYPES.forEach(function (t) { state.types[t] = ["router","switch","ap","server"].indexOf(t) !== -1; }); state.confirmedOnly = false; } },
+    { id: "hide-endpoints", label: "скрыть конечные", apply: function () { TYPES.forEach(function (t) { state.types[t] = ["endpoint","unknown","phone"].indexOf(t) === -1; }); } },
+    { id: "hide-unconfirmed", label: "скрыть неподтверждённые", apply: function () { state.confirmedOnly = true; } },
+    { id: "reset", label: "↺ сбросить фильтры", apply: function () { TYPES.forEach(function (t) { state.types[t] = true; }); STATUS.forEach(function (s) { state.status[s] = true; }); MED.forEach(function (m) { state.medium[m] = true; }); CONF.forEach(function (c) { state.conf[c] = true; }); PROV.forEach(function (p) { state.prov[p] = true; }); state.confirmedOnly = false; state.subnet = ""; if (subSel) subSel.value = ""; } }
+  ];
+  var pc = document.getElementById("ng-presets");
+  if (pc) presets.forEach(function (pr) {
+    var b = document.createElement("button"); b.textContent = pr.label; b.onclick = function () { pr.apply(); syncPanelUI(); fit(); invalidate(); };
+    pc.appendChild(b);
+  });
+  function syncPanelUI() {
+    /* re-tick checkboxes from state (the panels were built from the same item order) */
+    var rebuild = function (containerId, items, stateMap) {
+      var c = document.getElementById(containerId); if (!c) return;
+      var cbs = c.querySelectorAll("input[type=checkbox]");
+      items.forEach(function (it, i) { if (cbs[i]) cbs[i].checked = !!stateMap[it]; });
+    };
+    rebuild("ng-f-types", TYPES, state.types);
+    rebuild("ng-f-status", STATUS, state.status);
+    rebuild("ng-f-medium", MED, state.medium);
+    rebuild("ng-f-conf", CONF, state.conf);
+    rebuild("ng-f-prov", PROV, state.prov);
+    if (confirmedCb) confirmedCb.checked = state.confirmedOnly;
+  }
+
+  /* слои */
+  var layerDefs = [
+    { id: "l2", label: "L2" }, { id: "l3", label: "L3" }, { id: "uplink", label: "аплинк агента" },
+    { id: "wireless", label: "беспроводные" }, { id: "quality", label: "качество/пульс" },
+    { id: "groups", label: "группы подсетей" }, { id: "ports", label: "метки портов" }
+  ];
+  var lc = document.getElementById("ng-layers");
+  if (lc) layerDefs.forEach(function (ld) {
+    var lbl = document.createElement("label");
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!state.layers[ld.id];
+    cb.onchange = function () { state.layers[ld.id] = cb.checked; invalidate(); };
+    lbl.appendChild(cb); lbl.appendChild(document.createTextNode(ld.label));
+    lc.appendChild(lbl);
+  });
+
+  /* раскладка */
+  var layoutSel = document.getElementById("ng-layout");
+  if (layoutSel) layoutSel.onchange = function () { state.layout = layoutSel.value; alpha = Math.max(alpha, 0.4); invalidate(); };
+  var pinBtn = document.getElementById("ng-pin");
+  if (pinBtn) pinBtn.onclick = function () { nodes.forEach(function (n) { n.fx = n.x; n.fy = n.y; }); persistPositions(); invalidate(); };
+  function resetLayout() {
+    nodes.forEach(function (n) { n.fx = null; n.fy = null; n.x = (rnd() - 0.5) * 600; n.y = (rnd() - 0.5) * 400; n.vx = 0; n.vy = 0; });
+    clearPositions(); alpha = 1; fit(); invalidate();
+  }
+  var resetBtn = document.getElementById("ng-reset-layout");
+  if (resetBtn) resetBtn.onclick = resetLayout;
+
+  /* ADV navigation buttons */
+  var isoBtn = document.getElementById("ng-isolate");
+  if (isoBtn) isoBtn.onclick = function () { setMode(state.mode === "isolate" ? null : "isolate"); };
+  var isoN = document.getElementById("ng-isolate-n");
+  if (isoN) isoN.onchange = function () { state.isolateN = parseInt(isoN.value, 10) || 2; if (state.mode === "isolate") { recomputeNav(); invalidate(); } };
+  var pathBtn = document.getElementById("ng-path");
+  if (pathBtn) pathBtn.onclick = function () { setMode(state.mode === "path" ? null : "path"); };
+  var causeBtn = document.getElementById("ng-cause");
+  if (causeBtn) causeBtn.onclick = function () { setMode(state.mode === "cause" ? null : "cause"); };
+
+  /* ═════════ персист позиций + вид (localStorage) ═════════ */
+  var POS_KEY = "srp-netmap-positions", VIEW_KEY = "srp-netmap-view";
+  function lsGet(key) { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (e) { return null; } }
+  function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* quota/private */ } }
+  function persistPositions() {
+    var pos = {};
+    nodes.forEach(function (n) { if (n.fx != null) pos[n.nid] = { x: n.x, y: n.y }; });
+    lsSet(POS_KEY, pos);
+  }
+  function clearPositions() { try { localStorage.removeItem(POS_KEY); } catch (e) { } }
+  function restorePositions() {
+    var pos = lsGet(POS_KEY); if (!pos) return;
+    nodes.forEach(function (n) { if (pos[n.nid]) { n.x = pos[n.nid].x; n.y = pos[n.nid].y; n.fx = pos[n.nid].x; n.fy = pos[n.nid].y; } });
+  }
+  /* save / restore view */
+  var saveBtn = document.getElementById("ng-save-view");
+  if (saveBtn) saveBtn.onclick = function () {
+    lsSet(VIEW_KEY, {
+      types: state.types, status: state.status, medium: state.medium, conf: state.conf, prov: state.prov,
+      confirmedOnly: state.confirmedOnly, subnet: state.subnet, layers: state.layers, layout: state.layout
+    });
+    persistPositions();
+    saveBtn.textContent = "✓ сохранено"; setTimeout(function () { saveBtn.textContent = "💾 сохранить вид"; }, 1200);
+  };
+  function restoreView() {
+    var v = lsGet(VIEW_KEY); if (!v) return;
+    /* merge saved values over the current defaults (not wholesale replace) so a
+       toggle/lane added after this view was saved keeps its default on. */
+    function mergeInto(target, src) {
+      if (!src) return;
+      Object.keys(src).forEach(function (k) { if (k in target) target[k] = src[k]; });
+    }
+    mergeInto(state.types, v.types); mergeInto(state.status, v.status);
+    mergeInto(state.medium, v.medium); mergeInto(state.conf, v.conf); mergeInto(state.prov, v.prov);
+    mergeInto(state.layers, v.layers);
+    if (typeof v.confirmedOnly === "boolean") state.confirmedOnly = v.confirmedOnly;
+    if (typeof v.subnet === "string") state.subnet = v.subnet;
+    if (v.layout && ["free","subnet","type"].indexOf(v.layout) !== -1) state.layout = v.layout;
+    if (layoutSel) layoutSel.value = state.layout;
+    if (subSel) subSel.value = state.subnet;
+    if (confirmedCb) confirmedCb.checked = state.confirmedOnly;
+    syncPanelUI();
+  }
+  restoreView();
+  restorePositions();
+
+  /* ═════════ экспорт (PNG/CSV/JSON) ═════════ */
+  function download(name, blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+  /* CSV formula-injection guard (mirrors the print-view _csv_safe pattern). */
+  function csvSafe(v) {
+    var s = v == null ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return s.replace(/"/g, '""');
+  }
+  function csvRow(cells) { return cells.map(function (c) { return '"' + csvSafe(c) + '"'; }).join(",") + "\r\n"; }
+  var pngBtn = document.getElementById("ng-export-png");
+  if (pngBtn) pngBtn.onclick = function () {
+    try { cv.toBlob(function (b) { if (b) download("network-map.png", b); }); } catch (e) { }
+  };
+  var csvBtn = document.getElementById("ng-export-csv");
+  if (csvBtn) csvBtn.onclick = function () {
+    var out = csvRow(["section", "id", "type", "ip", "hostname", "mac", "vendor", "status", "subnet"]);
+    nodes.forEach(function (n) {
+      out += csvRow(["node", n.nid, n.type, n.ip, n.hostname, n.mac, n.vendor, n.status, n.subnet]);
+    });
+    out += csvRow(["section", "a", "b", "kind", "via", "confidence", "medium", "a_port", "b_port"]);
+    links.forEach(function (L) {
+      out += csvRow(["link", L.a.nid, L.b.nid, L.kind, L.via, L.conf, L.medium, L.a_port, L.b_port]);
+    });
+    download("network-map.csv", new Blob([out], { type: "text/csv;charset=utf-8" }));
+  };
+  var jsonBtn = document.getElementById("ng-export-json");
+  if (jsonBtn) jsonBtn.onclick = function () {
+    download("network-map.json", new Blob([JSON.stringify(G, null, 2)], { type: "application/json" }));
+  };
 
   var search = document.getElementById("netgraph-search");
   if (search) search.addEventListener("input", function () {
     FILTER = search.value.trim().toLowerCase(); invalidate();
   });
 
+  /* SSR inventory filter hook (netmap.html wires the same input). External. */
+
   if (window.ResizeObserver) new ResizeObserver(function () { resize(); fit(); }).observe(stage);
+
+  /* ═════════ time machine: history plaque + slider ═════════ */
+  if (IS_HISTORY) {
+    var plaque = document.createElement("div"); plaque.className = "ng-history-plaque";
+    var txt = "◀ исторический кадр";
+    if (G.received_at) txt += " · " + G.received_at.slice(0, 16).replace("T", " ");
+    txt += " · " + (G.totals.nodes || 0) + " уз / " + (G.totals.links || 0) + " связей (без live-оверлеев)";
+    var span = document.createElement("span"); span.textContent = txt;
+    var back = document.createElement("a"); back.textContent = "вернуться к живой карте"; back.href = "/netmap";
+    plaque.appendChild(span); plaque.appendChild(back);
+    stage.appendChild(plaque);
+    /* save-view / export-json would persist this historical frame's filter state or
+       dump the past frame as if it were live -- disable them; PNG/CSV (what you see)
+       stay enabled. */
+    ["ng-save-view", "ng-export-json"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { el.disabled = true; el.title = "недоступно в историческом кадре"; }
+    });
+  }
+  var tm = document.getElementById("ng-timemachine");
+  if (tm && window.__NETMAP_SNAPSHOTS) {
+    var sel = document.createElement("select");
+    var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "машина времени…"; sel.appendChild(o0);
+    window.__NETMAP_SNAPSHOTS.forEach(function (s) {
+      var o = document.createElement("option"); o.value = s.id;
+      o.textContent = (s.received_at || "").slice(0, 16).replace("T", " ") + " · " + s.node_count + " уз";
+      sel.appendChild(o);
+    });
+    sel.onchange = function () { if (sel.value) window.location.href = "/netmap?at=" + encodeURIComponent(sel.value); };
+    tm.appendChild(sel);
+  }
+
   resize(); fit(); invalidate();
 })();
 </script>
