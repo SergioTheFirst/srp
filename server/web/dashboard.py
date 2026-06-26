@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
@@ -380,8 +380,11 @@ def device(request: Request, device_id: str):
     # Phase 2 (D8): if the whole subnet degrades, tell the operator it is the
     # infrastructure, not this PC. Read-side fleet query — page views only.
     net_note = subnet_context_for(db.get_network_snapshots(), device_id)
+    # Ф6: the ONE canonical card. If this agent has a topology twin (FK from Ф1),
+    # embed its network section here instead of a separate /netdisco/device card.
+    nd = db.get_linked_net_device(device_id=device_id)
     return _TEMPLATES.TemplateResponse(
-        request, "device.html", {"d": d, "net_subnet_note": net_note}
+        request, "device.html", {"d": d, "net_subnet_note": net_note, "nd": nd}
     )
 
 
@@ -469,6 +472,14 @@ def net_device(request: Request, device_nid: str):
     d = db.get_net_device(device_nid)
     if d is None:
         raise HTTPException(status_code=404, detail="network device not found")
+    # Ф6: never two cards for one physical device. A node FK-linked (Ф1) to an
+    # agent / printer redirects to that canonical card (which embeds the topology
+    # section). Redirect is one-way (net -> canonical), so no loop. Standalone
+    # infrastructure (no twin) keeps its own net card below.
+    if d.get("device_id"):
+        return RedirectResponse(f"/device/{d['device_id']}", status_code=302)
+    if d.get("printer_id"):
+        return RedirectResponse(f"/printers/{d['printer_id']}", status_code=302)
     changes = [c for c in db.get_net_changes(days=90) if c.get("device_nid") == device_nid]
     return _TEMPLATES.TemplateResponse(request, "net_device.html", {"d": d, "changes": changes})
 
@@ -527,7 +538,11 @@ def printer_card(request: Request, printer_id: str, days: int = 30):
     d = db.get_printer_detail(printer_id, days=days)
     if d is None:
         raise HTTPException(status_code=404, detail="printer not found")
-    return _TEMPLATES.TemplateResponse(request, "printer_detail.html", {"d": d, "days": days})
+    # Ф6: embed the topology section of this printer's network twin (FK from Ф1).
+    nd = db.get_linked_net_device(printer_id=printer_id)
+    return _TEMPLATES.TemplateResponse(
+        request, "printer_detail.html", {"d": d, "days": days, "nd": nd}
+    )
 
 
 @router.get("/deploy", response_class=HTMLResponse)
