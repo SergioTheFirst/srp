@@ -1098,6 +1098,27 @@ def get_net_device(device_nid: str) -> Optional[dict[str, Any]]:
     return dev
 
 
+def get_linked_net_device(
+    *, device_id: Optional[str] = None, printer_id: Optional[str] = None
+) -> Optional[dict[str, Any]]:
+    """The network device FK-linked (Ф1) to an agent / printer, with its full card
+    payload (interfaces + links) -- read side for the Ф6 topology section embedded
+    in the canonical agent/printer card. Returns ``None`` when nothing is linked or
+    no key is given. Keyed lookups only (no scan)."""
+    if device_id is None and printer_id is None:
+        return None
+    col = "device_id" if device_id is not None else "printer_id"
+    val = device_id if device_id is not None else printer_id
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT device_nid FROM net_devices WHERE {col}=? LIMIT 1",  # nosec B608 -- col is a literal, value bound
+            (val,),
+        ).fetchone()
+    if row is None:
+        return None
+    return get_net_device(row["device_nid"])
+
+
 def get_net_links() -> list[dict[str, Any]]:
     """Every resolved topology link (read side for the graph engine / map)."""
     with _connect() as conn:
