@@ -246,6 +246,29 @@ async def _netdisco_reachability_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+def _run_netdisco_passive_cycle(cfg: ServerConfig) -> None:
+    """Run one passive de-anon cycle (via to_thread). Self-guarded so a transient
+    socket/DB error never crashes startup or kills the loop."""
+    try:
+        result = netdisco_scheduler.run_passive_cycle(cfg.netdisco_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco passive cycle failed")
+        return
+    if result.get("enriched"):
+        _ndlog.info("netdisco passive: %d node(s) de-anonymised", result["enriched"])
+
+
+async def _netdisco_passive_loop(cfg: ServerConfig) -> None:
+    """De-anonymise nameless nodes (cross-MAC / reverse-DNS / mDNS / SSDP / NetBIOS /
+    WSD / banner) every interval (+jitter). Started when netdisco AND passive are both
+    enabled (local-segment multicast + bounded RFC1918 unicast, never a range scan)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.passive_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_passive_cycle, cfg)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -274,6 +297,9 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             # active scan is double-gated: netdisco on AND the active_scan stop-gate
             if cfg.netdisco_config().active_scan:
                 tasks.append(asyncio.create_task(_netdisco_discovery_loop(cfg)))
+            # passive de-anon is double-gated: netdisco on AND passive_enabled
+            if cfg.netdisco_config().passive_enabled:
+                tasks.append(asyncio.create_task(_netdisco_passive_loop(cfg)))
         try:
             yield
         finally:
