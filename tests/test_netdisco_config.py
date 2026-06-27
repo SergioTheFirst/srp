@@ -187,3 +187,72 @@ def test_passive_protocols_empty_falls_back_to_all() -> None:
     default = set(load_netdisco_config(None).passive_protocols)
     assert set(load_netdisco_config({"passive_protocols": []}).passive_protocols) == default
     assert set(load_netdisco_config({"passive_protocols": ["nope"]}).passive_protocols) == default
+
+
+# --- Phase 9: optional adapters (operator-credentialed; endpoint RFC1918-only) ---
+
+
+def test_adapter_defaults_empty_and_interval() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.optional_adapters == ()
+    assert cfg.adapter_interval_sec == 900
+
+
+def test_adapter_interval_clamped_to_floor() -> None:
+    assert load_netdisco_config({"adapter_interval_sec": 5}).adapter_interval_sec == 60
+    assert load_netdisco_config({"adapter_interval_sec": 1200}).adapter_interval_sec == 1200
+
+
+def test_adapter_valid_mikrotik_entry_parsed() -> None:
+    cfg = load_netdisco_config(
+        {
+            "optional_adapters": [
+                {
+                    "adapter_type": "mikrotik",
+                    "endpoint": "10.0.0.1",
+                    "credential": "mikrotik-core",
+                    "tls_verify": False,
+                    "site_id": "hq",
+                }
+            ]
+        }
+    )
+    assert len(cfg.optional_adapters) == 1
+    a = cfg.optional_adapters[0]
+    assert a.adapter_type == "mikrotik" and a.endpoint == "10.0.0.1"
+    assert a.credential == "mikrotik-core" and a.tls_verify is False and a.site_id == "hq"
+
+
+def test_adapter_unknown_type_dropped() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "telnet-bot", "endpoint": "10.0.0.1"}]}
+    )
+    assert cfg.optional_adapters == ()
+
+
+def test_adapter_public_endpoint_dropped() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "mikrotik", "endpoint": "8.8.8.8"}]}
+    )
+    assert cfg.optional_adapters == ()  # never let an adapter point off-LAN
+
+
+def test_adapter_missing_or_bad_endpoint_dropped() -> None:
+    cfg = load_netdisco_config(
+        {
+            "optional_adapters": [
+                {"adapter_type": "mikrotik"},  # no endpoint
+                {"adapter_type": "mikrotik", "endpoint": "not-an-ip"},
+                "not-a-dict",
+            ]
+        }
+    )
+    assert cfg.optional_adapters == ()
+
+
+def test_adapter_defaults_filled() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "unifi", "endpoint": "192.168.1.10"}]}
+    )
+    a = cfg.optional_adapters[0]
+    assert a.credential == "" and a.tls_verify is True and a.site_id == ""
