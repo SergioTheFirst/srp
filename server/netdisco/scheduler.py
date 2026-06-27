@@ -18,7 +18,7 @@ from typing import Any, Callable, List, Optional
 from server import db
 from server.analytics import netmap
 from server.analytics.oui import normalize_mac, vendor_for_mac
-from server.netdisco import harvest, snmp_probe
+from server.netdisco import banner, harvest, naming, passive, snmp_probe
 from server.netdisco import scan as scan_mod
 from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
@@ -287,5 +287,135 @@ def run_classify_cycle(
             store_interfaces(dev["device_nid"], _iface_rows(profile))
             classified += 1
         return {"classified": classified, "probed": probed, "busy": 0}
+    finally:
+        _poll_lock.release()
+
+
+# --- Phase 8: passive identification (de-anonymise "unknown" nodes) ----------
+#
+# Lowest-priority enrichment: cross-MAC/printer-map de-anon (offline), reverse-DNS,
+# and the multicast/banner collectors fill an EMPTY hostname/subtype/model on a
+# node already in inventory -- they never create a node and never overwrite a
+# value an agent/SNMP probe established (the writer COALESCEs the stored value).
+_PASSIVE_TARGET_CAP = 1024  # bound the unicast fan-out (netbios/reverse-DNS/banner)
+_BANNER_CAP = 32  # banner is the slow, sequential, active path (2 touches/host) -> tight ceiling
+_BANNER_TIMEOUT = 1.0  # ...and a short per-host TCP budget (held under the poll lock)
+# Per-FIELD source precedence (a device-asserted name beats a PTR; a specific
+# service class beats NetBIOS's generic "workstation"; an SSDP SERVER beats a banner).
+_HOSTNAME_PRIO = ("netbios", "mdns", "reverse_dns", "banner")
+_SUBTYPE_PRIO = ("data", "ssdp", "wsd", "mdns", "netbios")
+_MODEL_PRIO = ("ssdp", "banner")
+
+FillFn = Callable[..., None]
+DictFn = Callable[..., dict]
+PrinterMapFn = Callable[[], list]
+
+
+def _passive_target(dev: dict[str, Any]) -> bool:
+    """A node worth a unicast probe: still nameless, or never firmly typed."""
+    return (not dev.get("hostname")) or (dev.get("dev_type") in (None, "unknown", "endpoint"))
+
+
+def _hint_fields(hint: Any) -> dict[str, Optional[str]]:
+    """Normalise a source's per-IP value (a bare PTR string, or a PassiveHint) into
+    the three fillable fields."""
+    if isinstance(hint, str):
+        return {"hostname": hint, "subtype": None, "model": None}
+    return {
+        "hostname": getattr(hint, "hostname", None),
+        "subtype": getattr(hint, "subtype", None),
+        "model": getattr(hint, "model", None),
+    }
+
+
+def _deanon_from_data(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Ф8 T1: an IP that print traffic maps to a printer queue IS a printer (a
+    strong type signal from real data, no network needed)."""
+    out: dict[str, Any] = {}
+    for row in rows or []:
+        ip = row.get("ip")
+        if ip and is_rfc1918(ip) and ip not in out:
+            out[ip] = passive.PassiveHint(ip=ip, source="data", subtype="printer")
+    return out
+
+
+def _apply_passive_hints(by_ip: dict[str, str], collected: dict[str, dict], fill: FillFn) -> int:
+    """Resolve each known node's empty fields from the gathered sources by per-field
+    precedence, then fill it. A responder whose IP is not in inventory is ignored."""
+    field_prio = (("hostname", _HOSTNAME_PRIO), ("subtype", _SUBTYPE_PRIO), ("model", _MODEL_PRIO))
+    enriched = 0
+    for ip, nid in by_ip.items():
+        fields: dict[str, str] = {}
+        for field, prio in field_prio:
+            for src in prio:
+                source_map = collected.get(src)
+                if not source_map or ip not in source_map:
+                    continue
+                val = _hint_fields(source_map[ip]).get(field)
+                if val:
+                    fields[field] = val
+                    break
+        if fields:
+            fill(nid, **fields)
+            enriched += 1
+    return enriched
+
+
+def run_passive_cycle(
+    cfg: NetdiscoConfig,
+    *,
+    get_known: GetKnownFn = db.get_net_devices,
+    fill: FillFn = db.fill_net_device_identity,
+    resolve_names_fn: DictFn = naming.resolve_names,
+    collect_mdns_fn: DictFn = passive.collect_mdns,
+    collect_ssdp_fn: DictFn = passive.collect_ssdp,
+    collect_wsd_fn: DictFn = passive.collect_wsd,
+    collect_netbios_fn: DictFn = passive.collect_netbios,
+    collect_banner_fn: DictFn = banner.collect_banner,
+    get_printer_ip_map: PrinterMapFn = db.iter_printer_port_map,
+) -> dict[str, int]:
+    """De-anonymise nameless nodes from passive/offline sources, filling only empty
+    identity fields (serialized by the shared lock).
+
+    Gated by ``cfg.enabled`` AND ``cfg.passive_enabled``; each source is gated by
+    membership in ``cfg.passive_protocols``. Only RFC1918 nodes already in inventory
+    are ever enriched, the unicast fan-out is capped, and the active banner probe is
+    held to a tight ceiling so the cycle cannot starve the other loops on the lock.
+    All dependencies injectable for tests."""
+    if not (cfg.enabled and cfg.passive_enabled):
+        return {"enriched": 0, "busy": 0}
+    if not _poll_lock.acquire(blocking=False):
+        return {"enriched": 0, "busy": 1}
+    try:
+        protos = set(cfg.passive_protocols)
+        devices = get_known()
+        by_ip: dict[str, str] = {}
+        targets: list[str] = []
+        for dev in devices:
+            ip, nid = dev.get("ip"), dev.get("device_nid")
+            if not ip or not nid or not is_rfc1918(ip):
+                continue
+            by_ip.setdefault(ip, nid)  # map ALL known private nodes (multicast hits any)
+            if _passive_target(dev) and ip not in targets and len(targets) < _PASSIVE_TARGET_CAP:
+                targets.append(ip)  # unicast/reverse-DNS only chase the nameless ones
+        collected: dict[str, dict] = {}
+        if "data" in protos:
+            collected["data"] = _deanon_from_data(get_printer_ip_map())
+        if "netbios" in protos:
+            collected["netbios"] = collect_netbios_fn(targets)
+        if "mdns" in protos:
+            collected["mdns"] = collect_mdns_fn()
+        if "ssdp" in protos:
+            collected["ssdp"] = collect_ssdp_fn()
+        if "wsd" in protos:
+            collected["wsd"] = collect_wsd_fn()
+        if "reverse_dns" in protos:
+            collected["reverse_dns"] = resolve_names_fn(targets)
+        if "banner" in protos:
+            collected["banner"] = collect_banner_fn(
+                targets, cap=_BANNER_CAP, timeout=_BANNER_TIMEOUT
+            )
+        enriched = _apply_passive_hints(by_ip, collected, fill)
+        return {"enriched": enriched, "busy": 0}
     finally:
         _poll_lock.release()

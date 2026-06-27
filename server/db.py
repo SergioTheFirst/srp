@@ -854,6 +854,37 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
         )
 
 
+def fill_net_device_identity(
+    device_nid: str,
+    *,
+    hostname: Optional[str] = None,
+    subtype: Optional[str] = None,
+    model: Optional[str] = None,
+) -> None:
+    """Fill-empty-only identity enrichment for a known device (Ф8 passive).
+
+    The mirror image of ``upsert_net_device``'s COALESCE: here the STORED value
+    wins (``COALESCE(net_devices.hostname, ?)``), so a lowest-priority passive
+    hint (reverse-DNS / mDNS / NetBIOS / banner) only ever fills a column an
+    agent or SNMP probe left empty -- it can never overwrite a richer identity.
+    UPDATE-only: passive enriches existing inventory and never invents a node, so
+    a responder that is not already known is silently ignored. A ``None`` for
+    every field, or an unknown ``device_nid``, is a no-op."""
+    if not device_nid or (hostname is None and subtype is None and model is None):
+        return
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE net_devices SET
+              hostname = COALESCE(hostname, ?),
+              subtype  = COALESCE(subtype, ?),
+              model    = COALESCE(model, ?)
+            WHERE device_nid = ?
+            """,
+            (hostname, subtype, model, device_nid),
+        )
+
+
 def set_net_device_links(
     device_nid: str,
     device_id: Optional[str] = None,

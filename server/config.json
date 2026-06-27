@@ -18,9 +18,11 @@
   "netdisco": {
     "enabled": true,
     "active_scan": true,
+    "passive_enabled": true,
     "inventory_interval_sec": 900,
     "discovery_interval_sec": 900,
     "classify_interval_sec": 3600,
+    "passive_interval_sec": 3600,
     "snmp_community": "public",
     "snmp_version": 1,
     "static_ips": [],

@@ -27,7 +27,20 @@ _DEFAULT_DISCOVERY_INTERVAL_SEC = 900
 _DEFAULT_CLASSIFY_INTERVAL_SEC = 3600  # SNMP probing is rare: classify once an hour
 _DEFAULT_TOPOLOGY_INTERVAL_SEC = 3600  # L2 evidence (LLDP/CDP/FDB) is rare: once an hour
 _DEFAULT_REACHABILITY_INTERVAL_SEC = 600  # liveness/outage detection: every 10 min
+_DEFAULT_PASSIVE_INTERVAL_SEC = 3600  # passive de-anon is rare: once an hour
 _DEFAULT_JITTER_SEC = 30
+
+# Ф8 passive identity sources. ``data`` is the offline cross-MAC/printer_ip_map
+# de-anon (no network); the rest are bounded RFC1918/link-local probes.
+_PASSIVE_PROTOCOLS: tuple[str, ...] = (
+    "data",
+    "reverse_dns",
+    "mdns",
+    "ssdp",
+    "netbios",
+    "wsd",
+    "banner",
+)
 
 _DEFAULT_SCAN_MAX_HOSTS = 4096  # hard cap on hosts enumerated per scan (anti-blast)
 _DEFAULT_SCAN_WORKERS = 64
@@ -59,6 +72,10 @@ class NetdiscoConfig:
     # Non-public community lives DPAPI-encrypted; this names it in the store
     # (see netdisco/credentials.py). Empty -> use snmp_community plaintext.
     snmp_credential_ref: str = ""
+    # --- passive identification (P8), OFF by default ---
+    passive_enabled: bool = False  # OFF until explicit True (secure default)
+    passive_interval_sec: int = _DEFAULT_PASSIVE_INTERVAL_SEC
+    passive_protocols: tuple[str, ...] = field(default_factory=lambda: _PASSIVE_PROTOCOLS)
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -91,6 +108,21 @@ def _as_port_tuple(value: Any) -> tuple[int, ...]:
     return tuple(out)
 
 
+def _as_protocol_tuple(value: Any) -> tuple[str, ...]:
+    """Known passive protocols only, deduped, original order kept; empty/garbage ->
+    all known (an operator disables the whole pass via ``passive_enabled``)."""
+    if not isinstance(value, list):
+        return _PASSIVE_PROTOCOLS
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        name = str(item)
+        if name in _PASSIVE_PROTOCOLS and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return tuple(out) or _PASSIVE_PROTOCOLS
+
+
 def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
     """Build a NetdiscoConfig from a raw mapping, clamping/filtering unsafe input."""
     d = data or {}
@@ -113,6 +145,10 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
     reachability_interval = max(
         _MIN_INTERVAL_SEC,
         _as_int(d.get("reachability_interval_sec"), _DEFAULT_REACHABILITY_INTERVAL_SEC),
+    )
+    passive_interval = max(
+        _MIN_INTERVAL_SEC,
+        _as_int(d.get("passive_interval_sec"), _DEFAULT_PASSIVE_INTERVAL_SEC),
     )
     jitter = max(0, _as_int(d.get("jitter_sec"), _DEFAULT_JITTER_SEC))
     static = tuple(ip for ip in _as_str_list(d.get("static_ips")) if is_rfc1918(ip))
@@ -145,4 +181,7 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
         snmp_community=community,
         snmp_version=version,
         snmp_credential_ref=cred_ref,
+        passive_enabled=d.get("passive_enabled") is True,
+        passive_interval_sec=passive_interval,
+        passive_protocols=_as_protocol_tuple(d.get("passive_protocols")),
     )

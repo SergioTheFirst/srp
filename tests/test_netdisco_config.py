@@ -143,3 +143,47 @@ def test_reachability_interval_default_and_clamp() -> None:
     assert load_netdisco_config(None).reachability_interval_sec == 600
     assert load_netdisco_config({"reachability_interval_sec": 5}).reachability_interval_sec == 60
     assert load_netdisco_config({"reachability_interval_sec": 300}).reachability_interval_sec == 300
+
+
+# --- Phase 8: passive identification (OFF by default, per-protocol control) ---
+
+
+def test_passive_defaults_off_and_safe() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.passive_enabled is False  # secure default
+    assert cfg.passive_interval_sec == 3600  # rare loop, like classify/topology
+    # default = every known passive source available (operator narrows if wanted)
+    assert set(cfg.passive_protocols) == {
+        "data",
+        "reverse_dns",
+        "mdns",
+        "ssdp",
+        "netbios",
+        "wsd",
+        "banner",
+    }
+
+
+def test_passive_enabled_requires_explicit_true() -> None:
+    assert load_netdisco_config({"passive_enabled": "yes"}).passive_enabled is False
+    assert load_netdisco_config({"passive_enabled": 1}).passive_enabled is False
+    assert load_netdisco_config({"passive_enabled": True}).passive_enabled is True
+
+
+def test_passive_interval_clamped_to_floor() -> None:
+    assert load_netdisco_config({"passive_interval_sec": 5}).passive_interval_sec == 60
+    assert load_netdisco_config({"passive_interval_sec": 1800}).passive_interval_sec == 1800
+    assert load_netdisco_config({"passive_interval_sec": "x"}).passive_interval_sec == 3600
+
+
+def test_passive_protocols_keep_only_known_deduped_order() -> None:
+    cfg = load_netdisco_config(
+        {"passive_protocols": ["mdns", "mdns", "telnet", "banner", "garbage"]}
+    )
+    assert cfg.passive_protocols == ("mdns", "banner")  # unknown dropped, deduped, order kept
+
+
+def test_passive_protocols_empty_falls_back_to_all() -> None:
+    default = set(load_netdisco_config(None).passive_protocols)
+    assert set(load_netdisco_config({"passive_protocols": []}).passive_protocols) == default
+    assert set(load_netdisco_config({"passive_protocols": ["nope"]}).passive_protocols) == default
