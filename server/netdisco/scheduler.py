@@ -18,8 +18,9 @@ from typing import Any, Callable, List, Optional
 from server import db
 from server.analytics import netmap
 from server.analytics.oui import normalize_mac, vendor_for_mac
-from server.netdisco import banner, harvest, naming, passive, snmp_probe
+from server.netdisco import adapter_merge, banner, harvest, naming, passive, snmp_probe
 from server.netdisco import scan as scan_mod
+from server.netdisco.adapters.mikrotik import MikroTikAdapter
 from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.credentials import default_store, resolve_community
@@ -417,5 +418,57 @@ def run_passive_cycle(
             )
         enriched = _apply_passive_hints(by_ip, collected, fill)
         return {"enriched": enriched, "busy": 0}
+    finally:
+        _poll_lock.release()
+
+
+# --- Phase 9: optional Tier-3 adapter cycle ---------------------------------
+#
+# Each configured adapter (operator's controller credentials) is run read-only and
+# isolated: a build/collect failure is logged and skipped so one bad controller can
+# never block the others, and the merge only enriches/adds by MAC -- it never
+# overrides a validated SNMP identity.
+_ADAPTER_BUILDERS: dict[str, Any] = {"mikrotik": MikroTikAdapter}
+
+MergeFn = Callable[..., dict]
+
+
+def run_adapter_cycle(
+    cfg: NetdiscoConfig,
+    *,
+    get_known: GetKnownFn = db.get_net_devices,
+    merge: MergeFn = adapter_merge.merge_adapter_result,
+    builders: Optional[dict[str, Any]] = None,
+    store: Any = None,
+    now: Optional[str] = None,
+) -> dict[str, int]:
+    """Run each configured optional adapter and merge its identity hints into
+    ``net_*`` by MAC (serialized by the shared lock).
+
+    Gated by ``cfg.enabled`` AND a non-empty ``cfg.optional_adapters``. ``known`` is
+    re-read per adapter so a node one adapter adds is deduped by the next. All deps
+    injectable for tests."""
+    if not cfg.enabled or not cfg.optional_adapters:
+        return {"enriched": 0, "added": 0, "adapters": 0, "busy": 0}
+    if not _poll_lock.acquire(blocking=False):
+        return {"enriched": 0, "added": 0, "adapters": 0, "busy": 1}
+    try:
+        build_map = builders if builders is not None else _ADAPTER_BUILDERS
+        cred_store = store if store is not None else default_store()
+        enriched = added = ran = 0
+        for acfg in cfg.optional_adapters:
+            builder = build_map.get(acfg.adapter_type)
+            if builder is None:
+                continue  # unimplemented / documented-only type -> skip cleanly
+            try:
+                result = builder(acfg, store=cred_store).collect()
+            except Exception:  # contract says collect() never raises; absorb if it does
+                _log.exception("adapter %s build/collect failed", acfg.adapter_type)
+                continue
+            counts = merge(result, get_known(), now=now)
+            enriched += int(counts.get("enriched", 0))
+            added += int(counts.get("added", 0))
+            ran += 1
+        return {"enriched": enriched, "added": added, "adapters": ran, "busy": 0}
     finally:
         _poll_lock.release()

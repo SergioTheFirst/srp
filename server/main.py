@@ -269,6 +269,34 @@ async def _netdisco_passive_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+def _run_netdisco_adapter_cycle(cfg: ServerConfig) -> None:
+    """Run one optional-adapter cycle (via to_thread). Self-guarded so a transient
+    controller/credential error never crashes startup or kills the loop."""
+    try:
+        result = netdisco_scheduler.run_adapter_cycle(cfg.netdisco_config())
+    except Exception:  # never let a transient cycle error crash the caller
+        _ndlog.exception("netdisco adapter cycle failed")
+        return
+    if result.get("enriched") or result.get("added"):
+        _ndlog.info(
+            "netdisco adapters: %d enriched, %d added from %d adapter(s)",
+            result.get("enriched", 0),
+            result.get("added", 0),
+            result.get("adapters", 0),
+        )
+
+
+async def _netdisco_adapter_loop(cfg: ServerConfig) -> None:
+    """Pull identity/topology from the operator's optional controllers (MikroTik,
+    ...) every interval (+jitter). Started only when at least one adapter is
+    configured (read-only, RFC1918, isolated per adapter)."""
+    nd = cfg.netdisco_config()
+    interval_sec = max(60, nd.adapter_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_netdisco_adapter_cycle, cfg)
+        await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
 
@@ -300,6 +328,9 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             # passive de-anon is double-gated: netdisco on AND passive_enabled
             if cfg.netdisco_config().passive_enabled:
                 tasks.append(asyncio.create_task(_netdisco_passive_loop(cfg)))
+            # optional adapters run only when the operator has configured at least one
+            if cfg.netdisco_config().optional_adapters:
+                tasks.append(asyncio.create_task(_netdisco_adapter_loop(cfg)))
         try:
             yield
         finally:

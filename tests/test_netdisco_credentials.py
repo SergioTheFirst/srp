@@ -155,3 +155,41 @@ def test_make_session_resolves_community_from_store(tmp_path, monkeypatch) -> No
     session = scheduler._make_session("10.0.0.1", cfg)
 
     assert session.community == "s3cr3t-community"
+
+
+# --- Phase 9: generic adapter secret store (passwords / tokens) ---
+
+
+def test_set_then_get_round_trips_secret(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.set_secret("mikrotik-core", '{"username":"api","password":"p@ss"}')
+    assert store.get_secret("mikrotik-core") == '{"username":"api","password":"p@ss"}'
+
+
+def test_adapter_secret_on_disk_is_encrypted(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.set_secret("mikrotik-core", "super-secret-token")
+    raw = (tmp_path / "netdisco_secrets.json").read_text(encoding="utf-8")
+    assert "super-secret-token" not in raw  # only ciphertext on disk
+
+
+def test_get_missing_secret_returns_none(tmp_path) -> None:
+    assert _store(tmp_path).get_secret("nope") is None
+
+
+def test_set_secret_when_unavailable_raises(tmp_path) -> None:
+    with pytest.raises(RuntimeError):
+        _store(tmp_path, available=False).set_secret("x", "y")
+
+
+def test_get_secret_when_unavailable_returns_none(tmp_path) -> None:
+    _store(tmp_path).set_secret("mikrotik-core", "tok")
+    assert _store(tmp_path, available=False).get_secret("mikrotik-core") is None
+
+
+def test_secret_and_community_namespaces_are_separate(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.set_community("core", "comm")
+    store.set_secret("core", "adapter-secret")  # same name, different namespace
+    assert store.get_community("core") == "comm"
+    assert store.get_secret("core") == "adapter-secret"

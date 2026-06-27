@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from server.netdisco.adapters.base import KNOWN_ADAPTER_TYPES, AdapterConfig
 from server.printers.discovery import is_rfc1918, is_rfc1918_cidr
 
 _MIN_INTERVAL_SEC = 60  # never refresh faster than this, whatever the config says
@@ -28,6 +29,7 @@ _DEFAULT_CLASSIFY_INTERVAL_SEC = 3600  # SNMP probing is rare: classify once an 
 _DEFAULT_TOPOLOGY_INTERVAL_SEC = 3600  # L2 evidence (LLDP/CDP/FDB) is rare: once an hour
 _DEFAULT_REACHABILITY_INTERVAL_SEC = 600  # liveness/outage detection: every 10 min
 _DEFAULT_PASSIVE_INTERVAL_SEC = 3600  # passive de-anon is rare: once an hour
+_DEFAULT_ADAPTER_INTERVAL_SEC = 900  # optional controller adapters: every 15 min
 _DEFAULT_JITTER_SEC = 30
 
 # Ф8 passive identity sources. ``data`` is the offline cross-MAC/printer_ip_map
@@ -76,6 +78,9 @@ class NetdiscoConfig:
     passive_enabled: bool = False  # OFF until explicit True (secure default)
     passive_interval_sec: int = _DEFAULT_PASSIVE_INTERVAL_SEC
     passive_protocols: tuple[str, ...] = field(default_factory=lambda: _PASSIVE_PROTOCOLS)
+    # --- optional Tier-3 adapters (P9), empty by default (operator opts in) ---
+    optional_adapters: tuple[AdapterConfig, ...] = ()
+    adapter_interval_sec: int = _DEFAULT_ADAPTER_INTERVAL_SEC
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -123,6 +128,36 @@ def _as_protocol_tuple(value: Any) -> tuple[str, ...]:
     return tuple(out) or _PASSIVE_PROTOCOLS
 
 
+def _as_adapter_tuple(value: Any) -> tuple[AdapterConfig, ...]:
+    """Validated optional adapters: a known ``adapter_type`` AND an RFC1918
+    ``endpoint`` only -- any unknown type, off-LAN/garbage endpoint, or non-dict
+    entry is dropped (an adapter can never point off the private network however
+    the JSON is written). ``tls_verify`` defaults secure (True; only explicit
+    ``false`` disables)."""
+    if not isinstance(value, list):
+        return ()
+    out: list[AdapterConfig] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        atype = str(item.get("adapter_type") or "")
+        endpoint = str(item.get("endpoint") or "")
+        if atype not in KNOWN_ADAPTER_TYPES or not is_rfc1918(endpoint):
+            continue
+        cred = item.get("credential")
+        site = item.get("site_id")
+        out.append(
+            AdapterConfig(
+                adapter_type=atype,
+                endpoint=endpoint,
+                credential=cred if isinstance(cred, str) else "",
+                tls_verify=item.get("tls_verify") is not False,
+                site_id=site if isinstance(site, str) else "",
+            )
+        )
+    return tuple(out)
+
+
 def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
     """Build a NetdiscoConfig from a raw mapping, clamping/filtering unsafe input."""
     d = data or {}
@@ -149,6 +184,10 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
     passive_interval = max(
         _MIN_INTERVAL_SEC,
         _as_int(d.get("passive_interval_sec"), _DEFAULT_PASSIVE_INTERVAL_SEC),
+    )
+    adapter_interval = max(
+        _MIN_INTERVAL_SEC,
+        _as_int(d.get("adapter_interval_sec"), _DEFAULT_ADAPTER_INTERVAL_SEC),
     )
     jitter = max(0, _as_int(d.get("jitter_sec"), _DEFAULT_JITTER_SEC))
     static = tuple(ip for ip in _as_str_list(d.get("static_ips")) if is_rfc1918(ip))
@@ -184,4 +223,6 @@ def load_netdisco_config(data: Optional[Mapping[str, Any]]) -> NetdiscoConfig:
         passive_enabled=d.get("passive_enabled") is True,
         passive_interval_sec=passive_interval,
         passive_protocols=_as_protocol_tuple(d.get("passive_protocols")),
+        optional_adapters=_as_adapter_tuple(d.get("optional_adapters")),
+        adapter_interval_sec=adapter_interval,
     )

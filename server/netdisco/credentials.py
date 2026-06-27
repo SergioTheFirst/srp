@@ -181,6 +181,40 @@ class CredentialStore:
         except (ValueError, OSError, RuntimeError):
             return None
 
+    def set_secret(self, name: str, secret: str) -> None:
+        """Store an adapter secret (password / token / JSON blob) DPAPI-encrypted.
+
+        A separate ``secrets`` namespace from SNMP ``communities`` (an adapter
+        credential is not a community). Same invariant: refuse to persist a secret
+        unencrypted, atomic same-volume replace so a torn write never drops it."""
+        if not self._available:
+            raise RuntimeError("DPAPI unavailable: refusing to store a secret unencrypted")
+        blob = self._protect(secret.encode("utf-8"))
+        data = self._load()
+        secrets = data.get("secrets")
+        if not isinstance(secrets, dict):
+            secrets = {}
+        secrets[name] = base64.b64encode(blob).decode("ascii")
+        data["secrets"] = secrets
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, self._path)
+
+    def get_secret(self, name: str) -> Optional[str]:
+        """The decrypted adapter secret, or ``None`` (fail-closed): a missing key,
+        foreign blob, or absent cipher all yield ``None`` so a caller never acts on
+        a half-resolved credential."""
+        if not self._available:
+            return None
+        secrets = self._load().get("secrets")
+        if not isinstance(secrets, dict) or name not in secrets:
+            return None
+        try:
+            blob = base64.b64decode(secrets[name], validate=True)
+            return self._unprotect(blob).decode("utf-8")
+        except (ValueError, OSError, RuntimeError):
+            return None
+
 
 def default_store() -> Optional[CredentialStore]:
     """Store next to the server package; ``None`` off Windows (no DPAPI).

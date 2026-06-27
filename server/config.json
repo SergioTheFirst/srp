@@ -27,6 +27,8 @@
     "snmp_version": 1,
     "static_ips": [],
     "scan_cidrs": [],
-    "scan_max_hosts": 4096
+    "scan_max_hosts": 4096,
+    "adapter_interval_sec": 900,
+    "optional_adapters": []
   }
 }
