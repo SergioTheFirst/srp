@@ -28,6 +28,7 @@ from server.netdisco.evidence import (
     SOURCE_FDB_EDGE,
     SOURCE_FDB_UPLINK,
     SOURCE_LLDP,
+    SOURCE_WIRELESS,
     LinkEvidence,
 )
 from server.netdisco.models import ResolvedLink
@@ -36,6 +37,7 @@ from server.netdisco.models import ResolvedLink
 # an FDB inference; an uplink/ambiguous FDB hint is weakest. Unknown source -> 0.
 SOURCE_PRIORITY: Dict[str, int] = {
     SOURCE_LLDP: 5,
+    SOURCE_WIRELESS: 5,  # a controller's client<->AP association table is authoritative
     SOURCE_CDP: 4,
     SOURCE_FDB_EDGE: 3,
     "route": 3,
@@ -48,14 +50,20 @@ _TRUNK_KIND = "l2-trunk"
 _EDGE_KIND = "l2-edge"
 
 
-def _node_id(hint: str) -> str:
-    """Evidence endpoint hint -> stable node-id (passthrough for an existing nid)."""
+def node_id(hint: str) -> str:
+    """Evidence endpoint hint -> stable node-id (passthrough for an existing nid).
+
+    Public so the topology cycle resolves an LLDP neighbour's chassis hint to the
+    SAME node-id fusion uses (Ф7 LLDP-MED subtype enrichment), with no logic drift."""
     if hint.startswith("nd-"):
         return hint
     mac = normalize_mac(hint)
     if mac:
         return "nd-mac-" + mac
     return identity.device_nid(chassis_id=hint)
+
+
+_node_id = node_id  # internal alias kept for the existing call sites below
 
 
 def _priority(source: str) -> int:
@@ -106,6 +114,16 @@ def fuse(evidence: List[LinkEvidence]) -> List[ResolvedLink]:
         observed_at: Optional[str] = max(
             (e.observed_at for e in evs if e.observed_at), default=None
         )
+        # Ф7: carry the winner's directed port labels, swapping them when the winner's
+        # local end is not the canonical ``a`` (ports follow the node they describe).
+        a_port, b_port = winner.a_port, winner.b_port
+        if _node_id(winner.a) != node_a:
+            a_port, b_port = b_port, a_port
+        # The medium follows the winner (wireless beats a wired inference for the same
+        # pair); the VLAN is taken from any contributing evidence (LLDP wins priority
+        # but does not report a VLAN -- the dot1q FDB does).
+        medium = winner.medium or "wired"
+        vlan = next((e.vlan for e in evs if e.vlan is not None), None)
         out.append(
             ResolvedLink(
                 a=node_a,
@@ -115,6 +133,10 @@ def fuse(evidence: List[LinkEvidence]) -> List[ResolvedLink]:
                 link_kind=_link_kind(winner.source),
                 ambiguous=ambiguous,
                 observed_at=observed_at,
+                medium=medium,
+                vlan=vlan,
+                a_port=a_port,
+                b_port=b_port,
             )
         )
     out.sort(key=lambda link: (link.a, link.b, link.via_source))

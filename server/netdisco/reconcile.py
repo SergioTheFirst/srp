@@ -27,11 +27,13 @@ from server.netdisco import fusion as fusion_mod
 from server.netdisco import scan as scan_mod
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.credentials import default_store, resolve_community
-from server.netdisco.evidence import collect_evidence
+from server.netdisco.evidence import SOURCE_LLDP, collect_evidence, collect_lldp_med
+from server.netdisco.fusion import node_id
 from server.netdisco.graph import build_graph
 from server.netdisco.metrics import METRICS
 from server.netdisco.models import NetDevice, NetInterface, ResolvedLink
 from server.netdisco.scheduler import _make_session, _poll_lock
+from server.netdisco.wireless import collect_wireless
 from server.printers.discovery import is_rfc1918
 
 # Device types that carry L2 neighbour tables worth probing for topology evidence.
@@ -69,6 +71,29 @@ def _to_netdevice(dev: dict[str, Any]) -> NetDevice:
     return NetDevice(nid=dev["device_nid"], ip=dev.get("ip"), mac=dev.get("mac"), interfaces=ifaces)
 
 
+def _enrich_med_subtypes(
+    dev_ev: List[Any],
+    med: dict[int, str],
+    known_nids: set,
+    upsert: Callable[..., None],
+    now: Optional[str],
+) -> None:
+    """Ф7 T3: set a neighbour's subtype (phone/AP) from this switch's LLDP-MED advert.
+
+    A port's MED device-class is matched to the LLDP neighbour seen on the same local
+    port; the subtype is written ONLY when that neighbour is already a known device,
+    so a neighbour advertisement never fabricates a phantom MAC-less node. The upsert
+    COALESCE-preserves, so this never demotes a richer record."""
+    if not med:
+        return
+    for ev in dev_ev:
+        if getattr(ev, "source", None) != SOURCE_LLDP or ev.local_if not in med:
+            continue
+        neighbor = node_id(ev.b)
+        if neighbor in known_nids:
+            upsert({"device_nid": neighbor, "subtype": med[ev.local_if]}, now)
+
+
 def _link_row(link: ResolvedLink) -> dict[str, Any]:
     return {
         "a_nid": link.a,
@@ -76,6 +101,10 @@ def _link_row(link: ResolvedLink) -> dict[str, Any]:
         "link_kind": link.link_kind,
         "via_source": link.via_source,
         "confidence": link.confidence,
+        "medium": link.medium,
+        "vlan": link.vlan,
+        "a_port": link.a_port,
+        "b_port": link.b_port,
     }
 
 
@@ -111,6 +140,8 @@ def run_topology_cycle(
     get_device: Callable[[str], Optional[dict[str, Any]]] = db.get_net_device,
     session_factory: Callable[[str, NetdiscoConfig], Any] = _make_session,
     collect: Callable[..., List] = collect_evidence,
+    collect_wireless_fn: Callable[..., List] = collect_wireless,
+    collect_med_fn: Callable[..., dict] = collect_lldp_med,
     fuse: Callable[[List], List[ResolvedLink]] = fusion_mod.fuse,
     replace_links: Callable[..., None] = db.replace_net_links,
     store_snapshot: Callable[..., None] = db.store_topology_snapshot,
@@ -132,6 +163,7 @@ def run_topology_cycle(
     try:
         devices = get_known()
         infra_macs = _infra_macs(devices)
+        known_nids = {d.get("device_nid") for d in devices if d.get("device_nid")}
         evidence: List = []
         probed_nids: set = set()
         probed = 0
@@ -143,7 +175,14 @@ def run_topology_cycle(
                 continue  # only ever touch private infra (defense-in-depth)
             netdev = _to_netdevice(get_device(dev["device_nid"]) or dev)
             session = session_factory(ip, cfg)
-            evidence.extend(collect(netdev, session, infra_macs=infra_macs))
+            dev_ev = collect(netdev, session, infra_macs=infra_macs)
+            evidence.extend(dev_ev)
+            # Ф7: real wireless client<->AP edges (only walked when this device's
+            # sysObjectID is a confirmed WLC root -- the collector self-gates).
+            evidence.extend(collect_wireless_fn(session, sys_object_id=dev.get("sys_object_id")))
+            _enrich_med_subtypes(
+                dev_ev, collect_med_fn(netdev.nid, session), known_nids, upsert, now
+            )
             probed_nids.add(netdev.nid)
             probed += 1
             upsert({"device_nid": netdev.nid, "status": "up"}, now)  # advance last_seen

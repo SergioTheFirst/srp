@@ -321,7 +321,7 @@
     if (a && b && a !== b) {
       links.push({
         a: a, b: b, conf: l.confidence, kind: l.link_kind,
-        ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality,
+        ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality, vlan: l.vlan,
         via: l.via_source, a_port: l.a_port, b_port: l.b_port, idx: links.length
       });
     }
@@ -814,8 +814,10 @@
     if (L.medium) row("t-muted", "среда: " + (L.medium === "wireless" ? "беспроводная" :
         L.medium === "l3" ? "L3" : "проводная"));
     if (L.ambiguous) row("t-warn", "неоднозначная связь");
+    /* a_port/b_port are SNMP strings; safe here only because row() uses textContent */
     if (state.layers.ports && (L.a_port || L.b_port))
       row("t-muted", "порты: " + (L.a_port || "?") + " ↔ " + (L.b_port || "?"));
+    if (L.vlan != null) row("t-muted", "VLAN: " + L.vlan);
     if (L.quality) row(tipCls(lossClass(L.quality.loss_pct)),
         "потери: " + fmtLoss(L.quality.loss_pct) + " · задержка: " + fmtLat(L.quality.latency_ms));
     positionTip(e);

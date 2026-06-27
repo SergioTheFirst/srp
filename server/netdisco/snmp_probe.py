@@ -26,6 +26,8 @@ from server.printers.classify import is_printer
 _FDB_PROBE_ROWS = 8
 _PRINTER_PROBE_ROWS = 8
 _SERIAL_PROBE_ROWS = 32
+_MODEL_PROBE_ROWS = 32  # entPhysicalModelName: a few rows (chassis first), never the whole tree
+_IF_ALIAS_MAX = 64  # ifAlias is a DisplayString (RFC 2863 SIZE 0..64); cap a hostile long value
 _BPS_PER_MBPS = 1_000_000
 _MAC_OCTETS = 6
 
@@ -95,12 +97,21 @@ def _first_str(walked: Dict[str, object]) -> Optional[str]:
 
 def _build_interfaces(session: Session) -> tuple[NetInterface, ...]:
     descr = _by_index(session.walk(oids.IF_DESCR), oids.IF_DESCR)
+    # Ф7 ifXTable: ifName is the short real port label ("Gi1/0/1"); ifAlias the
+    # operator description ("uplink to core"). ifName wins over the verbose ifDescr.
+    names = _by_index(session.walk(oids.IF_NAME), oids.IF_NAME)
+    alias = _by_index(session.walk(oids.IF_ALIAS), oids.IF_ALIAS)
     if_type = _by_index(session.walk(oids.IF_TYPE), oids.IF_TYPE)
     speed = _by_index(session.walk(oids.IF_SPEED), oids.IF_SPEED)
     phys = _by_index(session.walk(oids.IF_PHYS_ADDRESS), oids.IF_PHYS_ADDRESS)
     oper = _by_index(session.walk(oids.IF_OPER_STATUS), oids.IF_OPER_STATUS)
     indices = sorted(
-        {k for col in (descr, if_type, speed, phys, oper) for k in col if k.isdigit()},
+        {
+            k
+            for col in (descr, names, alias, if_type, speed, phys, oper)
+            for k in col
+            if k.isdigit()
+        },
         key=int,
     )
     out = []
@@ -109,11 +120,12 @@ def _build_interfaces(session: Session) -> tuple[NetInterface, ...]:
         out.append(
             NetInterface(
                 if_index=int(idx),
-                name=_str(descr.get(idx)),
+                name=_str(names.get(idx)) or _str(descr.get(idx)),
                 if_type=_int(if_type.get(idx)),
                 speed_mbps=(bps / _BPS_PER_MBPS) if bps is not None else None,
                 oper_up=_oper_up(oper.get(idx)),
                 phys_mac=_mac(phys.get(idx)),
+                if_alias=(_str(alias.get(idx)) or "")[:_IF_ALIAS_MAX] or None,
             )
         )
     return tuple(out)
@@ -144,6 +156,9 @@ def probe_device(ip: str, session: Session, *, is_printer_fn=is_printer) -> Devi
     )
     printer_probe = session.walk(oids.PRINTER_MIB, max_rows=_PRINTER_PROBE_ROWS)
     serial = _first_str(session.walk(oids.ENT_PHYSICAL_SERIAL, max_rows=_SERIAL_PROBE_ROWS))
+    model_name = _first_str(session.walk(oids.ENT_PHYSICAL_MODEL_NAME, max_rows=_MODEL_PROBE_ROWS))
+    if model_name is not None and not model_name.isprintable():
+        model_name = None  # drop control bytes from a hostile model string (data hygiene)
     macs = tuple(dict.fromkeys(i.phys_mac for i in interfaces if i.phys_mac))
 
     return DeviceProfile(
@@ -158,6 +173,7 @@ def probe_device(ip: str, session: Session, *, is_printer_fn=is_printer) -> Devi
         has_fdb=has_fdb,
         is_printer=is_printer_fn(printer_probe),
         serial=serial,
+        model_name=model_name,
         interfaces=interfaces,
         macs=macs,
     )

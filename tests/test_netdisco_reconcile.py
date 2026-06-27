@@ -55,6 +55,7 @@ def test_cycle_persists_links_and_snapshot_for_probed_infra_only():
         get_device=lambda nid: None,
         session_factory=lambda ip, cfg: object(),
         collect=_fake_collect,
+        collect_med_fn=lambda *a, **k: {},
         replace_links=lambda rows, nodes, received_at=None: captured.update(rows=rows, nodes=nodes),
         store_snapshot=lambda graph, received_at=None: captured.update(graph=graph),
         upsert=lambda dev, received_at=None: captured.setdefault("upserts", []).append(dev),
@@ -94,6 +95,7 @@ def test_cycle_idempotent_rerun_does_not_duplicate_links(tmp_path: Path):
         "get_known": db.get_net_devices,
         "session_factory": lambda ip, cfg: object(),
         "collect": _fake_collect,
+        "collect_med_fn": lambda *a, **k: {},
     }
     reconcile.run_topology_cycle(NetdiscoConfig(enabled=True), **kwargs)
     assert len(db.get_net_links()) == 1

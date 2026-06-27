@@ -245,6 +245,7 @@ CREATE TABLE IF NOT EXISTS net_devices (
   serial        TEXT,
   site_code     TEXT,
   status        TEXT,
+  subtype       TEXT,
   first_seen    TEXT,
   last_seen     TEXT,
   device_id     TEXT,
@@ -259,6 +260,7 @@ CREATE TABLE IF NOT EXISTS net_interfaces (
   speed_mbps  REAL,
   oper_up     INTEGER,
   phys_mac    TEXT,
+  if_alias    TEXT,
   last_seen   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_netif_device ON net_interfaces(device_nid);
@@ -271,6 +273,10 @@ CREATE TABLE IF NOT EXISTS net_links (
   link_kind   TEXT,
   via_source  TEXT,
   confidence  TEXT,
+  medium      TEXT,
+  vlan        INTEGER,
+  a_port      TEXT,
+  b_port      TEXT,
   first_seen  TEXT,
   last_seen   TEXT
 );
@@ -427,7 +433,23 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "print_jobs": (("source", "TEXT"),),
     # Phase 1 net-map unification: FK link to the agent (devices) / printer record.
-    "net_devices": (("device_id", "TEXT"), ("printer_id", "TEXT")),
+    # Ф7 Tier-1 SNMP deepening adds subtype (LLDP-MED class / service type). Both
+    # land on net_devices; the migration handles already-migrated columns (the
+    # `existing` set skips present columns), so this stays one idempotent entry.
+    "net_devices": (
+        ("device_id", "TEXT"),
+        ("printer_id", "TEXT"),
+        ("subtype", "TEXT"),
+    ),
+    # Ф7: ifAlias (operator description) on interfaces.
+    "net_interfaces": (("if_alias", "TEXT"),),
+    # Ф7: per-edge medium (wired/wireless/l3) + vlan + directed port labels.
+    "net_links": (
+        ("medium", "TEXT"),
+        ("vlan", "INTEGER"),
+        ("a_port", "TEXT"),
+        ("b_port", "TEXT"),
+    ),
 }
 _BACKFILL: dict[str, str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
@@ -782,8 +804,9 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
     """Insert or refresh a network device. Identity fields are COALESCEd (a
     transient poll missing a value never wipes a known one); ``dev_type`` keeps a
     known type over a later ``unknown`` (a classify miss must not demote);
-    ``status`` is COALESCEd too (an inventory-only upsert keeps the last probe
-    status). ``first_seen`` is set on insert; ``last_seen`` advances each upsert."""
+    ``status``/``subtype`` are COALESCEd too (an inventory-only upsert keeps the
+    last probe values). ``first_seen`` is set on insert; ``last_seen`` advances
+    each upsert."""
     nid = dev.get("device_nid")
     if not nid:
         return
@@ -793,8 +816,8 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
             """
             INSERT INTO net_devices
               (device_nid, ip, hostname, mac, vendor, dev_type, sys_object_id,
-               model, serial, site_code, status, first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               model, serial, site_code, status, subtype, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_nid) DO UPDATE SET
               ip            = COALESCE(excluded.ip, net_devices.ip),
               hostname      = COALESCE(excluded.hostname, net_devices.hostname),
@@ -809,6 +832,7 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
               serial        = COALESCE(excluded.serial, net_devices.serial),
               site_code     = COALESCE(excluded.site_code, net_devices.site_code),
               status        = COALESCE(excluded.status, net_devices.status),
+              subtype       = COALESCE(excluded.subtype, net_devices.subtype),
               last_seen     = excluded.last_seen
             """,
             (
@@ -823,6 +847,7 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
                 dev.get("serial"),
                 dev.get("site_code"),
                 dev.get("status"),
+                dev.get("subtype"),
                 recv,
                 recv,
             ),
@@ -898,6 +923,7 @@ def store_net_interfaces(
             i.get("speed_mbps"),
             None if i.get("oper_up") is None else int(bool(i.get("oper_up"))),
             i.get("phys_mac"),
+            i.get("if_alias"),
             recv,
         )
         for i in interfaces
@@ -906,8 +932,8 @@ def store_net_interfaces(
         conn.execute("DELETE FROM net_interfaces WHERE device_nid=?", (device_nid,))
         conn.executemany(
             "INSERT INTO net_interfaces "
-            "(device_nid, if_index, name, if_type, speed_mbps, oper_up, phys_mac, last_seen) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "(device_nid, if_index, name, if_type, speed_mbps, oper_up, phys_mac, "
+            "if_alias, last_seen) VALUES (?,?,?,?,?,?,?,?,?)",
             rows,
         )
 
@@ -925,28 +951,37 @@ def set_net_device_status(device_nid: str, status: str) -> None:
 
 def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
     """Insert or refresh one undirected L2/L3 link. Endpoints are canonicalised
-    (a_nid <= b_nid, ifIndexes swapped to match) so the same link in either
-    direction is one row; ``via_source``/``confidence`` are latest-wins and the
-    per-endpoint ifIndexes are COALESCEd; ``first_seen`` is preserved."""
+    (a_nid <= b_nid, ifIndexes + port labels swapped to match) so the same link in
+    either direction is one row; ``via_source``/``confidence``/``vlan`` are latest-
+    wins and the per-endpoint ifIndexes + ``medium`` + port labels are COALESCEd
+    (an FDB re-derivation that lacks the LLDP port label keeps it); ``first_seen``
+    is preserved."""
     a, b = link.get("a_nid"), link.get("b_nid")
     if not a or not b:
         return
     a_if, b_if = link.get("a_if"), link.get("b_if")
+    a_port, b_port = link.get("a_port"), link.get("b_port")
     if a > b:
         a, b = b, a
         a_if, b_if = b_if, a_if
+        a_port, b_port = b_port, a_port
     recv = received_at or _now_iso()
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO net_links
-              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?,?)
+              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, medium,
+               vlan, a_port, b_port, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
               a_if       = COALESCE(excluded.a_if, net_links.a_if),
               b_if       = COALESCE(excluded.b_if, net_links.b_if),
               via_source = excluded.via_source,
               confidence = excluded.confidence,
+              medium     = COALESCE(excluded.medium, net_links.medium),
+              vlan       = excluded.vlan,
+              a_port     = COALESCE(excluded.a_port, net_links.a_port),
+              b_port     = COALESCE(excluded.b_port, net_links.b_port),
               last_seen  = excluded.last_seen
             """,
             (
@@ -957,6 +992,10 @@ def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> 
                 link.get("link_kind"),
                 link.get("via_source"),
                 link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
                 recv,
                 recv,
             ),
@@ -984,11 +1023,27 @@ def replace_net_links(
         if not a or not b or a == b:
             continue
         a_if, b_if = link.get("a_if"), link.get("b_if")
+        a_port, b_port = link.get("a_port"), link.get("b_port")
         if a > b:
             a, b = b, a
             a_if, b_if = b_if, a_if
+            a_port, b_port = b_port, a_port
         kind = link.get("link_kind")
-        canon.append((a, b, a_if, b_if, kind, link.get("via_source"), link.get("confidence")))
+        canon.append(
+            (
+                a,
+                b,
+                a_if,
+                b_if,
+                kind,
+                link.get("via_source"),
+                link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
+            )
+        )
         new_keys.add((a, b, kind))
     with _lock, _connect() as conn:
         if nodes:
@@ -1003,21 +1058,25 @@ def replace_net_links(
                     "DELETE FROM net_links WHERE a_nid=? AND b_nid=? AND link_kind IS ?",
                     (a, b, kind),
                 )
-        for a, b, a_if, b_if, kind, via, conf in canon:
+        for a, b, a_if, b_if, kind, via, conf, medium, vlan, a_port, b_port in canon:
             conn.execute(
                 """
                 INSERT INTO net_links
                   (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence,
-                   first_seen, last_seen)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                   medium, vlan, a_port, b_port, first_seen, last_seen)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
                   a_if       = COALESCE(excluded.a_if, net_links.a_if),
                   b_if       = COALESCE(excluded.b_if, net_links.b_if),
                   via_source = excluded.via_source,
                   confidence = excluded.confidence,
+                  medium     = COALESCE(excluded.medium, net_links.medium),
+                  vlan       = excluded.vlan,
+                  a_port     = COALESCE(excluded.a_port, net_links.a_port),
+                  b_port     = COALESCE(excluded.b_port, net_links.b_port),
                   last_seen  = excluded.last_seen
                 """,
-                (a, b, a_if, b_if, kind, via, conf, recv, recv),
+                (a, b, a_if, b_if, kind, via, conf, medium, vlan, a_port, b_port, recv, recv),
             )
 
 
