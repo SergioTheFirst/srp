@@ -218,6 +218,7 @@ def _iface_rows(profile: DeviceProfile) -> List[dict]:
             "speed_mbps": i.speed_mbps,
             "oper_up": i.oper_up,
             "phys_mac": i.phys_mac,
+            "if_alias": i.if_alias,
         }
         for i in profile.interfaces
     ]
@@ -230,7 +231,9 @@ def _device_update(nid: str, profile: DeviceProfile, dev_type: str, extras: dict
         "hostname": profile.sys_name,
         "vendor": extras.get("vendor"),  # None -> COALESCE keeps the OUI vendor
         "sys_object_id": profile.sys_object_id,
-        "model": extras.get("model") or profile.sys_descr,
+        # Ф7: prefer a vendor driver's model, then the exact ENTITY model name, then
+        # fall back to the verbose sysDescr (UNKNOWN-last ordering).
+        "model": extras.get("model") or profile.model_name or profile.sys_descr,
         "serial": extras.get("serial") or profile.serial,
         "status": "up" if profile.responded else None,  # None -> keep the prior status
     }

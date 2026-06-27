@@ -121,7 +121,9 @@ def _node_from_net_device(d: dict[str, Any]) -> _Node:
         "status": d.get("status"),
         "model": d.get("model"),
         "subnet": subnet_hint(d.get("ip")),
-        "subtype": "printer" if printer_id else None,
+        # Ф7: a printer FK always wins the subtype; otherwise carry the stored
+        # LLDP-MED/service subtype (phone/ap/server) when one was learned.
+        "subtype": "printer" if printer_id else d.get("subtype"),
         "device_id": device_id,
         "printer_id": printer_id,
         "card_url": _card_url(device_id, printer_id, nid),
@@ -339,9 +341,13 @@ def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> lis
                 "via_source": link.get("via_source"),
                 "confidence": link.get("confidence"),
                 "ambiguous": bool(link.get("ambiguous", False)),
-                "medium": _medium_for_link(link, nodes),
-                "a_port": link.get("a_if"),
-                "b_port": link.get("b_if"),
+                # Ф7: the stored per-edge medium wins; the Ф2 AP heuristic is the
+                # fallback for pre-Ф7 links that carry no medium. Directed port labels
+                # and the dot1q VLAN come straight from the persisted edge.
+                "medium": link.get("medium") or _medium_for_link(link, nodes),
+                "vlan": link.get("vlan"),
+                "a_port": link.get("a_port"),
+                "b_port": link.get("b_port"),
                 "quality": None,
             }
         )
@@ -427,6 +433,7 @@ def _agent_uplinks(
                         "confidence": "high",
                         "ambiguous": False,
                         "medium": _medium_for_adapter(kind),
+                        "vlan": None,
                         "a_port": None,
                         "b_port": None,
                         "quality": q,

@@ -17,7 +17,7 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class NetInterface:
-    """One network interface of a device (from SNMP ifTable). UNKNOWN -> None."""
+    """One network interface of a device (from SNMP ifTable + ifXTable Ф7). UNKNOWN -> None."""
 
     if_index: Optional[int] = None
     name: Optional[str] = None
@@ -25,6 +25,7 @@ class NetInterface:
     speed_mbps: Optional[float] = None
     oper_up: Optional[bool] = None
     phys_mac: Optional[str] = None
+    if_alias: Optional[str] = None  # Ф7 ifAlias: operator description ("uplink to core")
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class DeviceProfile:
     has_fdb: bool = False  # non-empty forwarding DB (switch confirmation)
     is_printer: bool = False  # printers.classify.is_printer on the Printer-MIB probe
     serial: Optional[str] = None
+    model_name: Optional[str] = None  # Ф7 ENTITY-MIB entPhysicalModelName (exact model)
     interfaces: tuple[NetInterface, ...] = ()
     macs: tuple[str, ...] = ()  # normalized phys MACs seen across the ifTable
 
@@ -57,7 +59,12 @@ class ResolvedLink:
     ``a``/``b`` are stable node-ids (canonical order a <= b). ``via_source`` is the
     winning evidence source, ``confidence`` its band (LOW when ``ambiguous`` -- a
     contradiction was shown rather than resolved away). ``observed_at`` is the
-    freshest contributing observation, stamped by the topology cycle."""
+    freshest contributing observation, stamped by the topology cycle.
+
+    Ф7 additions: ``medium`` (wired/wireless/l3 -- wireless set by the real
+    client->AP association, l3 by link_kind), ``vlan`` (the dot1q tag the edge
+    carries, from Q-BRIDGE-FDB). Both optional/None until a Ф7 collector sets them.
+    ``a_port``/``b_port`` carry the human port label when LLDP/ifXTable names it."""
 
     a: str
     b: str
@@ -66,6 +73,10 @@ class ResolvedLink:
     link_kind: str = "l2-edge"
     ambiguous: bool = False
     observed_at: Optional[str] = None
+    medium: Optional[str] = None
+    vlan: Optional[int] = None
+    a_port: Optional[str] = None
+    b_port: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,7 @@ class NetDevice:
     serial: Optional[str] = None
     site_code: Optional[str] = None
     status: Optional[str] = None  # up/down/unreachable/missing
+    subtype: Optional[str] = None  # Ф7: LLDP-MED class / service type (phone/ap/server)
     interfaces: tuple[NetInterface, ...] = ()
     sources: tuple[str, ...] = ()  # which discovery sources found it
     first_seen: Optional[str] = None
