@@ -433,36 +433,12 @@ def network_map(request: Request, at: Optional[str] = None):
     )
 
 
-@router.get("/topology", response_class=HTMLResponse)
-def topology(request: Request):
-    """Network topology page (SSR inventory table + canvas graph of real L2/L3
-    links). The graph is the latest stored snapshot (§3.5); nodes are enriched
-    with live reachability status/vendor from the inventory so the map colours
-    them. All agent/SNMP strings reach the JSON island via ``|tojson`` (autoescape
-    on) -- a hostile hostname cannot break out of the <script> island."""
-    snap = db.get_latest_topology_snapshot() or {}
-    raw = snap.get("graph") or {"nodes": [], "links": []}
-    inventory = db.get_net_devices()
-    by_nid = {d.get("device_nid"): d for d in inventory}
-    nodes = [
-        {
-            **n,
-            "status": (by_nid.get(n.get("nid")) or {}).get("status"),
-            "vendor": (by_nid.get(n.get("nid")) or {}).get("vendor"),
-        }
-        for n in (raw.get("nodes") or [])
-    ]
-    graph = {"nodes": nodes, "links": raw.get("links") or []}
-    return _TEMPLATES.TemplateResponse(
-        request,
-        "topology.html",
-        {
-            "graph": graph,
-            "received_at": snap.get("received_at"),
-            "inventory": inventory,
-            "changes": db.get_net_changes(days=7),
-        },
-    )
+@router.get("/topology")
+def topology() -> RedirectResponse:
+    """Ф10: «Топология» is demolished -- the unified «Карта сети» (/netmap) is the
+    single entry point and a strict superset (SSR inventory + the L2/L3 graph + the
+    control panel + time machine). A permanent redirect keeps old bookmarks working."""
+    return RedirectResponse("/netmap", status_code=301)
 
 
 @router.get("/netdisco/device/{device_nid}", response_class=HTMLResponse)

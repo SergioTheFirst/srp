@@ -285,7 +285,11 @@ def test_netmap_page_renders_control_panel(client):
     assert 'id="ng-presets"' in body and 'id="ng-layers"' in body
     assert 'id="ng-layout"' in body and 'id="ng-side"' in body
     assert 'id="ng-save-view"' in body
-    assert 'id="ng-export-png"' in body and 'id="ng-export-csv"' in body and 'id="ng-export-json"' in body
+    assert (
+        'id="ng-export-png"' in body
+        and 'id="ng-export-csv"' in body
+        and 'id="ng-export-json"' in body
+    )
     # ADV navigation
     assert 'id="ng-isolate"' in body and 'id="ng-path"' in body and 'id="ng-cause"' in body
 
@@ -424,3 +428,69 @@ def test_netmap_side_panel_isolate_and_drag_persistence_are_wired(client):
     assert "state.isolateRoot = n.nid; recomputeNav(); invalidate(); updateNavInfo();" in body
     assert "dragNode.fx = dragNode.x; dragNode.fy = dragNode.y;" in body
     assert "persistPositions();" in body
+
+
+# --- Ф10: «Топология» demolished -> one entry point, /netmap -------------------
+
+
+def _seed_net_device(nid, ip, hostname, dev_type="switch", status="up"):
+    from server import db
+
+    db.upsert_net_device(
+        {
+            "device_nid": nid,
+            "ip": ip,
+            "hostname": hostname,
+            "mac": "AA-BB-CC-00-00-01",
+            "vendor": "Cisco",
+            "dev_type": dev_type,
+            "status": status,
+        }
+    )
+
+
+def test_topology_redirects_to_netmap(client):
+    """Ф10: the old /topology page is gone; the route 301-redirects to /netmap so
+    any bookmark/external link still lands on the unified map."""
+    resp = client.get("/topology", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/netmap"
+
+
+def test_nav_has_no_topology_link(client):
+    """The nav no longer offers «топология» -- the map is the single entry point."""
+    body = client.get("/netmap").text
+    assert 'href="/topology"' not in body
+    assert 'href="/netmap"' in body  # ...but the map link is present
+
+
+def test_net_device_card_shows_interfaces_and_links(client):
+    """The standalone /netdisco/device/{nid} card SURVIVES the demolition (it is the
+    network-device detail, reached from the map via card_url)."""
+    from server import db
+
+    _seed_net_device("nd-sw", "192.168.1.2", "floor-switch", dev_type="switch")
+    _seed_net_device("nd-gw", "192.168.1.1", "core-gw", dev_type="router")
+    db.store_net_interfaces(
+        "nd-sw",
+        [{"if_index": 1, "name": "GigabitEthernet0/1", "if_type": 6, "oper_up": 1}],
+    )
+    db.upsert_net_link(
+        {
+            "a_nid": "nd-gw",
+            "b_nid": "nd-sw",
+            "link_kind": "ethernet",
+            "via_source": "lldp",
+            "confidence": "high",
+        }
+    )
+    db.store_net_change("device_new", device_nid="nd-sw", detail={"dev_type": "switch"})
+    body = client.get("/netdisco/device/nd-sw").text
+    assert "floor-switch" in body
+    assert "GigabitEthernet0/1" in body  # interface row
+    assert "nd-gw" in body or "core-gw" in body  # incident link
+    assert "device_new" in body or "появилось" in body  # change journal
+
+
+def test_net_device_card_404(client):
+    assert client.get("/netdisco/device/nope").status_code == 404
