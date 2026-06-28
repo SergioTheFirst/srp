@@ -8,3 +8,10 @@ fastapi>=0.110,<1.0
 uvicorn[standard]>=0.27
 pydantic>=2.6,<3.0
 jinja2>=3.1
+
+# Optional: the ONLY non-stdlib dependency of the netdisco optional-adapter layer,
+# used solely by the opt-in NetFlow v9/IPFIX collector (server/netdisco/adapters/flow.py)
+# to parse exported flow templates. Pure Python, isolated. The adapter lazy-imports it,
+# so the server boots and runs fine WITHOUT it installed -- the NetFlow adapter simply
+# stays disabled until both this package is present and a `flow` adapter is configured.
+netflow>=0.12,<1.0

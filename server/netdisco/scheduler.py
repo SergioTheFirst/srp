@@ -20,6 +20,7 @@ from server.analytics import netmap
 from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco import adapter_merge, banner, harvest, naming, passive, snmp_probe
 from server.netdisco import scan as scan_mod
+from server.netdisco.adapters.flow import FlowAdapter
 from server.netdisco.adapters.mikrotik import MikroTikAdapter
 from server.netdisco.adapters.redfish import RedfishAdapter
 from server.netdisco.adapters.unifi import UniFiAdapter
@@ -434,6 +435,7 @@ _ADAPTER_BUILDERS: dict[str, Any] = {
     "mikrotik": MikroTikAdapter,
     "unifi": UniFiAdapter,
     "redfish": RedfishAdapter,
+    "flow": FlowAdapter,
 }
 
 MergeFn = Callable[..., dict]
