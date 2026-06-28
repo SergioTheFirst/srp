@@ -437,6 +437,7 @@ _ADAPTER_BUILDERS: dict[str, Any] = {
 }
 
 MergeFn = Callable[..., dict]
+LinkMergeFn = Callable[..., int]
 
 
 def run_adapter_cycle(
@@ -444,24 +445,26 @@ def run_adapter_cycle(
     *,
     get_known: GetKnownFn = db.get_net_devices,
     merge: MergeFn = adapter_merge.merge_adapter_result,
+    link_merge: LinkMergeFn = adapter_merge.merge_adapter_links,
     builders: Optional[dict[str, Any]] = None,
     store: Any = None,
     now: Optional[str] = None,
 ) -> dict[str, int]:
-    """Run each configured optional adapter and merge its identity hints into
-    ``net_*`` by MAC (serialized by the shared lock).
+    """Run each configured optional adapter and merge its identity hints (nodes) AND
+    its links into ``net_*`` by MAC (serialized by the shared lock).
 
     Gated by ``cfg.enabled`` AND a non-empty ``cfg.optional_adapters``. ``known`` is
-    re-read per adapter so a node one adapter adds is deduped by the next. All deps
+    re-read per adapter so a node one adapter adds is deduped by the next; link-merge
+    re-reads it AFTER node-merge so an endpoint just added is linkable. All deps
     injectable for tests."""
     if not cfg.enabled or not cfg.optional_adapters:
-        return {"enriched": 0, "added": 0, "adapters": 0, "busy": 0}
+        return {"enriched": 0, "added": 0, "links": 0, "adapters": 0, "busy": 0}
     if not _poll_lock.acquire(blocking=False):
-        return {"enriched": 0, "added": 0, "adapters": 0, "busy": 1}
+        return {"enriched": 0, "added": 0, "links": 0, "adapters": 0, "busy": 1}
     try:
         build_map = builders if builders is not None else _ADAPTER_BUILDERS
         cred_store = store if store is not None else default_store()
-        enriched = added = ran = 0
+        enriched = added = links = ran = 0
         for acfg in cfg.optional_adapters:
             builder = build_map.get(acfg.adapter_type)
             if builder is None:
@@ -474,7 +477,10 @@ def run_adapter_cycle(
             counts = merge(result, get_known(), now=now)
             enriched += int(counts.get("enriched", 0))
             added += int(counts.get("added", 0))
+            # Re-read known AFTER node-merge: a link endpoint the same adapter just
+            # added is now resolvable to its canonical nid.
+            links += int(link_merge(result, get_known(), adapter_type=acfg.adapter_type, now=now))
             ran += 1
-        return {"enriched": enriched, "added": added, "adapters": ran, "busy": 0}
+        return {"enriched": enriched, "added": added, "links": links, "adapters": ran, "busy": 0}
     finally:
         _poll_lock.release()

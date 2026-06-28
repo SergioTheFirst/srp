@@ -1033,6 +1033,48 @@ def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> 
         )
 
 
+def add_adapter_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Persist ONE Tier-3 adapter link, additively (Ф9d). Unlike ``upsert_net_link``
+    (latest-wins), this is ``ON CONFLICT DO NOTHING``: an adapter edge is recorded
+    under its own ``link_kind`` and NEVER modifies an existing row -- so a Tier-3
+    controller hint can never downgrade or overwrite a validated SNMP edge, and a
+    rerun preserves ``first_seen``. Endpoints are canonicalised (a_nid <= b_nid, port
+    labels swapped to match)."""
+    a, b = link.get("a_nid"), link.get("b_nid")
+    if not a or not b or a == b:
+        return
+    a_port, b_port = link.get("a_port"), link.get("b_port")
+    if a > b:
+        a, b = b, a
+        a_port, b_port = b_port, a_port
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_links
+              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, medium,
+               vlan, a_port, b_port, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(a_nid, b_nid, link_kind) DO NOTHING
+            """,
+            (
+                a,
+                b,
+                None,
+                None,
+                link.get("link_kind") or "adapter",
+                link.get("via_source"),
+                link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
+                recv,
+                recv,
+            ),
+        )
+
+
 def replace_net_links(
     links: list[dict[str, Any]],
     node_nids: set[str],
