@@ -21,6 +21,7 @@ from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco import adapter_merge, banner, harvest, naming, passive, snmp_probe
 from server.netdisco import scan as scan_mod
 from server.netdisco.adapters.mikrotik import MikroTikAdapter
+from server.netdisco.adapters.unifi import UniFiAdapter
 from server.netdisco.classify import classify
 from server.netdisco.config import NetdiscoConfig
 from server.netdisco.credentials import default_store, resolve_community
@@ -428,7 +429,7 @@ def run_passive_cycle(
 # isolated: a build/collect failure is logged and skipped so one bad controller can
 # never block the others, and the merge only enriches/adds by MAC -- it never
 # overrides a validated SNMP identity.
-_ADAPTER_BUILDERS: dict[str, Any] = {"mikrotik": MikroTikAdapter}
+_ADAPTER_BUILDERS: dict[str, Any] = {"mikrotik": MikroTikAdapter, "unifi": UniFiAdapter}
 
 MergeFn = Callable[..., dict]
 
