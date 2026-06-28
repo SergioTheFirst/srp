@@ -9,6 +9,8 @@ fill-empty writer). RED first.
 
 from __future__ import annotations
 
+from typing import Any, Dict, List
+
 import pytest
 from server.netdisco.adapters.base import (
     AdapterConfig,
@@ -25,7 +27,7 @@ from server.netdisco.adapters.base import (
 def test_adapter_config_frozen_with_safe_defaults() -> None:
     cfg = AdapterConfig(adapter_type="mikrotik", endpoint="10.0.0.1")
     assert cfg.credential == "" and cfg.tls_verify is True and cfg.site_id == ""
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):  # frozen dataclass -> FrozenInstanceError
         cfg.endpoint = "x"  # frozen
 
 
