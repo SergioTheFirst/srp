@@ -148,7 +148,7 @@ def test_adapter_cycle_no_adapters_does_nothing() -> None:
 
     calls: List[str] = []
     out = scheduler.run_adapter_cycle(_cfg(), get_known=lambda: calls.append("k") or [])
-    assert out == {"enriched": 0, "added": 0, "adapters": 0, "busy": 0}
+    assert out == {"enriched": 0, "added": 0, "links": 0, "adapters": 0, "busy": 0}
     assert calls == []  # gated before any read
 
 

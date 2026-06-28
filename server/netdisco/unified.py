@@ -320,6 +320,11 @@ def _merge_printers(
             by_ip.setdefault(p["ip"], nid)
 
 
+def _is_adapter_link(link: dict[str, Any]) -> bool:
+    """Ф9d: a Tier-3 adapter-sourced edge (``via_source`` like ``adapter:unifi``)."""
+    return str(link.get("via_source") or "").startswith("adapter")
+
+
 def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> list[dict[str, Any]]:
     for link in net_links:
         for end in (link.get("a_nid"), link.get("b_nid")):
@@ -327,12 +332,22 @@ def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> lis
                 nodes[end] = _stub_node(end)
     out: list[dict[str, Any]] = []
     seen: set = set()
-    for link in net_links:
+    pairs: set = set()
+    # Ф9d: draw validated links first; a Tier-3 adapter link only GAP-FILLS a node
+    # pair no validated link already connects -- never a parallel edge over an SNMP
+    # edge. With no adapter links the order is unchanged (regression-safe).
+    ordered = [link for link in net_links if not _is_adapter_link(link)]
+    ordered += [link for link in net_links if _is_adapter_link(link)]
+    for link in ordered:
         a, b = link.get("a_nid"), link.get("b_nid")
         key = (a, b, link.get("link_kind"))
         if not a or not b or a == b or key in seen:
             continue
+        pair = frozenset((a, b))
+        if _is_adapter_link(link) and pair in pairs:
+            continue
         seen.add(key)
+        pairs.add(pair)
         out.append(
             {
                 "a": a,

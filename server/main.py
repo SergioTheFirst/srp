@@ -277,11 +277,12 @@ def _run_netdisco_adapter_cycle(cfg: ServerConfig) -> None:
     except Exception:  # never let a transient cycle error crash the caller
         _ndlog.exception("netdisco adapter cycle failed")
         return
-    if result.get("enriched") or result.get("added"):
+    if result.get("enriched") or result.get("added") or result.get("links"):
         _ndlog.info(
-            "netdisco adapters: %d enriched, %d added from %d adapter(s)",
+            "netdisco adapters: %d enriched, %d added, %d link(s) from %d adapter(s)",
             result.get("enriched", 0),
             result.get("added", 0),
+            result.get("links", 0),
             result.get("adapters", 0),
         )
 
