@@ -286,6 +286,12 @@ class Envelope(_Base):
     # old servers with extra="allow" silently accept it; missing means no health
     # block from older agents (treated as absent on server side).
     source_health: dict[str, SourceHealth] = Field(default_factory=dict)
+    # Live machine name (platform.node) on EVERY envelope, so the dashboard shows
+    # the real name as soon as any message arrives -- not only on the rare
+    # inventory cadence. Additive optional; old agents omit it -> None, and the
+    # server COALESCEs so an empty value never wipes a stored name. CONTRACT_VERSION
+    # is deliberately NOT bumped (additive/optional, like site_code/org_code below).
+    hostname: Optional[str] = None
     # Site/org identity (W1.1).  Additive optional fields; old agents that omit
     # them produce None here; COALESCE on the server preserves any previously-set
     # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).

@@ -113,6 +113,10 @@ class Transport:
     ) -> dict[str, Any]:
         return {
             "device_id": self._cfg.device_id,
+            # Live machine name on every envelope -> the dashboard shows the real
+            # name on first contact of any type, not only on the rare inventory.
+            # Empty -> None so the server's COALESCE keeps any stored name.
+            "hostname": self._cfg.hostname or None,
             "agent_version": AGENT_VERSION,
             "msg_type": msg_type,
             "ts": datetime.now(timezone.utc).isoformat(),
