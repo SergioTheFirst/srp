@@ -289,3 +289,51 @@ def test_gateway_stub_upgraded_to_router():
     n = _by_nid(g)[rt]
     assert n["dev_type"] == "router"
     assert n["ip"] == "192.168.1.1"
+
+
+# --- S1: every node carries its age so the canvas fades stale ghosts (pure: no clock) ---
+def test_nodes_carry_freshness_timestamps_so_the_map_self_cleans():
+    rt, a1 = device_nid(mac=RT), device_nid(mac=A1)
+    nd = _nd(rt, "router", "192.168.1.1", RT)
+    nd["first_seen"] = "2026-06-01T00:00:00+00:00"
+    nd["last_seen"] = "2026-06-29T12:00:00+00:00"
+    g = build_network_map([nd], [], [_snap("d1", A1)], [])
+    by = _by_nid(g)
+    # discovered infra carries its net_devices timestamps (canvas fades stale ones)
+    assert by[rt]["first_seen"] == "2026-06-01T00:00:00+00:00"
+    assert by[rt]["last_seen"] == "2026-06-29T12:00:00+00:00"
+    # a synthesized agent node carries its live snapshot's last_seen
+    assert by[a1]["last_seen"] == "2026-06-24T00:00:00+00:00"
+
+
+# --- S3: links gain real physics from net_interfaces (speed/alias/oper) -- no new SNMP ---
+def test_edge_enriched_with_interface_speed_alias_and_oper_status():
+    sw, ap = device_nid(mac=SW), device_nid(mac=AP)
+    nds = [_nd(sw, "switch", mac=SW), _nd(ap, "ap", mac=AP)]
+    links = [_link(sw, ap, a_if=1, b_if=2)]
+    interfaces = [
+        {
+            "device_nid": sw,
+            "if_index": 1,
+            "speed_mbps": 1000.0,
+            "oper_up": 1,
+            "if_alias": "uplink-core",
+        },
+        {"device_nid": ap, "if_index": 2, "speed_mbps": 1000.0, "oper_up": 0, "if_alias": ""},
+    ]
+    e = build_network_map(nds, links, [], [], interfaces)["links"][0]
+    assert e["speed_mbps"] == 1000.0
+    assert e["a_port"] == "uplink-core"  # empty a_port falls back to the operator if_alias
+    assert e["port_down"] is True  # the ap-side interface reports oper_up == 0
+
+
+# --- S4: mark single points of failure on the existing graph (pure topology, no new data) ---
+def test_chokepoints_flag_articulation_nodes_and_bridge_links():
+    rt, sw, ap = (device_nid(mac=m) for m in (RT, SW, AP))
+    nds = [_nd(rt, "router", mac=RT), _nd(sw, "switch", mac=SW), _nd(ap, "ap", mac=AP)]
+    g = build_network_map(nds, [_link(rt, sw), _link(sw, ap)], [], [])
+    by = _by_nid(g)
+    assert by[sw]["articulation"] is True  # the middle of rt-sw-ap is a single point of failure
+    assert by[rt]["articulation"] is False and by[ap]["articulation"] is False
+    flagged = {frozenset((e["a"], e["b"])) for e in g["links"] if e["bridge"]}
+    assert flagged == {frozenset((rt, sw)), frozenset((sw, ap))}

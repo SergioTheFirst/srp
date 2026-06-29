@@ -36,6 +36,7 @@ def load_network_map() -> dict[str, Any]:
         db.get_net_links(),
         db.get_network_snapshots(),
         db.get_printers(),
+        db.get_net_interfaces(),
     )
 
 
