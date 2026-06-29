@@ -118,3 +118,16 @@ def test_netmap_page_shows_unclustered_printer(client):
     r = client.get("/netmap")
     assert r.status_code == 200
     assert "/printers/prn-sn-NET" in r.text
+
+
+def test_printers_pages_chart_defers_init_to_domcontentloaded(client):
+    # Plotly loads with `defer`, so the inline pages-history chart IIFE must wait
+    # for DOMContentLoaded before init -- otherwise it runs at parse time with
+    # Plotly still undefined and silently bails, leaving "Напечатано страниц по
+    # принтерам" empty forever. Same fix already lives in print.html. pytest does
+    # not execute the canvas JS, so pin the gate at the source level.
+    h = client.get("/printers").text
+    assert 'id="pages-series-data"' in h  # data island always emitted
+    assert "DOMContentLoaded" in h
+    # the regressed pattern was `if (!el || typeof Plotly === "undefined") return;`
+    assert 'typeof Plotly === "undefined") return' not in h
