@@ -99,3 +99,53 @@ def find_root_cause(graph: Graph, down_set: Iterable[str], roots: Iterable[str])
         if node in root_set or any(nbr in up_reachable for nbr in neighbors(graph, node)):
             causes.add(node)
     return causes
+
+
+def _count_components(adjacency: Dict[str, FrozenSet[str]]) -> int:
+    """Number of connected components in the induced subgraph (pure)."""
+    seen: Set[str] = set()
+    count = 0
+    for start in adjacency:
+        if start in seen:
+            continue
+        count += 1
+        stack: List[str] = [start]
+        seen.add(start)
+        while stack:
+            node = stack.pop()
+            for nbr in adjacency.get(node, frozenset()):
+                if nbr not in seen:
+                    seen.add(nbr)
+                    stack.append(nbr)
+    return count
+
+
+def find_articulation_points(graph: Graph) -> Set[str]:
+    """Cut vertices: nodes whose removal splits a connected component (single points of
+    failure). Brute-force component re-count -- a LAN graph is small and this is plainly
+    correct; leaves and isolated nodes are never cut vertices."""
+    base = _count_components(graph.adjacency)
+    points: Set[str] = set()
+    for vertex in graph.adjacency:
+        reduced = {n: nbrs - {vertex} for n, nbrs in graph.adjacency.items() if n != vertex}
+        if _count_components(reduced) > base:
+            points.add(vertex)
+    return points
+
+
+def find_bridges(graph: Graph) -> Set[FrozenSet[str]]:
+    """Cut edges: links whose removal splits a connected component. Each bridge is an
+    unordered ``frozenset({a, b})``; the redundant edges of a cycle are never bridges."""
+    base = _count_components(graph.adjacency)
+    bridges: Set[FrozenSet[str]] = set()
+    for node_a, nbrs in graph.adjacency.items():
+        for node_b in nbrs:
+            pair = frozenset((node_a, node_b))
+            if node_a == node_b or pair in bridges:
+                continue
+            reduced = dict(graph.adjacency)
+            reduced[node_a] = graph.adjacency[node_a] - {node_b}
+            reduced[node_b] = graph.adjacency[node_b] - {node_a}
+            if _count_components(reduced) > base:
+                bridges.add(pair)
+    return bridges

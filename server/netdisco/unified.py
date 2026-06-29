@@ -22,6 +22,7 @@ from server.analytics.netmap import (
     subnet_hint,
 )
 from server.analytics.oui import normalize_mac, vendor_for_mac
+from server.netdisco.graph import build_graph, find_articulation_points, find_bridges
 from server.netdisco.identity import device_nid
 
 # Adapter ``kind`` substrings that mark an agent uplink (and Ф7 wireless edges).
@@ -124,6 +125,8 @@ def _node_from_net_device(d: dict[str, Any]) -> _Node:
         # Ф7: a printer FK always wins the subtype; otherwise carry the stored
         # LLDP-MED/service subtype (phone/ap/server) when one was learned.
         "subtype": "printer" if printer_id else d.get("subtype"),
+        "first_seen": d.get("first_seen"),
+        "last_seen": d.get("last_seen"),
         "device_id": device_id,
         "printer_id": printer_id,
         "card_url": _card_url(device_id, printer_id, nid),
@@ -144,6 +147,8 @@ def _stub_node(nid: str) -> _Node:
         "model": None,
         "subnet": None,
         "subtype": None,
+        "first_seen": None,
+        "last_seen": None,
         "device_id": None,
         "printer_id": None,
         "card_url": _card_url(None, None, nid),
@@ -195,6 +200,8 @@ def _synth_agent_node(nid: str, snap: dict[str, Any], did: str) -> _Node:
         "model": None,
         "subnet": subnet_hint(ip0),
         "subtype": None,
+        "first_seen": None,
+        "last_seen": snap.get("last_seen"),
         "device_id": did,
         "printer_id": None,
         "card_url": _card_url(did, None, nid),
@@ -221,6 +228,8 @@ def _enrich_agent(node: _Node, snap: dict[str, Any], did: str) -> None:
         node["subnet"] = subnet_hint(ip0)
     if not node.get("hostname"):
         node["hostname"] = snap.get("hostname")
+    if snap.get("last_seen"):
+        node["last_seen"] = snap["last_seen"]  # live agent contact is fresher than discovery
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"agent"})
     node["card_url"] = _card_url(did, node.get("printer_id"), node["nid"])
 
@@ -266,6 +275,8 @@ def _synth_printer_node(nid: str, p: dict[str, Any], pid: str) -> _Node:
         "model": p.get("model"),
         "subnet": subnet_hint(p.get("ip")),
         "subtype": "printer",
+        "first_seen": None,
+        "last_seen": p.get("last_seen"),
         "device_id": None,
         "printer_id": pid,
         "card_url": _card_url(None, pid, nid),
@@ -290,6 +301,8 @@ def _enrich_printer(node: _Node, p: dict[str, Any], pid: str) -> None:
         node["subnet"] = subnet_hint(p.get("ip"))
     if not node.get("hostname"):
         node["hostname"] = p.get("hostname")
+    if p.get("last_seen"):
+        node["last_seen"] = p["last_seen"]
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"printer"})
     node["card_url"] = _card_url(node.get("device_id"), pid, node["nid"])
 
@@ -325,7 +338,45 @@ def _is_adapter_link(link: dict[str, Any]) -> bool:
     return str(link.get("via_source") or "").startswith("adapter")
 
 
-def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> list[dict[str, Any]]:
+def _index_interfaces(
+    net_interfaces: list[dict[str, Any]],
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Index ``net_interfaces`` by (device_nid, if_index) so a link's a_if/b_if can pull
+    the operator port alias, negotiated speed and oper status onto the edge (S3). Ф7
+    persisted these columns; the assembler never read them. First row per key wins."""
+    idx: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in net_interfaces:
+        nid = row.get("device_nid")
+        ifx = row.get("if_index")
+        if nid and ifx is not None:
+            idx.setdefault((nid, int(ifx)), row)
+    return idx
+
+
+def _link_physics(
+    link: dict[str, Any], a: str, b: str, iface_idx: dict[tuple[str, int], dict[str, Any]]
+) -> dict[str, Any]:
+    """S3: pull negotiated speed, operator port alias and oper-down off the two endpoint
+    interfaces. Empty LLDP port labels fall back to if_alias (non-LLDP switches regain
+    port names for free); speed is the slower of the two ends present."""
+    a_if, b_if = link.get("a_if"), link.get("b_if")
+    ifa = iface_idx.get((a, int(a_if))) if a_if is not None else None
+    ifb = iface_idx.get((b, int(b_if))) if b_if is not None else None
+    speeds = [r["speed_mbps"] for r in (ifa, ifb) if r and r.get("speed_mbps") is not None]
+    opers = [r.get("oper_up") for r in (ifa, ifb) if r is not None]
+    return {
+        "speed_mbps": min(speeds) if speeds else None,
+        "a_port": link.get("a_port") or (ifa or {}).get("if_alias") or None,
+        "b_port": link.get("b_port") or (ifb or {}).get("if_alias") or None,
+        "port_down": any(o == 0 for o in opers),
+    }
+
+
+def _real_links(
+    net_links: list[dict[str, Any]],
+    nodes: dict[str, _Node],
+    iface_idx: dict[tuple[str, int], dict[str, Any]],
+) -> list[dict[str, Any]]:
     for link in net_links:
         for end in (link.get("a_nid"), link.get("b_nid")):
             if end and end not in nodes:
@@ -348,6 +399,7 @@ def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> lis
             continue
         seen.add(key)
         pairs.add(pair)
+        phys = _link_physics(link, a, b, iface_idx)
         out.append(
             {
                 "a": a,
@@ -357,12 +409,15 @@ def _real_links(net_links: list[dict[str, Any]], nodes: dict[str, _Node]) -> lis
                 "confidence": link.get("confidence"),
                 "ambiguous": bool(link.get("ambiguous", False)),
                 # Ф7: the stored per-edge medium wins; the Ф2 AP heuristic is the
-                # fallback for pre-Ф7 links that carry no medium. Directed port labels
-                # and the dot1q VLAN come straight from the persisted edge.
+                # fallback for pre-Ф7 links that carry no medium. The dot1q VLAN comes
+                # straight from the persisted edge; S3 fills empty port labels from the
+                # interface if_alias and adds negotiated speed + an oper-down flag.
                 "medium": link.get("medium") or _medium_for_link(link, nodes),
                 "vlan": link.get("vlan"),
-                "a_port": link.get("a_port"),
-                "b_port": link.get("b_port"),
+                "a_port": phys["a_port"],
+                "b_port": phys["b_port"],
+                "speed_mbps": phys["speed_mbps"],
+                "port_down": phys["port_down"],
                 "quality": None,
             }
         )
@@ -407,6 +462,8 @@ def _ensure_gateway(
         "model": None,
         "subnet": subnet_hint(gw_ip),
         "subtype": None,
+        "first_seen": None,
+        "last_seen": None,
         "device_id": None,
         "printer_id": None,
         "card_url": _card_url(None, None, gw_nid),
@@ -451,6 +508,8 @@ def _agent_uplinks(
                         "vlan": None,
                         "a_port": None,
                         "b_port": None,
+                        "speed_mbps": None,
+                        "port_down": False,
                         "quality": q,
                     }
                 )
@@ -464,23 +523,42 @@ def _agent_uplinks(
     return links, subnets
 
 
+def _mark_chokepoints(node_list: list[_Node], link_list: list[dict[str, Any]]) -> None:
+    """S4: flag single points of failure on the assembled graph -- articulation-point
+    nodes and bridge links -- so the canvas can light a 'risk' layer. Pure topology over
+    the graph we just built: no new data, no DB."""
+    g = build_graph(
+        [{"device_nid": n["nid"]} for n in node_list],
+        [{"a_nid": e["a"], "b_nid": e["b"]} for e in link_list],
+    )
+    arts = find_articulation_points(g)
+    bridges = find_bridges(g)
+    for n in node_list:
+        n["articulation"] = n["nid"] in arts
+    for e in link_list:
+        e["bridge"] = frozenset((e["a"], e["b"])) in bridges
+
+
 def build_network_map(
     net_devices: list[dict[str, Any]],
     net_links: list[dict[str, Any]],
     snapshots: list[dict[str, Any]],
     printers: list[dict[str, Any]],
+    net_interfaces: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """The one superset graph: nodes from net_devices + agents + printers + gateways
     (deduped by device_nid), edges from net_links + agent-uplinks (medium/quality),
-    plus a per-subnet anomaly overlay. Pure over already-read inputs."""
+    enriched with interface physics (S3) plus per-subnet anomaly and chokepoint (S4)
+    overlays. Pure over already-read inputs."""
     nodes, by_mac, by_ip, by_device_id, by_printer_id = _seed_net_devices(net_devices)
     _merge_agents(nodes, snapshots, by_mac, by_ip, by_device_id)
     _merge_printers(nodes, printers, by_mac, by_ip, by_printer_id)
-    links = _real_links(net_links, nodes)
+    links = _real_links(net_links, nodes, _index_interfaces(net_interfaces or []))
     uplinks, subnets = _agent_uplinks(snapshots, nodes, by_mac, by_ip, by_device_id)
     links += uplinks
     node_list = sorted(nodes.values(), key=lambda n: n["nid"])
     link_list = sorted(links, key=lambda e: (e["link_kind"], e["a"], e["b"]))
+    _mark_chokepoints(node_list, link_list)
     return {
         "nodes": node_list,
         "links": link_list,

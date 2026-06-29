@@ -178,7 +178,7 @@ def test_real_links_hides_adapter_edge_parallel_to_validated_link() -> None:
             "confidence": "low",
         },
     ]
-    out = _real_links(net_links, {})
+    out = _real_links(net_links, {}, {})
     pairs = [(e["a"], e["b"]) for e in out]
     assert pairs.count(("X", "Y")) == 1  # only ONE X-Y edge
     assert out[0]["via_source"] == "lldp"  # ...and it is the validated one
@@ -194,7 +194,7 @@ def test_real_links_draws_adapter_edge_when_no_validated_link() -> None:
             "confidence": "low",
         },
     ]
-    out = _real_links(net_links, {})
+    out = _real_links(net_links, {}, {})
     assert any(e["a"] == "X" and e["b"] == "Z" for e in out)  # gap filled
 
 
@@ -204,7 +204,7 @@ def test_real_links_keeps_all_validated_links() -> None:
         {"a_nid": "X", "b_nid": "Y", "link_kind": "l2-edge", "via_source": "lldp"},
         {"a_nid": "Y", "b_nid": "Z", "link_kind": "l2-edge", "via_source": "cdp"},
     ]
-    out = _real_links(net_links, {})
+    out = _real_links(net_links, {}, {})
     assert len(out) == 2
 
 

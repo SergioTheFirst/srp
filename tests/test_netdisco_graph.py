@@ -62,3 +62,41 @@ def test_two_independent_failures_are_both_root_causes():
     # h1 and h2 both hang off gw (up) -> two independent edge failures, both causes
     rc = g.find_root_cause(_graph(), down_set={"h1", "h2"}, roots={"R"})
     assert rc == {"h1", "h2"}
+
+
+# --- S4 chokepoints: articulation points & bridges (single-point-of-failure overlay) ---
+# triangle a-b-c-a with a tail c-d -> proves cycle members are NOT cut vertices/bridges.
+_CYCLE_LINKS = [
+    {"a_nid": "a", "b_nid": "b"},
+    {"a_nid": "b", "b_nid": "c"},
+    {"a_nid": "c", "b_nid": "a"},
+    {"a_nid": "c", "b_nid": "d"},
+]
+_CYCLE_DEVICES = [{"device_nid": n} for n in ("a", "b", "c", "d")]
+
+
+def test_find_articulation_points_in_a_tree_are_the_internal_nodes():
+    # gw and sw split the tree if removed; leaves + isolated 'lonely' never do.
+    assert g.find_articulation_points(_graph()) == {"gw", "sw"}
+
+
+def test_find_articulation_points_excludes_nodes_inside_a_cycle():
+    graph = g.build_graph(_CYCLE_DEVICES, _CYCLE_LINKS)
+    # only 'c' (joins the redundant triangle to the dead-end tail 'd') is a SPOF
+    assert g.find_articulation_points(graph) == {"c"}
+
+
+def test_find_bridges_in_a_tree_is_every_edge():
+    assert g.find_bridges(_graph()) == {
+        frozenset({"R", "gw"}),
+        frozenset({"gw", "h1"}),
+        frozenset({"gw", "h2"}),
+        frozenset({"gw", "sw"}),
+        frozenset({"sw", "h3"}),
+    }
+
+
+def test_find_bridges_excludes_edges_inside_a_cycle():
+    graph = g.build_graph(_CYCLE_DEVICES, _CYCLE_LINKS)
+    # the three triangle edges are redundant; only the tail c-d is a bridge
+    assert g.find_bridges(graph) == {frozenset({"c", "d"})}

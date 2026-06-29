@@ -1260,6 +1260,15 @@ def get_net_links() -> list[dict[str, Any]]:
         return [dict(r) for r in conn.execute("SELECT * FROM net_links ORDER BY id").fetchall()]
 
 
+def get_net_interfaces() -> list[dict[str, Any]]:
+    """Every stored interface row (read side: the map joins these onto link endpoints
+    for the operator port alias, negotiated speed and oper-up status -- S3)."""
+    with _connect() as conn:
+        return [
+            dict(r) for r in conn.execute("SELECT * FROM net_interfaces ORDER BY id").fetchall()
+        ]
+
+
 def get_latest_topology_snapshot() -> Optional[dict[str, Any]]:
     """The newest stored topology snapshot (parsed graph), or None when absent."""
     with _connect() as conn:
