@@ -430,6 +430,29 @@ def test_netmap_side_panel_isolate_and_drag_persistence_are_wired(client):
     assert "persistPositions();" in body
 
 
+def test_netmap_node_predicate_is_in_outer_scope_for_pick(client):
+    """Regression pin (live bug 2026-06-28): ``nodeFilteredOut`` MUST be declared at the
+    engine IIFE scope -- i.e. BEFORE ``function draw`` -- because ``pick()`` (called on
+    every mousedown/mousemove) uses it. When it was nested inside ``draw()`` instead,
+    every ``pick`` threw ``ReferenceError: nodeFilteredOut is not defined``, which killed
+    ALL pointer interaction (select / drag / hover / click-through to the card) even
+    though the static render kept working (draw had it in scope). pytest cannot execute
+    canvas JS, so we pin the *scope* structurally: a single definition that precedes
+    ``draw`` and is referenced by ``pick``."""
+    _ingest(client, "map-pred", _net_payload())
+    body = client.get("/netmap").text
+    i_pred = body.find("function nodeFilteredOut(")
+    i_draw = body.find("function draw(")
+    i_pick = body.find("function pick(")
+    assert i_pred != -1 and i_draw != -1 and i_pick != -1
+    # outer scope => the definition appears before draw (not nested inside it)
+    assert i_pred < i_draw, "nodeFilteredOut must be declared before draw (outer scope)"
+    # pick() relies on it (the call lives in pick's body)
+    assert "nodeFilteredOut(n)" in body[i_pick : i_pick + 400]
+    # exactly one definition -> no stale shadow copy left inside draw
+    assert body.count("function nodeFilteredOut(") == 1
+
+
 # --- Ф10: «Топология» demolished -> one entry point, /netmap -------------------
 
 
