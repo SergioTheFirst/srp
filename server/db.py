@@ -553,6 +553,7 @@ def touch_device(
     device_id: str,
     ts: str,
     agent_version: str,
+    hostname: Optional[str] = None,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
     org_code: Optional[str] = None,
@@ -573,12 +574,13 @@ def touch_device(
         conn.execute(
             """
             INSERT INTO devices
-              (device_id, agent_version, first_seen, last_seen,
+              (device_id, hostname, agent_version, first_seen, last_seen,
                site_code, site_name, org_code, dept_code, comment,
                last_reported_ts, clock_drift_sec)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               last_seen = excluded.last_seen,
+              hostname   = COALESCE(excluded.hostname, devices.hostname),
               site_code  = COALESCE(excluded.site_code, devices.site_code),
               site_name  = COALESCE(excluded.site_name, devices.site_name),
               org_code   = COALESCE(excluded.org_code, devices.org_code),
@@ -589,6 +591,7 @@ def touch_device(
             """,
             (
                 device_id,
+                hostname,
                 agent_version,
                 recv,
                 recv,

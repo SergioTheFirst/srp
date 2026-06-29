@@ -45,6 +45,7 @@ class ConfigError(ValueError):
 class ClientConfig:
     server_url: str = ""  # required: operator sets this per deployment (no default)
     device_id: str = ""  # resolved on first run, then persisted
+    hostname: str = ""  # live machine name (platform.node), refreshed each load
     inventory_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
     historical_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
     heartbeat_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
@@ -162,6 +163,11 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
         for key, value in data.items():
             if key in known:
                 setattr(cfg, key, value)
+
+    # hostname is display/identity, not a stable key: always reflect the CURRENT
+    # machine name rather than a value cached on disk, so a rename surfaces at
+    # once. device_id stays persisted -- it is the server PRIMARY KEY.
+    cfg.hostname = _hostname()
 
     if not cfg.device_id:
         cfg.device_id = resolve_device_id(_machine_guid(), _hostname())
