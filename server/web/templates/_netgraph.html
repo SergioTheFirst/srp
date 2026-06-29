@@ -180,6 +180,9 @@
     <div class="ng-section">
       <div class="ng-stitle">Слои</div>
       <div class="ng-checks" id="ng-layers"></div>
+      <label style="display:flex;gap:4px;align-items:center;margin-top:4px;cursor:pointer">
+        <input type="checkbox" id="ng-f-stale"> скрыть устаревшие (дольше суток)
+      </label>
     </div>
     <div class="ng-section">
       <div class="ng-stitle">Раскладка</div>
@@ -307,6 +310,7 @@
       status: n.status, model: n.model, subnet: n.subnet,
       device_id: n.device_id, printer_id: n.printer_id, card_url: n.card_url,
       provenance: n.provenance || [], quality: q,
+      lastSeenMs: Date.parse(n.last_seen || ""), articulation: !!n.articulation,
       cls: cls, r: nodeRadius(t),
       x: (rnd() - 0.5) * 600, y: (rnd() - 0.5) * 400, vx: 0, vy: 0,
       filter: ((n.hostname || "") + " " + (n.ip || "") + " " + (n.mac || "") +
@@ -322,7 +326,8 @@
       links.push({
         a: a, b: b, conf: l.confidence, kind: l.link_kind,
         ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality, vlan: l.vlan,
-        via: l.via_source, a_port: l.a_port, b_port: l.b_port, idx: links.length
+        via: l.via_source, a_port: l.a_port, b_port: l.b_port,
+        speed: l.speed_mbps, portDown: !!l.port_down, bridge: !!l.bridge, idx: links.length
       });
     }
   });
@@ -341,8 +346,8 @@
   var PROV = ["agent","printer","gateway","net"];
   var state = {
     types: {}, status: {}, medium: {}, conf: {}, prov: {},
-    confirmedOnly: false, subnet: "",
-    layers: { l2: true, l3: true, uplink: true, wireless: true, quality: true, groups: true, ports: true },
+    confirmedOnly: false, subnet: "", hideStale: false,
+    layers: { l2: true, l3: true, uplink: true, wireless: true, quality: true, groups: true, ports: true, freshness: true, risk: false },
     layout: "free", mode: null,           /* null | "path" | "isolate" | "cause" */
     pathSel: [], isolateRoot: null, isolateN: 2
   };
@@ -354,9 +359,30 @@
 
   var FILTER = "", hover = null, hoverEdge = null, selected = null;
 
+  /* ── S1/S3/S4 helpers: the canvas owns the wall clock, so age bands compute here
+     (the assembler stays pure and only carries raw last_seen). ── */
+  var DAY_MS = 86400000, HOUR_MS = 3600000, MIN5_MS = 300000;
+  function nodeAgeMs(n) { return isNaN(n.lastSeenMs) ? NaN : (Date.now() - n.lastSeenMs); }
+  function isStale(n) { var a = nodeAgeMs(n); return !isNaN(a) && a > DAY_MS; }
+  function freshClass(n) {
+    var a = nodeAgeMs(n);
+    if (isNaN(a)) return null;            /* unknown age -> no ring (never fake confidence) */
+    return a < MIN5_MS ? "good" : a < HOUR_MS ? "warn" : "muted";
+  }
+  function freshAgo(n) {
+    var a = nodeAgeMs(n); if (isNaN(a)) return "н/д";
+    var m = Math.floor(a / 60000); if (m < 1) return "только что";
+    if (m < 60) return m + " мин назад";
+    var h = Math.floor(m / 60); if (h < 24) return h + " ч назад";
+    return Math.floor(h / 24) + " сут назад";
+  }
+  function speedWidth(s) { return s == null ? 0 : s >= 10000 ? 3 : s >= 1000 ? 2.2 : s >= 100 ? 1.5 : 1; }
+  function fmtSpeed(s) { return s == null ? "—" : s >= 1000 ? (s / 1000) + " Гбит/с" : s + " Мбит/с"; }
+
   /* — узел прошёл фильтры (текстовый поиск + чекбоксы) — */
   function nodeOk(n) {
     if (FILTER && n.filter.indexOf(FILTER) === -1) return false;
+    if (state.hideStale && isStale(n)) return false;
     if (!state.types[n.type]) return false;
     if (n.status && !state.status[n.status]) return false;
     if (n.subnet && state.subnet && n.subnet !== state.subnet) return false;
@@ -584,6 +610,24 @@
       ctx.globalAlpha = 0.95; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.8;
       ctx.beginPath(); ctx.arc(n.x, n.y, r + 5, 0, 6.2832); ctx.stroke();
     }
+    /* S1 freshness ring: age band by last_seen; >1d is faint + dashed (a ghost marker) */
+    if (state.layers.freshness && !dimmed) {
+      var fc = freshClass(n);
+      if (fc) {
+        var st = isStale(n);
+        ctx.globalAlpha = st ? 0.3 : 0.7; ctx.strokeStyle = C[fc]; ctx.lineWidth = 1.4;
+        ctx.setLineDash(st ? [2, 3] : []);
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 3, 0, 6.2832); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    /* S4 risk overlay: a single point of failure (articulation node) */
+    if (state.layers.risk && n.articulation && !dimmed) {
+      ctx.globalAlpha = 0.9; ctx.strokeStyle = C.bad; ctx.lineWidth = 2;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(n.x, n.y, r + 7, 0, 6.2832); ctx.stroke();
+      ctx.setLineDash([]);
+    }
     if (view.k > 0.6 && n.r >= 8) {
       var name = t === "printer" ? "🖨 " + (n.hostname || n.ip || n.nid || "")
                 : (n.hostname || n.ip || n.nid || "");
@@ -705,10 +749,21 @@
       var baseAlpha = dim ? 0.04 : (focus || onP ? 0.95 : neighFocus ? 0.85 : (L.kind === "agent-uplink" ? 0.4 : confAlpha(L.conf)));
       ctx.globalAlpha = baseAlpha;
       ctx.strokeStyle = C[lcls];
-      ctx.lineWidth = onP ? 3.2 : lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1;
+      var lw = onP ? 3.2 : Math.max(lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1, speedWidth(L.speed));
+      ctx.lineWidth = lw;
       ctx.setLineDash((L.medium === "wireless" || L.ambiguous) && !onP ? [4, 4] : []);
       ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
       ctx.setLineDash([]);
+      if (L.portDown && !dim) {  /* S3: a port reported oper-down on a live edge */
+        ctx.globalAlpha = 0.9; ctx.fillStyle = C.bad;
+        ctx.beginPath(); ctx.arc((L.a.x + L.b.x) / 2, (L.a.y + L.b.y) / 2, 2.6, 0, 6.2832); ctx.fill();
+      }
+      if (state.layers.risk && L.bridge && !dim) {  /* S4: a bridge edge (segment's only link) */
+        ctx.globalAlpha = 0.95; ctx.strokeStyle = C.bad; ctx.lineWidth = Math.max(lw, 2);
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
       if (!reduceMotion && qloss != null && state.layers.quality && !dim) {
         var t = ((now / 2400) + L.idx * 0.37) % 1;
         var die = lcls === "bad" ? 0.55 : lcls === "warn" ? 0.8 : 1.01;
@@ -801,6 +856,9 @@
     if (n.mac) row("t-muted", "MAC: " + n.mac);
     if (n.vendor) row("t-muted", n.vendor);
     if (n.subnet) row("t-muted", "подсеть " + n.subnet);
+    var fc2 = freshClass(n);
+    if (fc2) row(tipCls(fc2), "активность: " + freshAgo(n));
+    if (n.articulation) row("t-bad", "⚠ точка единого отказа");
     if (n.quality) {
       row(tipCls(lossClass(n.quality.loss_pct)),
           "потери до шлюза: " + fmtLoss(n.quality.loss_pct) + " · задержка: " + fmtLat(n.quality.latency_ms));
@@ -824,6 +882,9 @@
     /* a_port/b_port are SNMP strings; safe here only because row() uses textContent */
     if (state.layers.ports && (L.a_port || L.b_port))
       row("t-muted", "порты: " + (L.a_port || "?") + " ↔ " + (L.b_port || "?"));
+    if (L.speed != null) row("t-muted", "скорость: " + fmtSpeed(L.speed));
+    if (L.portDown) row("t-bad", "⚠ порт down на живом устройстве");
+    if (L.bridge) row("t-warn", "мост — единственная связь сегмента");
     if (L.vlan != null) row("t-muted", "VLAN: " + L.vlan);
     if (L.quality) row(tipCls(lossClass(L.quality.loss_pct)),
         "потери: " + fmtLoss(L.quality.loss_pct) + " · задержка: " + fmtLat(L.quality.latency_ms));
@@ -1041,7 +1102,8 @@
   var layerDefs = [
     { id: "l2", label: "L2" }, { id: "l3", label: "L3" }, { id: "uplink", label: "аплинк агента" },
     { id: "wireless", label: "беспроводные" }, { id: "quality", label: "качество/пульс" },
-    { id: "groups", label: "группы подсетей" }, { id: "ports", label: "метки портов" }
+    { id: "groups", label: "группы подсетей" }, { id: "ports", label: "метки портов" },
+    { id: "freshness", label: "свежесть (возраст)" }, { id: "risk", label: "риск (точки отказа)" }
   ];
   var lc = document.getElementById("ng-layers");
   if (lc) layerDefs.forEach(function (ld) {
@@ -1051,6 +1113,8 @@
     lbl.appendChild(cb); lbl.appendChild(document.createTextNode(ld.label));
     lc.appendChild(lbl);
   });
+  var staleCb = document.getElementById("ng-f-stale");
+  if (staleCb) staleCb.onchange = function () { state.hideStale = staleCb.checked; invalidate(); };
 
   /* раскладка */
   var layoutSel = document.getElementById("ng-layout");
