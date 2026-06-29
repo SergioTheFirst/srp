@@ -389,6 +389,18 @@
     if (linkMedium(L) === "wireless" && !state.layers.wireless) return false;
     return true;
   }
+  /* — узел скрыт фильтрами ИЛИ вне N-hop-изоляции — общий предикат для draw И pick.
+     ДОЛЖЕН жить в области видимости IIFE (а не внутри draw): его зовёт pick() на
+     каждый mousedown/mousemove. Если он вложен в draw — pick ловит ReferenceError,
+     и это рвёт ВСЮ интерактивность (выбор/перетаскивание/ховер/клик-карточка),
+     хотя статичная отрисовка (внутри draw) продолжает работать. navCache.iso
+     читается на вызове (в draw тот же кадровый снимок). */
+  function nodeFilteredOut(n) {
+    if (!nodeOk(n)) return true;
+    var iso = navCache.iso;
+    if (iso && !(n.nid in iso)) return true;
+    return false;
+  }
 
   /* ═════════ физика + раскладки ═════════ */
   var W = Math.max(stage.clientWidth || 900, 320), H = 560;
@@ -672,11 +684,6 @@
     var neighHi = {};
     if (selected && (adj[selected.nid] || []).length) {
       neighHi[selected.nid] = 1; (adj[selected.nid] || []).forEach(function (nb) { neighHi[nb] = 1; });
-    }
-    function nodeFilteredOut(n) {
-      if (!nodeOk(n)) return true;
-      if (iso && !(n.nid in iso)) return true;
-      return false;
     }
 
     for (var i = 0; i < links.length; i++) {
