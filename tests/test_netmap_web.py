@@ -145,6 +145,28 @@ def test_netmap_anomaly_overlay_lands_on_gateway(client):
     assert g["totals"]["anomalies"] >= 1
 
 
+def test_netmap_canvas_enrichment_layers_and_fields(client):
+    """Sprint-1 enrichment: the page exposes the freshness/risk layers + the hide-stale
+    toggle, and the embedded graph carries the new per-node/per-link fields the canvas
+    renders (freshness age, chokepoints, edge physics) -- pinned as strings + on-page
+    data because pytest cannot execute the canvas JS."""
+    _ingest(client, "map-91", _net_payload())
+    body = client.get("/netmap").text
+    # new control-panel affordances (S1 freshness, S4 risk, hide-stale toggle)
+    assert "свежесть (возраст)" in body
+    assert "риск (точки отказа)" in body
+    assert "скрыть устаревшие" in body
+    # tooltip vocabulary present in the engine source (S4 / S3)
+    assert "точка единого отказа" in body
+    assert "порт down на живом устройстве" in body
+    # the data the canvas needs actually reaches the page
+    g = _embedded_graph(body)
+    assert all("first_seen" in n and "last_seen" in n and "articulation" in n for n in g["nodes"])
+    assert all("speed_mbps" in e and "port_down" in e and "bridge" in e for e in g["links"])
+    # the lone agent->gateway uplink is a bridge: removing it strands the agent
+    assert any(e["bridge"] for e in g["links"])
+
+
 def test_netmap_wireless_uplink_marked(client):
     """A Wi-Fi agent uplink is tagged medium=wireless (Ф2 heuristic) and reaches the
     canvas engine so it renders dashed."""
