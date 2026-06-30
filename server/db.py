@@ -291,6 +291,15 @@ CREATE TABLE IF NOT EXISTS net_device_readings (
   detail      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_netread_device ON net_device_readings(device_nid, id);
+CREATE TABLE IF NOT EXISTS net_routes (
+  device_nid  TEXT,
+  cidr        TEXT,
+  next_hop    TEXT,
+  ifindex     INTEGER,
+  first_seen  TEXT,
+  last_seen   TEXT,
+  PRIMARY KEY (device_nid, cidr)
+);
 CREATE TABLE IF NOT EXISTS net_topology_snapshots (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   received_at TEXT,
@@ -1258,6 +1267,43 @@ def get_net_links() -> list[dict[str, Any]]:
     """Every resolved topology link (read side for the graph engine / map)."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM net_links ORDER BY id").fetchall()]
+
+
+def add_net_route(device_nid: str, cidr: str, next_hop: str, ifindex: Optional[int]) -> None:
+    """Persist one harvested L3 route (A2): upsert by (device_nid, cidr) -> next-hop /
+    ifindex / last_seen refresh, first_seen preserved. Parameterised (no interpolation)."""
+    if not device_nid or not cidr:
+        return
+    now = _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_routes (device_nid, cidr, next_hop, ifindex, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(device_nid, cidr) DO UPDATE SET
+              next_hop  = excluded.next_hop,
+              ifindex   = excluded.ifindex,
+              last_seen = excluded.last_seen
+            """,
+            (device_nid, cidr, next_hop, ifindex, now, now),
+        )
+
+
+def get_net_routes(max_age_days: int = 7) -> list[dict[str, Any]]:
+    """Recently-seen L3 routes (read side: the map draws router -> next-hop L3 edges).
+    Aged by ``last_seen`` so a decommissioned router's routes stop rendering -- net_routes
+    is NOT reconcile-deleted, but rows are bounded by the real router count (stable MAC
+    nids). ponytail: last_seen read-filter; add a per-cycle reconcile-delete only if
+    hardware turnover proves high. Cutoff is a bound parameter (no SQL interpolation)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, max_age_days))).isoformat()
+    with _connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_routes WHERE last_seen >= ? ORDER BY device_nid, cidr",
+                (cutoff,),
+            ).fetchall()
+        ]
 
 
 def get_net_interfaces() -> list[dict[str, Any]]:

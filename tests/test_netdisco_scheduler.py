@@ -7,6 +7,7 @@ firing mid-poll) returns 'busy' instead of launching a second pass.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from server.netdisco import scheduler
@@ -158,11 +159,58 @@ def test_run_discovery_cycle_harvests_arp_and_routes_from_infra_only() -> None:
         harvest_arp_fn=lambda s: [("10.0.0.50", "AA-BB-CC-00-00-50")],
         harvest_routes_fn=lambda s: [("10.0.0.0/24", "10.0.0.99", 1)],
         upsert=captured.append,
+        add_route=lambda *a: None,
     )
     assert sessions_for == ["10.0.0.1"]  # only the router was harvested, not the endpoint
     ips = {d["ip"] for d in captured}
     assert "10.0.0.50" in ips and "10.0.0.99" in ips  # ARP neighbour + route next-hop found
     assert result["active"] == 1 and result["busy"] == 0
+
+
+def test_harvest_infra_persists_routes_and_seeds_lldp_mgmt() -> None:
+    # A2: the (cidr, next_hop, ifindex) triple is persisted (not just next_hop kept).
+    # A1: LLDP remote management addresses become discovery candidates (no ping scan).
+    written: list = []
+    pairs = scheduler._harvest_infra(
+        [{"device_nid": "nd-rt", "dev_type": "router", "ip": "10.0.0.1"}],
+        NetdiscoConfig(),
+        session_factory=lambda ip, c: "sess",
+        harvest_arp_fn=lambda s: [],
+        harvest_routes_fn=lambda s: [("10.1.0.0/24", "10.0.0.99", 3)],
+        collect_mgmt_fn=lambda local, s: [("nd-rt", "10.0.0.50")],
+        add_route=lambda nid, cidr, nh, ifx: written.append((nid, cidr, nh, ifx)),
+    )
+    assert ("10.0.0.99", None) in pairs  # route next-hop -> candidate (kept)
+    assert ("10.0.0.50", None) in pairs  # lldp mgmt-addr -> candidate (A1)
+    assert written == [("nd-rt", "10.1.0.0/24", "10.0.0.99", 3)]  # route persisted (A2)
+
+
+def test_harvest_infra_mgmt_failure_never_breaks_the_cycle() -> None:
+    # a bad infra host (mgmt walk raises) must not lose the arp/route candidates
+    def boom(local: str, s: object) -> list:
+        raise RuntimeError("snmp blew up")
+
+    pairs = scheduler._harvest_infra(
+        [{"device_nid": "nd-rt", "dev_type": "router", "ip": "10.0.0.1"}],
+        NetdiscoConfig(),
+        session_factory=lambda ip, c: "sess",
+        harvest_arp_fn=lambda s: [("10.0.0.7", "AA-BB-CC-00-00-07")],
+        harvest_routes_fn=lambda s: [],
+        collect_mgmt_fn=boom,
+    )
+    assert ("10.0.0.7", "AA-BB-CC-00-00-07") in pairs
+
+
+def test_net_routes_roundtrip_upsert(tmp_path: Path) -> None:
+    from server import db
+
+    db.init_db(tmp_path / "routes.db")
+    db.add_net_route("nd-rt", "10.1.0.0/24", "10.0.0.99", 3)
+    db.add_net_route("nd-rt", "10.1.0.0/24", "10.0.0.99", 3)  # idempotent upsert
+    rows = [r for r in db.get_net_routes() if r["device_nid"] == "nd-rt"]
+    assert len(rows) == 1
+    assert rows[0]["cidr"] == "10.1.0.0/24" and rows[0]["next_hop"] == "10.0.0.99"
+    assert rows[0]["ifindex"] == 3
 
 
 # --- Phase 6: classify cycle (probe known -> classify -> upsert type + ifaces) ---

@@ -29,6 +29,7 @@ from server.netdisco.config import NetdiscoConfig
 from server.netdisco.credentials import default_store, resolve_community
 from server.netdisco.discovery import gather_candidates
 from server.netdisco.drivers import select_driver
+from server.netdisco.evidence import collect_lldp_mgmt
 from server.netdisco.identity import device_nid, link_identities
 from server.netdisco.inventory import build_inventory, persist_inventory
 from server.netdisco.models import DeviceProfile
@@ -115,11 +116,14 @@ def _harvest_infra(
     session_factory: Callable[[str, NetdiscoConfig], Any],
     harvest_arp_fn: HarvestFn,
     harvest_routes_fn: HarvestFn,
+    collect_mgmt_fn: Callable[[str, Any], list] = collect_lldp_mgmt,
+    add_route: Optional[Callable[[str, str, str, Optional[int]], None]] = None,
 ) -> list[tuple]:
-    """Passively walk ARP + routes off each known router/switch -> (ip, mac) pairs
-    (route next-hops carried as (next_hop, None)). RFC1918-gated, read-only; harvest
-    helpers never raise (SNMP garbage -> empty), so one bad infra host can't break
-    the cycle."""
+    """Passively walk ARP + routes + LLDP mgmt-addrs off each known router/switch ->
+    (ip, mac) candidate pairs. A2: persist the full (cidr, next_hop, ifindex) route triple
+    via ``add_route`` (was: only next_hop kept). A1: LLDP remote management addresses seed
+    discovery (no ping scan). RFC1918-gated, read-only; the mgmt walk is best-effort so one
+    bad infra host never breaks the cycle (ARP/route candidates survive a mgmt failure)."""
     pairs: list[tuple] = []
     for dev in devices:
         if dev.get("dev_type") not in _INFRA_TYPES:
@@ -129,7 +133,16 @@ def _harvest_infra(
             continue
         session = session_factory(ip, cfg)
         pairs.extend(harvest_arp_fn(session))
-        pairs.extend((next_hop, None) for _cidr, next_hop, _ifx in harvest_routes_fn(session))
+        nid = dev.get("device_nid")
+        for _cidr, next_hop, _ifx in harvest_routes_fn(session):
+            pairs.append((next_hop, None))
+            if add_route and nid:
+                add_route(nid, _cidr, next_hop, _ifx)
+        try:
+            for _local, mgmt_ip in collect_mgmt_fn(ip, session):
+                pairs.append((mgmt_ip, None))
+        except Exception:
+            _log.debug("lldp mgmt-addr harvest failed for %s", ip, exc_info=True)
     return pairs
 
 
@@ -143,6 +156,7 @@ def run_discovery_cycle(
     session_factory: Optional[Callable[[str, NetdiscoConfig], Any]] = None,
     harvest_arp_fn: HarvestFn = harvest.harvest_arp,
     harvest_routes_fn: HarvestFn = harvest.harvest_routes,
+    add_route: Callable[[str, str, str, Optional[int]], None] = db.add_net_route,
 ) -> dict[str, int]:
     """Active-scan discovery: find live hosts (scan + passive SNMP harvest off known
     routers/switches), merge with ARP/static, persist the NEW ones (serialized by the
@@ -163,7 +177,7 @@ def run_discovery_cycle(
         scan_ips = tuple(scan_fn(cfg))
         known_devices = get_known()
         harvest_pairs = _harvest_infra(
-            known_devices, cfg, factory, harvest_arp_fn, harvest_routes_fn
+            known_devices, cfg, factory, harvest_arp_fn, harvest_routes_fn, add_route=add_route
         )
         candidates = gather_candidates(
             arp_snapshots=get_snapshots(),
