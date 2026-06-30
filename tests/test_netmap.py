@@ -221,7 +221,9 @@ def test_subnet_anomaly_cohort_and_threshold():
     bad = subnet_anomaly([30.0, 40.0])
     assert bad["anomaly"] is True
     assert bad["reporting"] == 2 and bad["degraded"] == 2
+    assert bad["loss_pct"] == 35.0  # B6: cohort magnitude, not just the boolean
     assert "инфраструктур" in bad["reason"]
+    assert subnet_anomaly([])["loss_pct"] is None
     assert subnet_anomaly([30.0, 0.0, 0.0])["anomaly"] is False
     assert subnet_anomaly([90.0])["anomaly"] is False  # cohort < 2 never alarms
     assert subnet_anomaly([])["anomaly"] is False

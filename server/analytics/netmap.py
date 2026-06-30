@@ -176,6 +176,7 @@ def subnet_anomaly(losses: list[Optional[float]]) -> dict[str, Any]:
     return {
         "reporting": len(reporting),
         "degraded": len(degraded),
+        "loss_pct": round(sum(reporting) / len(reporting), 1) if reporting else None,
         "anomaly": anomaly,
         "reason": reason,
     }

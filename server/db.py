@@ -1269,6 +1269,26 @@ def get_net_interfaces() -> list[dict[str, Any]]:
         ]
 
 
+def get_net_device_status_series(per_device: int = 48) -> dict[str, list[str]]:
+    """Recent reachability statuses per net device (oldest->newest, capped per device)
+    for the map's 24h sparkline + flap count (S5). A window function bounds the read to
+    <= per_device rows each, so a chatty device never starves the rest."""
+    cap = max(1, min(int(per_device), 200))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_nid, status FROM ("
+            " SELECT device_nid, status, id,"
+            " ROW_NUMBER() OVER (PARTITION BY device_nid ORDER BY id DESC) AS rn"
+            " FROM net_device_readings"
+            ") WHERE rn <= ? ORDER BY device_nid, id",
+            (cap,),
+        ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["device_nid"], []).append(r["status"])
+    return out
+
+
 def get_latest_topology_snapshot() -> Optional[dict[str, Any]]:
     """The newest stored topology snapshot (parsed graph), or None when absent."""
     with _connect() as conn:

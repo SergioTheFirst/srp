@@ -167,6 +167,23 @@ def test_netmap_canvas_enrichment_layers_and_fields(client):
     assert any(e["bridge"] for e in g["links"])
 
 
+def test_netmap_canvas_sprint2_overlays_and_fields(client):
+    """Sprint-2 enrichment: the changes layer + confirmed/sparkline/last-visit affordances
+    are on the page, and the embedded graph carries the change/confirmed/reach fields."""
+    _ingest(client, "map-95", _net_payload())
+    body = client.get("/netmap").text
+    assert "изменения" in body  # S2 change-overlay layer label
+    assert "достижимость 24ч" in body  # S5 reachability sparkline
+    assert "подтверждено по SNMP" in body  # B7 confirmed badge
+    assert "новое с прошлого визита" in body  # D2 last-visit
+    g = _embedded_graph(body)
+    assert all(
+        "confirmed" in n and "change" in n and "reach_series" in n and "flaps" in n
+        for n in g["nodes"]
+    )
+    assert all("change" in e for e in g["links"])
+
+
 def test_netmap_wireless_uplink_marked(client):
     """A Wi-Fi agent uplink is tagged medium=wireless (Ф2 heuristic) and reaches the
     canvas engine so it renders dashed."""
