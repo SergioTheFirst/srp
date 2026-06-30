@@ -315,6 +315,7 @@
       lastSeenMs: Date.parse(n.last_seen || ""), articulation: !!n.articulation,
       firstSeenMs: Date.parse(n.first_seen || ""), confirmed: !!n.confirmed,
       change: n.change, change_ts: n.change_ts, reach: n.reach_series || [], flaps: n.flaps || 0,
+      signal_pct: n.signal_pct, low_supply_pct: n.low_supply_pct, error_count: n.error_count,
       cls: cls, r: nodeRadius(t),
       x: (rnd() - 0.5) * 600, y: (rnd() - 0.5) * 400, vx: 0, vy: 0,
       filter: ((n.hostname || "") + " " + (n.ip || "") + " " + (n.mac || "") +
@@ -342,7 +343,7 @@
         ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality, vlan: l.vlan,
         via: l.via_source, a_port: l.a_port, b_port: l.b_port,
         speed: l.speed_mbps, portDown: !!l.port_down, bridge: !!l.bridge,
-        change: l.change, idx: links.length
+        change: l.change, cidr: l.cidr, idx: links.length
       });
     }
   });
@@ -681,6 +682,14 @@
       ctx.globalAlpha = 0.8; ctx.fillStyle = C.good; ctx.font = "700 9px " + C.mono;
       ctx.textAlign = "center"; ctx.fillText("✓", n.x - r, n.y - r);
     }
+    if (!dimmed && (n.error_count > 0 || (n.low_supply_pct != null && n.low_supply_pct <= 15))) {
+      ctx.globalAlpha = 0.95; ctx.fillStyle = n.error_count > 0 ? C.bad : C.warn;  /* B3 printer */
+      ctx.beginPath(); ctx.arc(n.x + r, n.y + r, 2.8, 0, 6.2832); ctx.fill();
+    }
+    if (!dimmed && n.signal_pct != null && n.signal_pct < 30) {  /* B2: weak wifi signal */
+      ctx.globalAlpha = 0.95; ctx.fillStyle = C.bad;
+      ctx.beginPath(); ctx.arc(n.x - r, n.y + r, 2.8, 0, 6.2832); ctx.fill();
+    }
     if (view.k > 0.6 && n.r >= 8) {
       var name = t === "printer" ? "🖨 " + (n.hostname || n.ip || n.nid || "")
                 : (n.hostname || n.ip || n.nid || "");
@@ -935,6 +944,12 @@
     if (n.confirmed) row("t-good", "✓ подтверждено по SNMP");
     if (n.change) row(changeCls(n.change), "изменение: " + changeRu(n.change));
     if (n.isNew) row("t-warn", "новое с прошлого визита");
+    if (n.signal_pct != null)
+      row(tipCls(n.signal_pct >= 70 ? "good" : n.signal_pct >= 30 ? "warn" : "bad"),
+          "сигнал Wi-Fi: " + Math.round(n.signal_pct) + "%");
+    if (n.low_supply_pct != null && n.low_supply_pct <= 15)
+      row("t-warn", "мало расходников: " + Math.round(n.low_supply_pct) + "%");
+    if (n.error_count > 0) row("t-bad", "ошибок принтера: " + n.error_count);
     if (n.card_url) row("t-muted", "клик — детали и карточка устройства");
     positionTip(e);
   }
@@ -954,6 +969,7 @@
     if (L.speed != null) row("t-muted", "скорость: " + fmtSpeed(L.speed));
     if (L.portDown) row("t-bad", "⚠ порт down на живом устройстве");
     if (L.bridge) row("t-warn", "мост — единственная связь сегмента");
+    if (L.cidr) row("t-muted", "маршрут до " + L.cidr);
     if (L.change) row(changeCls(L.change), "изменение: " + changeRu(L.change));
     if (L.vlan != null) row("t-muted", "VLAN: " + L.vlan);
     if (L.quality) row(tipCls(lossClass(L.quality.loss_pct)),

@@ -378,3 +378,36 @@ def test_reachability_series_and_flap_count_on_node():
     )
     assert by[a1]["reach_series"] == ["up", "up", "down", "up", "down"]
     assert by[a1]["flaps"] == 3
+
+
+# --- Sprint 3: L3 routes (A2), wifi signal (B2), printer supplies (B3) ---
+def test_l3_route_overlay_emits_l3_link_to_next_hop():
+    rt, gw = device_nid(mac=RT), device_nid(mac=SW)
+    nds = [_nd(rt, "router", "10.0.0.1", RT), _nd(gw, "router", "10.0.0.99", SW)]
+    routes = [{"device_nid": rt, "cidr": "10.1.0.0/24", "next_hop": "10.0.0.99", "ifindex": 3}]
+    g = build_network_map(nds, [], [], [], net_routes=routes)
+    l3 = [e for e in g["links"] if e["link_kind"] == "l3-route"]
+    assert len(l3) == 1 and {l3[0]["a"], l3[0]["b"]} == {rt, gw}
+    assert l3[0]["medium"] == "l3" and l3[0]["cidr"] == "10.1.0.0/24"
+
+
+def test_l3_route_to_unknown_next_hop_is_dropped():
+    rt = device_nid(mac=RT)
+    routes = [{"device_nid": rt, "cidr": "10.1.0.0/24", "next_hop": "10.9.9.9", "ifindex": 1}]
+    g = build_network_map([_nd(rt, "router", "10.0.0.1", RT)], [], [], [], net_routes=routes)
+    assert not [e for e in g["links"] if e["link_kind"] == "l3-route"]  # next_hop not a node
+
+
+def test_agent_node_carries_wifi_signal():
+    a1 = device_nid(mac=A1)
+    snap = _snap("d1", A1)
+    snap["adapters"][0]["signal_pct"] = 72
+    assert _by_nid(build_network_map([], [], [snap], []))[a1]["signal_pct"] == 72
+
+
+def test_printer_node_carries_supply_and_error_status():
+    pr = device_nid(mac=PR)
+    p = _printer("p1", mac=PR, ip="192.168.1.20")
+    p["low_supply_pct"], p["error_count"] = 8, 2
+    by = _by_nid(build_network_map([], [], [], [p]))
+    assert by[pr]["low_supply_pct"] == 8 and by[pr]["error_count"] == 2

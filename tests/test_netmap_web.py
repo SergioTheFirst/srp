@@ -184,6 +184,18 @@ def test_netmap_canvas_sprint2_overlays_and_fields(client):
     assert all("change" in e for e in g["links"])
 
 
+def test_netmap_canvas_sprint3_l3_signal_supplies(client):
+    """Sprint-3: L3-route tooltip + wifi-signal/printer-supply vocab on the page, and the
+    agent node carries the new signal field (A2/B2/B3)."""
+    _ingest(client, "map-97", _net_payload())
+    body = client.get("/netmap").text
+    assert "сигнал Wi-Fi" in body  # B2
+    assert "мало расходников" in body  # B3
+    assert "маршрут до" in body  # A2 L3 route tooltip
+    agent = next(n for n in _embedded_graph(body)["nodes"] if n.get("device_id") == "map-97")
+    assert "signal_pct" in agent
+
+
 def test_netmap_wireless_uplink_marked(client):
     """A Wi-Fi agent uplink is tagged medium=wireless (Ф2 heuristic) and reaches the
     canvas engine so it renders dashed."""

@@ -205,6 +205,7 @@ def _synth_agent_node(nid: str, snap: dict[str, Any], did: str) -> _Node:
         "subtype": None,
         "first_seen": None,
         "last_seen": snap.get("last_seen"),
+        "signal_pct": a0.get("signal_pct"),  # B2: wifi signal of the primary adapter
         "device_id": did,
         "printer_id": None,
         "card_url": _card_url(did, None, nid),
@@ -233,6 +234,8 @@ def _enrich_agent(node: _Node, snap: dict[str, Any], did: str) -> None:
         node["hostname"] = snap.get("hostname")
     if snap.get("last_seen"):
         node["last_seen"] = snap["last_seen"]  # live agent contact is fresher than discovery
+    if a0.get("signal_pct") is not None:
+        node["signal_pct"] = a0.get("signal_pct")
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"agent"})
     node["card_url"] = _card_url(did, node.get("printer_id"), node["nid"])
 
@@ -280,6 +283,8 @@ def _synth_printer_node(nid: str, p: dict[str, Any], pid: str) -> _Node:
         "subtype": "printer",
         "first_seen": None,
         "last_seen": p.get("last_seen"),
+        "low_supply_pct": p.get("low_supply_pct"),  # B3: derived in get_printers
+        "error_count": p.get("error_count"),
         "device_id": None,
         "printer_id": pid,
         "card_url": _card_url(None, pid, nid),
@@ -306,6 +311,10 @@ def _enrich_printer(node: _Node, p: dict[str, Any], pid: str) -> None:
         node["hostname"] = p.get("hostname")
     if p.get("last_seen"):
         node["last_seen"] = p["last_seen"]
+    if p.get("low_supply_pct") is not None:
+        node["low_supply_pct"] = p.get("low_supply_pct")
+    if p.get("error_count") is not None:
+        node["error_count"] = p.get("error_count")
     node["provenance"] = sorted(set(node.get("provenance") or []) | {"printer"})
     node["card_url"] = _card_url(node.get("device_id"), pid, node["nid"])
 
@@ -566,6 +575,43 @@ def _attach_overlays(
         e["change"], e["change_ts"] = kind, ts
 
 
+def _route_links(
+    net_routes: Optional[list[dict[str, Any]]], by_ip: _Index, nodes: dict[str, _Node]
+) -> list[dict[str, Any]]:
+    """A2: L3 route edges (router -> next-hop) from harvested routes. Emitted ONLY when
+    both ends resolve to known nodes (no phantom endpoint); CIDR/ifindex ride the edge for
+    the tooltip. medium=l3 -> renders on the existing canvas L3 layer."""
+    out: list[dict[str, Any]] = []
+    seen: set = set()
+    for r in net_routes or []:
+        a = r.get("device_nid")
+        b = by_ip.get(str(r.get("next_hop")))
+        key = (a, b, r.get("cidr"))
+        if not a or a not in nodes or not b or a == b or key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "a": a,
+                "b": b,
+                "link_kind": "l3-route",
+                "via_source": "route",
+                "confidence": "low",
+                "ambiguous": False,
+                "medium": "l3",
+                "vlan": None,
+                "a_port": None,
+                "b_port": None,
+                "speed_mbps": None,
+                "port_down": False,
+                "quality": None,
+                "cidr": r.get("cidr"),
+                "ifindex": r.get("ifindex"),
+            }
+        )
+    return out
+
+
 def _mark_chokepoints(node_list: list[_Node], link_list: list[dict[str, Any]]) -> None:
     """S4: flag single points of failure on the assembled graph -- articulation-point
     nodes and bridge links -- so the canvas can light a 'risk' layer. Pure topology over
@@ -590,6 +636,7 @@ def build_network_map(
     net_interfaces: Optional[list[dict[str, Any]]] = None,
     net_changes: Optional[list[dict[str, Any]]] = None,
     status_series: Optional[dict[str, list[str]]] = None,
+    net_routes: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """The one superset graph: nodes from net_devices + agents + printers + gateways
     (deduped by device_nid), edges from net_links + agent-uplinks (medium/quality),
@@ -601,6 +648,7 @@ def build_network_map(
     links = _real_links(net_links, nodes, _index_interfaces(net_interfaces or []))
     uplinks, subnets = _agent_uplinks(snapshots, nodes, by_mac, by_ip, by_device_id)
     links += uplinks
+    links += _route_links(net_routes, by_ip, nodes)
     node_list = sorted(nodes.values(), key=lambda n: n["nid"])
     link_list = sorted(links, key=lambda e: (e["link_kind"], e["a"], e["b"]))
     _mark_chokepoints(node_list, link_list)
