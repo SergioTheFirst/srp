@@ -1151,7 +1151,17 @@
   if (subSel) {
     var subs = {}; nodes.forEach(function (n) { if (n.subnet) subs[n.subnet] = 1; });
     var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "(все подсети)"; subSel.appendChild(opt0);
-    Object.keys(subs).sort().forEach(function (s) { var o = document.createElement("option"); o.value = s; o.textContent = s; subSel.appendChild(o); });
+    // C3: group /24 hints under their /16 as a native <optgroup> tree (lone subnets stay flat)
+    var grp = {};
+    Object.keys(subs).forEach(function (s) {
+      var k = s.split(".").slice(0, 2).join(".") + ".*";
+      (grp[k] = grp[k] || []).push(s);
+    });
+    Object.keys(grp).sort().forEach(function (g) {
+      var kids = grp[g].sort();
+      var parent = kids.length > 1 ? subSel.appendChild(Object.assign(document.createElement("optgroup"), { label: g })) : subSel;
+      kids.forEach(function (s) { var o = document.createElement("option"); o.value = s; o.textContent = s; parent.appendChild(o); });
+    });
     subSel.onchange = function () { state.subnet = subSel.value; invalidate(); };
   }
   var confirmedCb = document.getElementById("ng-f-confirmed");
