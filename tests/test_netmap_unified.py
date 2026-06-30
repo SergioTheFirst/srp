@@ -337,3 +337,44 @@ def test_chokepoints_flag_articulation_nodes_and_bridge_links():
     assert by[rt]["articulation"] is False and by[ap]["articulation"] is False
     flagged = {frozenset((e["a"], e["b"])) for e in g["links"] if e["bridge"]}
     assert flagged == {frozenset((rt, sw)), frozenset((sw, ap))}
+
+
+# --- Sprint 2: confirmed badge (B7), change-overlay (S2), flap count (S5) ---
+def test_node_confirmed_flag_from_snmp_sysobjectid():
+    sw, ap = device_nid(mac=SW), device_nid(mac=AP)
+    nd = _nd(sw, "switch", mac=SW)
+    nd["sys_object_id"] = "1.3.6.1.4.1.9.1.1"  # SNMP actually answered -> confirmed
+    by = _by_nid(build_network_map([nd, _nd(ap, "unknown", mac=AP)], [], [], []))
+    assert by[sw]["confirmed"] is True
+    assert by[ap]["confirmed"] is False  # no sysObjectID -> a guess, not confirmed
+
+
+def test_change_overlay_marks_recent_appeared_node_and_added_link():
+    rt, sw = device_nid(mac=RT), device_nid(mac=SW)
+    nds = [_nd(rt, "router", mac=RT), _nd(sw, "switch", mac=SW)]
+    changes = [  # get_net_changes yields newest-first
+        {"ts": "2026-06-29T10:00:00+00:00", "device_nid": sw, "kind": "appeared", "detail": {}},
+        {
+            "ts": "2026-06-29T10:00:00+00:00",
+            "device_nid": None,
+            "kind": "link_added",
+            "detail": {"a": rt, "b": sw},
+        },
+    ]
+    g = build_network_map(nds, [_link(rt, sw)], [], [], net_changes=changes)
+    by = _by_nid(g)
+    assert by[sw]["change"] == "appeared" and by[sw]["change_ts"] == "2026-06-29T10:00:00+00:00"
+    assert by[rt]["change"] is None
+    assert g["links"][0]["change"] == "link_added"
+
+
+def test_reachability_series_and_flap_count_on_node():
+    a1 = device_nid(mac=A1)
+    series = {a1: ["up", "up", "down", "up", "down"]}  # 3 up<->down transitions
+    by = _by_nid(
+        build_network_map(
+            [_nd(a1, "agent", mac=A1, device_id="d1")], [], [], [], status_series=series
+        )
+    )
+    assert by[a1]["reach_series"] == ["up", "up", "down", "up", "down"]
+    assert by[a1]["flaps"] == 3

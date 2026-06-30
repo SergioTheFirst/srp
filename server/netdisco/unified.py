@@ -127,6 +127,9 @@ def _node_from_net_device(d: dict[str, Any]) -> _Node:
         "subtype": "printer" if printer_id else d.get("subtype"),
         "first_seen": d.get("first_seen"),
         "last_seen": d.get("last_seen"),
+        # B7: SNMP actually answered (sysObjectID read) AND it was classified -> confirmed,
+        # not a guess from ARP/passive. Honest "we talked to it" signal.
+        "confirmed": bool(d.get("sys_object_id")) and (d.get("dev_type") or "unknown") != "unknown",
         "device_id": device_id,
         "printer_id": printer_id,
         "card_url": _card_url(device_id, printer_id, nid),
@@ -523,6 +526,46 @@ def _agent_uplinks(
     return links, subnets
 
 
+def _pair_key(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """Order-independent key for an undirected node pair (None when either end missing)."""
+    return "|".join(sorted((a, b))) if a and b else None
+
+
+def _attach_overlays(
+    node_list: list[_Node],
+    link_list: list[dict[str, Any]],
+    net_changes: Optional[list[dict[str, Any]]],
+    status_series: Optional[dict[str, list[str]]],
+) -> None:
+    """S2 change-overlay + S5 reachability series/flaps, attached read-side. Changes come
+    newest-first (``get_net_changes``) so the first hit per node/link wins; recency itself
+    is decided in canvas JS (pure here: no clock). Also defaults the B7 confirmed flag on
+    synthesized nodes that never carry a sysObjectID."""
+    node_change: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    link_change: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    for ch in net_changes or []:
+        kind, nid = ch.get("kind"), ch.get("device_nid")
+        if nid:
+            node_change.setdefault(nid, (kind, ch.get("ts")))
+        elif kind in ("link_added", "link_removed"):
+            detail = ch.get("detail") or {}
+            pk = _pair_key(detail.get("a"), detail.get("b"))
+            if pk:
+                link_change.setdefault(pk, (kind, ch.get("ts")))
+    series = status_series or {}
+    for n in node_list:
+        n.setdefault("confirmed", False)
+        kind, ts = node_change.get(n["nid"], (None, None))
+        n["change"], n["change_ts"] = kind, ts
+        seq = list(series.get(n["nid"]) or [])
+        n["reach_series"] = seq
+        n["flaps"] = sum(1 for i in range(1, len(seq)) if seq[i] != seq[i - 1])
+    for e in link_list:
+        pk = _pair_key(e.get("a"), e.get("b"))
+        kind, ts = link_change.get(pk, (None, None)) if pk else (None, None)
+        e["change"], e["change_ts"] = kind, ts
+
+
 def _mark_chokepoints(node_list: list[_Node], link_list: list[dict[str, Any]]) -> None:
     """S4: flag single points of failure on the assembled graph -- articulation-point
     nodes and bridge links -- so the canvas can light a 'risk' layer. Pure topology over
@@ -545,6 +588,8 @@ def build_network_map(
     snapshots: list[dict[str, Any]],
     printers: list[dict[str, Any]],
     net_interfaces: Optional[list[dict[str, Any]]] = None,
+    net_changes: Optional[list[dict[str, Any]]] = None,
+    status_series: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, Any]:
     """The one superset graph: nodes from net_devices + agents + printers + gateways
     (deduped by device_nid), edges from net_links + agent-uplinks (medium/quality),
@@ -559,6 +604,7 @@ def build_network_map(
     node_list = sorted(nodes.values(), key=lambda n: n["nid"])
     link_list = sorted(links, key=lambda e: (e["link_kind"], e["a"], e["b"]))
     _mark_chokepoints(node_list, link_list)
+    _attach_overlays(node_list, link_list, net_changes, status_series)
     return {
         "nodes": node_list,
         "links": link_list,
