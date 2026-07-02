@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from server import db
 from server.printers import collector, discovery, scan
+from server.printers import ipp as ipp_client
 from server.printers.config import PrinterConfig
 from server.printers.discovery import PrinterCandidate
 from server.printers.models import PrinterReading, printer_identity
@@ -36,6 +37,8 @@ _poll_lock = threading.Lock()  # serialize cycles: one fan-out at a time (anti-D
 
 ProbeFn = Callable[..., Optional[PrinterReading]]
 StoreFn = Callable[..., None]
+JobsProbeFn = Callable[..., list[dict[str, Any]]]
+JobsStoreFn = Callable[..., None]
 
 
 def _now_iso() -> str:
@@ -96,6 +99,8 @@ def run_poll_cycle(
     now: Optional[str] = None,
     max_workers: int = _MAX_WORKERS,
     is_confirmed: Callable[[str], bool] = db.printer_is_confirmed,
+    jobs_probe: JobsProbeFn = ipp_client.get_completed_jobs,
+    jobs_store: JobsStoreFn = db.store_printer_ipp_jobs,
 ) -> dict[str, int]:
     """Probe every candidate once and store the result. Returns a count summary.
 
@@ -103,6 +108,10 @@ def run_poll_cycle(
     phantom "unreachable" record -- it is some other LAN host, not a printer. An
     already-confirmed printer that is merely offline still records "unreachable"
     (down != gone); spooler/config/scan candidates are kept on their own merit.
+
+    When ``printer_cfg.ipp_jobs`` is on, a printer that answered SNMP (live)
+    also gets an IPP Get-Jobs probe for completed-job user attribution -- a
+    supplementary source, never blocking/required (З.10-P1).
     """
     polled = len(candidates)
     if polled == 0:
@@ -126,6 +135,10 @@ def run_poll_cycle(
             if reading is None and _arp_only(cand.sources) and not is_confirmed(pid):
                 return "skipped"  # not a printer, just an ARP neighbour -- don't store
             store(pid, payload, received_at=stamp)
+            if reading is not None and printer_cfg.ipp_jobs:
+                jobs = jobs_probe(cand.ip)
+                if jobs:
+                    jobs_store(pid, jobs, received_at=stamp)
             return "online" if reading is not None else "unreachable"
         except Exception:  # noqa: BLE001 -- one bad host must not kill the whole cycle
             _log.exception("printer poll failed for %s", cand.ip)

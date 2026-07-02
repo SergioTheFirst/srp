@@ -13,7 +13,8 @@
     "static_ips": ["192.168.9.163"],
     "active_scan": true,
     "scan_cidrs": [],
-    "scan_max_hosts": 4096
+    "scan_max_hosts": 4096,
+    "ipp_jobs": true
   },
   "netdisco_enabled": true,
   "netdisco": {

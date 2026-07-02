@@ -56,6 +56,13 @@ def test_config_interval_and_version_clamped():
     assert cfg.snmp_version in (0, 1)  # 0=v1, 1=v2c on the wire
 
 
+@pytest.mark.unit
+def test_config_ipp_jobs_only_true_when_explicit():
+    assert load_printer_config(None).ipp_jobs is False  # OFF-in-code secure default
+    assert load_printer_config({"ipp_jobs": "yes"}).ipp_jobs is False
+    assert load_printer_config({"ipp_jobs": True}).ipp_jobs is True
+
+
 # --------------------------------------------------------------------------- #
 # Merge
 # --------------------------------------------------------------------------- #

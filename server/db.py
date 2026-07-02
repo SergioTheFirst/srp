@@ -235,6 +235,15 @@ CREATE TABLE IF NOT EXISTS printer_readings (
   detail       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_prn_readings ON printer_readings(printer_id, id);
+CREATE TABLE IF NOT EXISTS printer_ipp_jobs (
+  printer_id  TEXT NOT NULL,
+  job_id      INTEGER NOT NULL,
+  name        TEXT,
+  user_name   TEXT,
+  impressions INTEGER,
+  received_at TEXT,
+  PRIMARY KEY (printer_id, job_id)
+);
 CREATE TABLE IF NOT EXISTS net_devices (
   device_nid    TEXT PRIMARY KEY,
   ip            TEXT,
@@ -2266,6 +2275,77 @@ def get_printer(printer_id: str) -> Optional[dict[str, Any]]:
         "sources": detail.get("sources") or [],
         "source_protocol": detail.get("source_protocol"),
     }
+
+
+_IPP_JOBS_KEEP = 200  # per printer; the IPP job buffer is short, this history is supplementary
+
+
+def store_printer_ipp_jobs(
+    printer_id: str, jobs: list[dict[str, Any]], *, received_at: str
+) -> None:
+    """Upsert completed IPP jobs (idempotent on (printer_id, job_id)) + prune.
+
+    COALESCE-preserve mirrors printer_readings identity fields: a later sweep
+    that re-reports the same job_id with a blank field must not wipe a
+    previously-known value.
+    """
+    if not jobs:
+        return
+    with _lock, _connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO printer_ipp_jobs
+              (printer_id, job_id, name, user_name, impressions, received_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(printer_id, job_id) DO UPDATE SET
+              name        = COALESCE(excluded.name, printer_ipp_jobs.name),
+              user_name   = COALESCE(excluded.user_name, printer_ipp_jobs.user_name),
+              impressions = COALESCE(excluded.impressions, printer_ipp_jobs.impressions),
+              received_at = excluded.received_at
+            """,
+            [
+                (
+                    printer_id,
+                    j["job_id"],
+                    j.get("name"),
+                    j.get("user_name"),
+                    j.get("impressions"),
+                    received_at,
+                )
+                for j in jobs
+                if isinstance(j.get("job_id"), int)
+            ],
+        )
+        conn.execute(
+            """
+            DELETE FROM printer_ipp_jobs WHERE printer_id = ? AND job_id NOT IN (
+              SELECT job_id FROM printer_ipp_jobs WHERE printer_id = ?
+              ORDER BY received_at DESC, job_id DESC LIMIT ?
+            )
+            """,
+            (printer_id, printer_id, _IPP_JOBS_KEEP),
+        )
+
+
+def get_printer_ipp_jobs(printer_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Most recent completed IPP jobs for one printer, newest-first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT job_id, name, user_name, impressions, received_at
+            FROM printer_ipp_jobs WHERE printer_id = ?
+            ORDER BY received_at DESC, job_id DESC LIMIT ?
+            """,
+            (printer_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_printer_ipp_jobs(printer_id: str) -> int:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM printer_ipp_jobs WHERE printer_id = ?", (printer_id,)
+        ).fetchone()[0]
 
 
 def get_printer_series(printer_id: str, limit: int = 200) -> list[dict[str, Any]]:

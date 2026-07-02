@@ -89,6 +89,24 @@ td.r,th.r{text-align:right;}
   {% else %}<div class="no-data">Нет сопоставленных данных печати с ПК (имя принтера на ПК может отличаться от сетевого).</div>{% endif %}
 </div>
 
+{% if ipp_jobs %}
+<div class="panel">
+  <div class="ch-title">Последние задания (IPP)</div>
+  <p class="muted small" style="margin-bottom:10px">Дополняющий источник: буфер принтера короткий, основная атрибуция — журнал печати на ПК.</p>
+  <table>
+    <thead><tr><th>Получено</th><th>Пользователь</th><th>Документ</th><th class="r">Страниц</th></tr></thead>
+    <tbody>
+    {% for j in ipp_jobs %}
+    <tr><td class="small muted">{{ j.received_at[:16] if j.received_at else "—" }}</td>
+        <td>{{ j.user_name or "—" }}</td>
+        <td>{{ j.name or "—" }}</td>
+        <td class="r mono">{{ j.impressions if j.impressions is not none else "—" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% include "_plotly_hover.html" %}
 <script id="series-data" type="application/json">{{ d.series|tojson }}</script>
 <script>

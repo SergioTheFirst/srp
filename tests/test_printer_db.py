@@ -258,3 +258,63 @@ def test_migration_idempotent_and_tables_present(db_init, tmp_path):
             r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     assert {"printers", "printer_readings"} <= names
+
+
+# --------------------------------------------------------------------------- #
+# printer_ipp_jobs -- supplementary completed-job cache from IPP Get-Jobs
+# --------------------------------------------------------------------------- #
+
+
+def test_store_and_get_printer_ipp_jobs(db_init):
+    db = db_init
+    jobs = [{"job_id": 7, "name": "doc-A", "user_name": "ivanov", "impressions": 3}]
+    db.store_printer_ipp_jobs("prn-1", jobs, received_at="2026-07-02T10:00:00+00:00")
+    got = db.get_printer_ipp_jobs("prn-1")
+    assert len(got) == 1
+    assert got[0]["job_id"] == 7
+    assert got[0]["user_name"] == "ivanov"
+    assert got[0]["name"] == "doc-A"
+    assert got[0]["impressions"] == 3
+
+
+def test_store_printer_ipp_jobs_upsert_is_idempotent(db_init):
+    db = db_init
+    jobs = [{"job_id": 7, "name": "doc-A", "user_name": "ivanov", "impressions": 3}]
+    db.store_printer_ipp_jobs("prn-1", jobs, received_at="2026-07-02T10:00:00+00:00")
+    db.store_printer_ipp_jobs("prn-1", jobs, received_at="2026-07-02T10:15:00+00:00")
+    assert db.count_printer_ipp_jobs("prn-1") == 1
+
+
+def test_store_printer_ipp_jobs_coalesce_preserves_known_fields(db_init):
+    """A later sweep re-reporting the same job_id with a blank field must not
+    wipe a previously-known value (mirrors printer_readings COALESCE identity)."""
+    db = db_init
+    db.store_printer_ipp_jobs(
+        "prn-1",
+        [{"job_id": 7, "name": "doc-A", "user_name": "ivanov", "impressions": 3}],
+        received_at="2026-07-02T10:00:00+00:00",
+    )
+    db.store_printer_ipp_jobs(
+        "prn-1",
+        [{"job_id": 7, "name": None, "user_name": None, "impressions": None}],
+        received_at="2026-07-02T10:15:00+00:00",
+    )
+    got = db.get_printer_ipp_jobs("prn-1")
+    assert got[0]["user_name"] == "ivanov"  # not wiped by the later None
+
+
+def test_store_printer_ipp_jobs_prunes_beyond_keep_cap(db_init):
+    db = db_init
+    many = [{"job_id": i, "name": None, "user_name": None, "impressions": None} for i in range(250)]
+    db.store_printer_ipp_jobs("prn-1", many, received_at="2026-07-02T11:00:00+00:00")
+    assert db.count_printer_ipp_jobs("prn-1") <= 200
+
+
+def test_get_printer_ipp_jobs_empty_for_unknown_printer(db_init):
+    assert db_init.get_printer_ipp_jobs("nope") == []
+
+
+def test_store_printer_ipp_jobs_noop_on_empty_list(db_init):
+    db = db_init
+    db.store_printer_ipp_jobs("prn-1", [], received_at="2026-07-02T10:00:00+00:00")
+    assert db.get_printer_ipp_jobs("prn-1") == []

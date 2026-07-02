@@ -53,6 +53,44 @@ def test_printer_detail_page_404(client):
     assert client.get("/printers/nope").status_code == 404
 
 
+def test_printer_detail_page_shows_ipp_jobs_when_present(client):
+    from server import db
+
+    _seed(db)
+    db.store_printer_ipp_jobs(
+        "prn-sn-A",
+        [{"job_id": 1, "name": "report.pdf", "user_name": "ivanov", "impressions": 4}],
+        received_at="2026-07-02T10:00:00+00:00",
+    )
+    r = client.get("/printers/prn-sn-A")
+    assert r.status_code == 200
+    assert "Последние задания (IPP)" in r.text
+    assert "ivanov" in r.text and "report.pdf" in r.text
+
+
+def test_printer_detail_page_hides_ipp_section_when_absent(client):
+    from server import db
+
+    _seed(db)
+    r = client.get("/printers/prn-sn-A")
+    assert "Последние задания (IPP)" not in r.text
+
+
+def test_printer_detail_page_escapes_hostile_ipp_job_strings(client):
+    from server import db
+
+    hostile = "</script><script>alert(1)</script>"
+    _seed(db)
+    db.store_printer_ipp_jobs(
+        "prn-sn-A",
+        [{"job_id": 2, "name": hostile, "user_name": hostile, "impressions": 1}],
+        received_at="2026-07-02T10:00:00+00:00",
+    )
+    r = client.get("/printers/prn-sn-A")
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;alert(1)" in r.text
+
+
 def test_printers_page_escapes_hostile_strings(client):
     from server import db
 

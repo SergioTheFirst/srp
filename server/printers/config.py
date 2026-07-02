@@ -27,6 +27,9 @@ class PrinterConfig:
     active_scan: bool = False  # OFF until explicit True (security stop-gate)
     scan_cidrs: tuple[str, ...] = ()  # RFC1918 ranges to scan; empty = auto local /24
     scan_max_hosts: int = 4096  # hard cap on hosts enumerated per scan (anti-blast)
+    # IPP Get-Jobs (completed): supplementary user-attribution straight from the
+    # printer. OFF in code (secure default); the shipped server/config.json enables it.
+    ipp_jobs: bool = False
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -61,4 +64,5 @@ def load_printer_config(data: Optional[Mapping[str, Any]]) -> PrinterConfig:
         active_scan=d.get("active_scan") is True,
         scan_cidrs=scan_cidrs,
         scan_max_hosts=scan_max_hosts,
+        ipp_jobs=d.get("ipp_jobs") is True,
     )
