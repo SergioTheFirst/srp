@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from server.analytics.oui import normalize_mac
+
 _db_path: Optional[Path] = None
 _retain_hb = 500
 _retain_ev = 1000
@@ -1547,6 +1549,141 @@ def set_stale_threshold(seconds: int) -> None:
     STALE_AFTER_SEC = _STALE_AFTER_SEC
 
 
+NEUTRAL_NAME = "Без названия"
+
+
+def display_name(
+    hostname: Optional[str],
+    *,
+    model: Optional[str] = None,
+    chassis: Optional[str] = None,
+    ip: Optional[str] = None,
+    device_id: Optional[str] = None,
+    disambiguate: bool = False,
+) -> str:
+    """Единственный источник операторского имени устройства.
+
+    Приоритет: hostname -> model -> chassis -> ip -> «Без названия». device_id
+    НИКОГДА не возвращается как имя (технический ID путает оператора) -- в
+    disambiguate-режиме (списки/таблицы, где несколько пустых имён иначе
+    сливаются в одну неразличимую строку «Без названия») к нему добавляется
+    короткий суффикс id.
+    """
+    for candidate in (hostname, model, chassis, ip):
+        text = (candidate or "").strip()
+        if text:
+            return text
+    if disambiguate and device_id:
+        return f"{NEUTRAL_NAME} ({device_id[-6:]})"
+    return NEUTRAL_NAME
+
+
+def _find_net_device(
+    conn: sqlite3.Connection,
+    *,
+    device_id: Optional[str],
+    printer_id: Optional[str],
+    nid: Optional[str],
+    mac: Optional[str],
+    ip: Optional[str],
+) -> Optional[sqlite3.Row]:
+    """net_devices по первому сработавшему ключу: nid > device_id > printer_id >
+    mac > ip. Column names are a fixed local tuple (never user input)."""
+
+    candidates = (
+        ("device_nid", nid),
+        ("device_id", device_id),
+        ("printer_id", printer_id),
+        ("mac", normalize_mac(mac) if mac else None),
+        ("ip", ip),
+    )
+    for column, value in candidates:
+        if not value:
+            continue
+        # ORDER BY last_seen DESC: a device_id/mac can legitimately match more than
+        # one net_devices row (dual-NIC agent) -- pick the freshest, not whatever
+        # SQLite happens to return first, and stay consistent with get_devices()'s
+        # own most-recent-wins pick for the fleet IP column.
+        row = conn.execute(
+            f"SELECT * FROM net_devices WHERE {column}=? ORDER BY last_seen DESC LIMIT 1",  # nosec B608 -- column from fixed tuple above, never user input
+            (value,),
+        ).fetchone()
+        if row is not None:
+            return row
+    return None
+
+
+def get_identity_card(
+    *,
+    device_id: Optional[str] = None,
+    printer_id: Optional[str] = None,
+    nid: Optional[str] = None,
+    mac: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Единая карточка идентичности по ЛЮБОМУ ключу (read-only, дедупликации
+    JOIN'ов между вкладками -- З.3): agent(devices) + printer(printers) +
+    net_device(net_devices) знания дополняют друг друга, fill-empty с
+    приоритетом agent > printer > net (модули дополняют, не перезаписывают).
+    """
+    with _connect() as conn:
+        net = _find_net_device(
+            conn, device_id=device_id, printer_id=printer_id, nid=nid, mac=mac, ip=ip
+        )
+        if net is not None:
+            device_id = device_id or net["device_id"]
+            printer_id = printer_id or net["printer_id"]
+        dev = (
+            conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            if device_id
+            else None
+        )
+        prn = (
+            conn.execute("SELECT * FROM printers WHERE printer_id=?", (printer_id,)).fetchone()
+            if printer_id
+            else None
+        )
+    if dev is None and prn is None and net is None:
+        return None
+    # dict(row), not sqlite3.Row directly: Row's `in` operator tests membership
+    # among VALUES, not column names (it's a sequence, not a mapping), so a
+    # naive `field in row` would silently misbehave on tables missing a column
+    # (e.g. `devices` has no `ip`/`mac`/`vendor`/`serial`/`status`).
+    agent_row = dict(dev) if dev is not None else None
+    if agent_row is not None:
+        # devices stores this under `manufacturer`, not `vendor` -- alias it so
+        # the agent layer actually participates in the vendor merge below.
+        agent_row["vendor"] = agent_row.get("manufacturer")
+    layers: list[tuple[str, Optional[dict[str, Any]]]] = [
+        ("agent", agent_row),
+        ("printer", dict(prn) if prn is not None else None),
+        ("net", dict(net) if net is not None else None),
+    ]
+    card: dict[str, Any] = {
+        "device_id": device_id,
+        "printer_id": printer_id,
+        "net_nid": net["device_nid"] if net is not None else None,
+        "sources": [name for name, row in layers if row is not None],
+    }
+    for field in ("hostname", "ip", "mac", "vendor", "model", "serial", "status", "chassis"):
+        value = None
+        for _, row in layers:
+            if row is not None and row.get(field):
+                value = row[field]
+                break
+        card[field] = value
+    seen_ts = [row["last_seen"] for _, row in layers if row is not None and row.get("last_seen")]
+    card["last_seen"] = max(seen_ts) if seen_ts else None
+    card["display_name"] = display_name(
+        card["hostname"],
+        model=card["model"],
+        chassis=card["chassis"],
+        ip=card["ip"],
+        device_id=device_id,
+    )
+    return card
+
+
 _CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
 
 
@@ -1654,13 +1791,21 @@ def get_devices() -> list[dict[str, Any]]:
                    d.department, d.last_reported_ts, d.clock_drift_sec,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    h.payload AS hist_payload,
-                   a.note AS ack_note, a.acked_at AS ack_at
+                   a.note AS ack_note, a.acked_at AS ack_at,
+                   nd.ip AS net_ip
             FROM devices d
             LEFT JOIN scores s ON s.device_id = d.device_id
               AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
             LEFT JOIN historical h ON h.device_id = d.device_id
               AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
             LEFT JOIN acknowledgements a ON a.device_id = d.device_id
+            LEFT JOIN (
+              SELECT device_id, ip FROM (
+                SELECT device_id, ip,
+                  ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY last_seen DESC) AS rn
+                FROM net_devices WHERE device_id IS NOT NULL
+              ) WHERE rn = 1
+            ) nd ON nd.device_id = d.device_id
             ORDER BY COALESCE(s.risk_exposure, 0) DESC, d.last_seen DESC
             """
         ).fetchall()
@@ -1675,11 +1820,20 @@ def get_devices() -> list[dict[str, Any]]:
             {
                 "device_id": r["device_id"],
                 "hostname": r["hostname"],
+                "display_name": display_name(
+                    r["hostname"],
+                    model=r["model"],
+                    chassis=r["chassis"],
+                    device_id=r["device_id"],
+                    disambiguate=True,
+                ),
                 "model": r["model"],
                 "chassis": r["chassis"],
                 "last_seen": r["last_seen"],
                 "last_seen_age_sec": age,
-                "local_ip": _primary_ip(r["hist_payload"]),
+                # Карта сети знает IP там, где редкий телеметрийный цикл ещё не
+                # прислал historical (З.3: вкладки дополняют друг друга).
+                "local_ip": _primary_ip(r["hist_payload"]) or r["net_ip"],
                 "stale": age is not None and age > _STALE_AFTER_SEC,
                 "last_reported_ts": r["last_reported_ts"],
                 "clock_drift_sec": r["clock_drift_sec"],
@@ -2192,7 +2346,7 @@ def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
         ).fetchall()
         dev_rows = conn.execute(
             "SELECT p.printer AS name, p.device_id AS device_id,"  # nosec B608
-            " COALESCE(d.hostname, p.device_id) AS hostname,"
+            " d.hostname AS hostname,"
             " COALESCE(SUM(p.pages),0) AS pages, MAX(p.ts) AS last_ts"
             " FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE p.printer IS NOT NULL {ts_filter}"
@@ -2214,7 +2368,9 @@ def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
             bucket["devices"].append(
                 {
                     "device_id": r["device_id"],
-                    "hostname": r["hostname"],
+                    "hostname": display_name(
+                        r["hostname"], device_id=r["device_id"], disambiguate=True
+                    ),
                     "pages": r["pages"],
                     "last_ts": r["last_ts"],
                 }
@@ -2803,7 +2959,12 @@ def get_print_counter_mode_devices(days: int = 7) -> list[dict[str, Any]]:
             """,
             (cutoff, cutoff),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    for row in out:
+        row["hostname"] = display_name(
+            row["hostname"], device_id=row["device_id"], disambiguate=True
+        )
+    return out
 
 
 def _date_cutoff_utc(date_str: Optional[str], *, end: bool) -> Optional[str]:
@@ -2888,7 +3049,7 @@ def get_print_summary(f: PrintFilter) -> dict[str, Any]:
             params,
         ).fetchone()
         device_row = conn.execute(
-            f"SELECT p.device_id, COALESCE(d.hostname, p.device_id) AS hostname,"  # nosec B608
+            f"SELECT p.device_id, d.hostname AS hostname,"  # nosec B608
             " COALESCE(SUM(p.pages),0) AS pages"
             f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
             " GROUP BY p.device_id ORDER BY pages DESC LIMIT 1",
@@ -2904,7 +3065,9 @@ def get_print_summary(f: PrintFilter) -> dict[str, Any]:
     most_active = (
         {
             "device_id": device_row["device_id"],
-            "hostname": device_row["hostname"],
+            "hostname": display_name(
+                device_row["hostname"], device_id=device_row["device_id"], disambiguate=True
+            ),
             "pages": int(device_row["pages"]),
         }
         if device_row is not None and device_row["device_id"] is not None
@@ -2977,7 +3140,9 @@ def _assemble_series(rows: list[Any], cap: int, gran: str) -> dict[str, Any]:
             key,
             {
                 "device_id": r["device_id"],
-                "hostname": r["hostname"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
                 "printer": r["printer"],
                 "ip": r["ip"],
                 "points": [0] * len(buckets),
@@ -3047,7 +3212,7 @@ def get_print_series(
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT p.device_id AS device_id,"  # nosec B608
-            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" d.hostname AS hostname,"
             f" COALESCE(p.printer, '') AS printer, MAX(m.ip) AS ip,"
             f" strftime('{fmt}', p.ts) AS bucket,"
             f" COALESCE(SUM(p.pages),0) AS pages"
@@ -3112,7 +3277,7 @@ def get_print_records(
         ).fetchone()["n"]
         rows = conn.execute(
             f"SELECT p.ts AS ts, p.device_id AS device_id,"  # nosec B608
-            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" d.hostname AS hostname,"
             f" COALESCE(p.printer, '') AS printer, m.ip AS ip,"
             f" p.pages AS pages, COALESCE(p.source, '') AS source"
             f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}{search_clause}"
@@ -3128,7 +3293,9 @@ def get_print_records(
             {
                 "ts": r["ts"],
                 "device_id": r["device_id"],
-                "hostname": r["hostname"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
                 "printer": r["printer"],
                 "ip": r["ip"],
                 "pages": int(r["pages"]) if r["pages"] is not None else 0,
@@ -3222,7 +3389,7 @@ def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
             params,
         ).fetchone()
         device_rows = conn.execute(
-            f"SELECT p.device_id, COALESCE(d.hostname, p.device_id) AS hostname,"  # nosec B608
+            f"SELECT p.device_id, d.hostname AS hostname,"  # nosec B608
             f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs"
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
@@ -3245,7 +3412,9 @@ def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
         "devices": [
             {
                 "device_id": r["device_id"],
-                "hostname": r["hostname"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
                 "pages": r["pages"],
                 "jobs": r["jobs"],
             }
@@ -3400,7 +3569,7 @@ def get_print_filter_options(
     with _connect() as conn:
         dev_rows = conn.execute(
             f"SELECT DISTINCT p.device_id AS device_id,"  # nosec B608
-            f" COALESCE(d.hostname, p.device_id) AS hostname"
+            f" d.hostname AS hostname"
             f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where} ORDER BY hostname",
             params,
         ).fetchall()
@@ -3416,7 +3585,15 @@ def get_print_filter_options(
             params,
         ).fetchall()
     return {
-        "devices": [{"device_id": r["device_id"], "hostname": r["hostname"]} for r in dev_rows],
+        "devices": [
+            {
+                "device_id": r["device_id"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
+            }
+            for r in dev_rows
+        ],
         "printers": [r["printer"] for r in prn_rows],
         "ips": [r["ip"] for r in ip_rows],
     }
@@ -3430,7 +3607,7 @@ def export_print_rows(f: PrintFilter) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT p.ts, p.device_id,"  # nosec B608
-            f" COALESCE(d.hostname, p.device_id) AS hostname,"
+            f" d.hostname AS hostname,"
             f" COALESCE(d.org_code, '') AS org_code,"
             f" COALESCE(d.dept_code, '') AS dept_code,"
             f" COALESCE(d.department, '') AS department,"
@@ -3444,7 +3621,12 @@ def export_print_rows(f: PrintFilter) -> list[dict[str, Any]]:
             " ORDER BY p.ts DESC",
             params,
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    for row in out:
+        row["hostname"] = display_name(
+            row["hostname"], device_id=row["device_id"], disambiguate=True
+        )
+    return out
 
 
 def set_device_department(device_id: str, department: Optional[str]) -> bool:

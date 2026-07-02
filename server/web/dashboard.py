@@ -375,6 +375,9 @@ def device(request: Request, device_id: str):
         **d,
         "last_seen_age_sec": age,
         "stale": age is not None and age > db.STALE_AFTER_SEC,
+        "display_name": db.display_name(
+            d.get("hostname"), model=d.get("model"), chassis=d.get("chassis")
+        ),
         **_identity_labels(d),
     }
     # Phase 2 (D8): if the whole subnet degrades, tell the operator it is the
@@ -383,8 +386,12 @@ def device(request: Request, device_id: str):
     # Ф6: the ONE canonical card. If this agent has a topology twin (FK from Ф1),
     # embed its network section here instead of a separate /netdisco/device card.
     nd = db.get_linked_net_device(device_id=device_id)
+    # З.3: the unified identity card (agent+printer+net_device knowledge merged)
+    # -- lets the device page fill IP/MAC gaps that historical telemetry hasn't
+    # reported yet, from what the network map already knows about this MAC.
+    card = db.get_identity_card(device_id=device_id)
     return _TEMPLATES.TemplateResponse(
-        request, "device.html", {"d": d, "net_subnet_note": net_note, "nd": nd}
+        request, "device.html", {"d": d, "net_subnet_note": net_note, "nd": nd, "card": card}
     )
 
 

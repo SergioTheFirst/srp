@@ -60,6 +60,26 @@ def get_device(device_id: str) -> dict:
     return device
 
 
+@router.get("/device-card")
+def device_card(
+    device_id: Optional[str] = None,
+    printer_id: Optional[str] = None,
+    nid: Optional[str] = None,
+    mac: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> dict:
+    """Единая карточка идентичности (З.3): agent+printer+net_device знания по
+    ЛЮБОМУ ключу, read-only. Хотя бы один параметр обязателен."""
+    if not any((device_id, printer_id, nid, mac, ip)):
+        raise HTTPException(
+            status_code=422, detail="one of device_id/printer_id/nid/mac/ip required"
+        )
+    card = db.get_identity_card(device_id=device_id, printer_id=printer_id, nid=nid, mac=mac, ip=ip)
+    if card is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    return card
+
+
 @router.get("/diagnostics/{device_id}")
 def diagnostics(device_id: str) -> dict:
     """W4.1 trajectory: deterministic slopes + ETA + the trajectory_risk axis."""

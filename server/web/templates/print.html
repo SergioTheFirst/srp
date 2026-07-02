@@ -98,7 +98,7 @@
 <div class="log-off-banner">
   Журнал печати (PrintService/Operational) выключен на {{ counter_devices|length }} ПК —
   «кто печатал» не учитывается:
-  {% for c in counter_devices %}{{ c.hostname or "Без названия" }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  {% for c in counter_devices %}{{ c.hostname }}{% if not loop.last %}, {% endif %}{% endfor %}.
   <span class="muted">Агент попробует включить журнал сам; для GPO-парка включите централизованно.</span>
 </div>
 {% endif %}

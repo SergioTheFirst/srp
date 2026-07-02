@@ -613,7 +613,7 @@ refreshPrint();
       var dTbody = document.querySelector("#fpt-devices-table tbody");
       devRows.forEach(function (r) {
         var tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + srpEsc(r.hostname || r.device_id) + "</td>"
+        tr.innerHTML = "<td>" + srpEsc(r.hostname) + "</td>"
           + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
           + "<td>" + (r.jobs  || 0) + "</td>";
         dTbody.appendChild(tr);
