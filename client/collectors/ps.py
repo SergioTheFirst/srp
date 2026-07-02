@@ -18,18 +18,19 @@ import json
 import subprocess  # nosec B404
 from typing import Any, NamedTuple
 
+from client.winflags import NO_WINDOW
+
 _PREAMBLE = (
     "$ProgressPreference='SilentlyContinue';"
     "$ErrorActionPreference='SilentlyContinue';"
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
 )
 
-# The agent must collect silently: no console window may flash on the user's
-# desktop on any sweep. CREATE_NO_WINDOW stops powershell.exe (a console app)
-# from allocating a window -- essential for the per-user tray cert check and for
-# any non-session-0 launch. Absent off-Windows, where 0 is the harmless default.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-NO_WINDOW = _NO_WINDOW  # public: единый флаг «без окна» для ВСЕХ subprocess в client/
+# CREATE_NO_WINDOW stops powershell.exe (a console app) from allocating a
+# window -- essential for the per-user tray cert check and for any
+# non-session-0 launch. NO_WINDOW re-exported here for existing importers
+# (e.g. client/collectors/print_jobs.py); client/winflags.py is the source.
+_NO_WINDOW = NO_WINDOW
 
 
 class PsResult(NamedTuple):

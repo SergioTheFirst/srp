@@ -87,6 +87,12 @@ def _assets_dir() -> Path:
     return Path(__file__).resolve().parent / "assets"
 
 
+def _should_skip_redraw(added: bool, last_shown: Optional[tuple], key: tuple) -> bool:
+    """Pure decision extracted from ``TrayIcon.show`` so it is unit-testable
+    without ctypes/Win32 (the class itself only constructs on real Windows)."""
+    return added and last_shown == key
+
+
 class TrayIcon:
     """One tray icon + hidden message window. Construct on the UI thread."""
 
@@ -114,6 +120,7 @@ class TrayIcon:
         }
         self._icons: dict[str, int] = {}
         self._added = False
+        self._last_shown: Optional[tuple[str, str]] = None
         self._on_timer: Optional[Callable[[], None]] = None
         # "TaskbarCreated" is broadcast when explorer (re)starts -> re-add icon.
         self._taskbar_created = self._u32.RegisterWindowMessageW("TaskbarCreated")
@@ -241,16 +248,26 @@ class TrayIcon:
         return nid
 
     def show(self, state: str, tooltip: str) -> None:
-        """Add the icon, or update it if already present (idempotent)."""
+        """Add the icon, or update it if already present (idempotent).
+
+        Skips the Shell_NotifyIconW call entirely when (state, tooltip) match
+        the last call: the icon is already correct on screen, so redrawing it
+        on every timer tick (agent age/link age changing the tooltip text can
+        otherwise fire this every second) risks a visible flicker for nothing.
+        """
+        key = (state, tooltip[:127])
+        if _should_skip_redraw(self._added, self._last_shown, key):
+            return
         nid = self._nid(flags=NIF_MESSAGE | NIF_ICON | NIF_TIP)
         nid.hIcon = self._load_icon(state)
-        nid.szTip = tooltip[:127]
+        nid.szTip = key[1]
         action = NIM_MODIFY if self._added else NIM_ADD
         added = self._shell.Shell_NotifyIconW(action, ctypes.byref(nid))
         if not added and action == NIM_ADD:
             # a stale icon (e.g. after a crash) blocks ADD -> recover by modifying
             self._shell.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
         self._added = True
+        self._last_shown = key
 
     def balloon(self, title: str, text: str, level: str = "ok") -> None:
         nid = self._nid(flags=NIF_INFO)
