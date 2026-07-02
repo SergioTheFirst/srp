@@ -32,6 +32,7 @@ from typing import Optional
 from client.tray import certs as cz
 from client.tray import panel, spool
 from client.tray import state as st
+from client.winflags import NO_WINDOW
 
 log = logging.getLogger("client.tray")
 
@@ -155,7 +156,7 @@ class _TrayApp:
         return [sys.executable, "-m", "client.tray", *flags]
 
     def open_panel(self) -> None:
-        subprocess.Popen(self._child("--panel"))  # nosec B603
+        subprocess.Popen(self._child("--panel"), creationflags=NO_WINDOW)  # nosec B603
 
     def about(self) -> None:
         self.icon.balloon(
@@ -208,7 +209,7 @@ class _TrayApp:
         self.icon.show(icon_state, tooltip)
 
     def request_exit(self) -> None:
-        proc = subprocess.run(self._child("--ask-password"))  # nosec B603
+        proc = subprocess.run(self._child("--ask-password"), creationflags=NO_WINDOW)  # nosec B603
         if proc.returncode == 0:
             self.icon.post_quit()
 

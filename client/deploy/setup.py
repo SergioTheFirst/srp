@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from client.config import hash_password
+from client.winflags import NO_WINDOW
 
 # Exit codes (spec §6 diagnostics -- read by RMM/GPO).
 EXIT_OK = 0
@@ -276,7 +277,7 @@ def _run(cmd: list[str], *, dest: Optional[str] = None, label: str = "") -> int:
     robocopy/icacls/schtasks/reg/wevtutil never echo the token or password, so
     logging their stderr is safe and turns a silent exit code into real triage.
     """
-    proc = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
+    proc = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)  # nosec B603
     if proc.returncode != 0 and dest is not None:
         err = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")[:300]
         _log(dest, f"{label or cmd[0]} rc={proc.returncode}: {err}")
@@ -378,6 +379,7 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
             [str(destp / AGENT_EXE), "--once", "--log-file", str(val_log)],
             capture_output=True,
             text=True,
+            creationflags=NO_WINDOW,
         )
         if proc.returncode != 0:
             tail = ""
@@ -407,7 +409,9 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
 
     _run(schtasks_start_cmd())
     if not opts.no_tray:
-        subprocess.Popen([str(destp / TRAY_EXE)])  # nosec B603 -- launch tray in this session
+        subprocess.Popen(  # nosec B603 -- launch tray in this session
+            [str(destp / TRAY_EXE)], creationflags=NO_WINDOW
+        )
     _report(dest, opts)
     return EXIT_OK
 
