@@ -27,6 +27,11 @@ from server.netdisco.identity import device_nid
 
 # Adapter ``kind`` substrings that mark an agent uplink (and Ф7 wireless edges).
 _WIRELESS_KINDS = ("wifi", "wireless", "wi-fi", "802.11", "wlan")
+# A pre-classified "endpoint" is a passive-classification guess, weaker evidence
+# than an SNMP-confirmed printer_id FK -- so a printer link may still upgrade it.
+# Infra types (router/switch/ap/server/...) are NOT in this set: a print server
+# with a printer_id pointing at it stays a server, never repainted as a printer.
+_PRINTER_UPGRADABLE = ("unknown", "endpoint")
 
 _Node = dict[str, Any]
 _Index = dict[str, str]
@@ -109,8 +114,10 @@ def _node_from_net_device(d: dict[str, Any]) -> _Node:
     dev_type = d.get("dev_type") or "unknown"
     if device_id and dev_type == "unknown":
         dev_type = "agent"  # a linked agent gets the agent glyph, not "unknown"
-    elif printer_id and dev_type == "unknown":
-        dev_type = "printer"  # a linked printer gets the printer glyph (symmetric)
+    elif printer_id and dev_type in _PRINTER_UPGRADABLE:
+        # SNMP-confirmed printer_id outweighs a passive endpoint guess (З.4); an
+        # infra dev_type (router/switch/ap/server) is never in _PRINTER_UPGRADABLE.
+        dev_type = "printer"
     prov = ["net"] + (["agent"] if device_id else []) + (["printer"] if printer_id else [])
     return {
         "nid": nid,
@@ -296,7 +303,7 @@ def _enrich_printer(node: _Node, p: dict[str, Any], pid: str) -> None:
     mac = normalize_mac(p.get("mac"))
     node["printer_id"] = pid
     node["subtype"] = "printer"
-    if node.get("dev_type") in (None, "unknown"):
+    if node.get("dev_type") in (None,) + _PRINTER_UPGRADABLE:
         node["dev_type"] = "printer"
     if not node.get("ip"):
         node["ip"] = p.get("ip")
@@ -437,11 +444,15 @@ def _real_links(
 
 
 def _gateways(snap: dict[str, Any]) -> dict[str, Optional[str]]:
-    """gateway-IP -> the kind of the first adapter that uses it (medium hint)."""
+    """gateway-IP -> kind of the adapter that actually carries it (medium hint).
+
+    Adapters with ``up`` True are considered before ``up`` False/unknown ones
+    (Python's sort is stable, so ties keep the agent's own adapter order) -- a
+    stale/disabled ethernet NIC with a leftover gateway entry must not paint a
+    live Wi-Fi uplink as wired (З.5)."""
     out: dict[str, Optional[str]] = {}
-    for a in snap.get("adapters") or []:
-        if not isinstance(a, dict):
-            continue
+    adapters = [a for a in snap.get("adapters") or [] if isinstance(a, dict)]
+    for a in sorted(adapters, key=lambda a: a.get("up") is not True):
         gw = a.get("gateway")
         if gw and str(gw) not in out:
             out[str(gw)] = a.get("kind")
