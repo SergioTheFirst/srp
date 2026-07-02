@@ -69,6 +69,9 @@ class ClientConfig:
     ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
     # Operating mode: when True the agent collects but does NOT attempt server calls.
     offline_mode: bool = False
+    # Самолечение журнала печати (PrintService/Operational): SYSTEM-агент включает
+    # его, если выключен. False = уважать намеренно выключенный журнал (GPO/политика).
+    print_log_autoenable: bool = True
     # Password protection for config changes.
     # Format: "pbkdf2:sha256:<iters>:<salt_hex>:<hash_hex>"; empty = no password.
     config_password_hash: str = ""  # nosec B105

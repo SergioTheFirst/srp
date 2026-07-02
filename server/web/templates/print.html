@@ -41,6 +41,12 @@
 }
 .csv-btn:hover { background: var(--panel); color: var(--accent); text-decoration: none; }
 .csv-hint { font: 600 10px/1.4 var(--mono); color: var(--muted); opacity: .7; }
+.log-off-banner {
+  background: var(--panel); border: 1px solid rgba(245,158,11,.5); border-left: 3px solid #f59e0b;
+  border-radius: 5px; padding: 10px 14px; margin-bottom: 16px;
+  font: 600 12px/1.5 var(--mono); color: var(--text);
+}
+.log-off-banner .muted { color: var(--muted); font-weight: 600; }
 
 .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 26px; }
 .scard { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 15px 16px; }
@@ -88,6 +94,14 @@
 {% endblock %}
 
 {% block body %}
+{% if counter_devices %}
+<div class="log-off-banner">
+  Журнал печати (PrintService/Operational) выключен на {{ counter_devices|length }} ПК —
+  «кто печатал» не учитывается:
+  {% for c in counter_devices %}{{ c.hostname or "Без названия" }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  <span class="muted">Агент попробует включить журнал сам; для GPO-парка включите централизованно.</span>
+</div>
+{% endif %}
 <div class="filter-panel">
   <div class="filter-row">
     <div class="days-btns" id="presets">

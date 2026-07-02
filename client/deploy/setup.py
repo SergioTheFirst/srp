@@ -363,7 +363,8 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     write_config_no_bom(destp / CONFIG, cfg)
     _log(dest, "config.json written (UTF-8, no BOM)")
 
-    _run(wevtutil_enable_cmd())  # print-log: best effort, never fatal
+    # print-log: best effort, never fatal -- but a failure must land in install.log
+    _run(wevtutil_enable_cmd(), dest=dest, label="wevtutil print-log")
 
     if not opts.allow_offline:
         # Live collect+send check. Runs in THIS elevated-admin context, not SYSTEM

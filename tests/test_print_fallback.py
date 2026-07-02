@@ -308,3 +308,39 @@ def test_counter_rows_with_null_job_id_are_not_deduped(client: TestClient) -> No
     stats = client.get("/api/v1/devices/dev-dedup/print?days=0").json()
     assert stats["total_pages"] == 6
     assert stats["total_jobs"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# self-heal: counter mode attempts to enable the operational log
+# --------------------------------------------------------------------------- #
+
+
+def test_counter_mode_attempts_print_log_enable(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pj, "_ENABLE_ATTEMPTED", False)
+    monkeypatch.setattr(pj.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    pj._try_enable_print_log()
+    pj._try_enable_print_log()  # повторный вызов -- no-op (1 попытка на процесс)
+    assert calls == [["wevtutil", "sl", pj._PRINT_LOG, "/e:true"]]
+
+
+def test_collect_wires_self_heal_only_in_counter_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts: list[str] = []
+    sentinel = pj.CollectorResult({"jobs": []}, {})
+    monkeypatch.setattr(pj, "_try_enable_print_log", lambda: attempts.append("x"))
+    monkeypatch.setattr(pj, "_collect_via_counter", lambda *a, **k: sentinel)
+    monkeypatch.setattr(pj, "_collect_via_events", lambda *a, **k: sentinel)
+
+    monkeypatch.setattr(pj, "_detect_mode", lambda: "counter")
+    assert pj.collect_print_jobs(tmp_path / "s.json") is sentinel
+    assert attempts == ["x"]
+
+    monkeypatch.setattr(pj, "_detect_mode", lambda: "events")
+    pj.collect_print_jobs(tmp_path / "s.json")
+    assert attempts == ["x"]  # events-режим журнал не трогает
+
+    monkeypatch.setattr(pj, "_detect_mode", lambda: "counter")
+    pj.collect_print_jobs(tmp_path / "s.json", autoenable=False)
+    assert attempts == ["x"]  # выключенное самолечение уважает решение админа

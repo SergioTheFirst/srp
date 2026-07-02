@@ -485,6 +485,7 @@ def print_analytics(
             "f_device": device,
             "f_printer": printer,
             "f_ip": ip,
+            "counter_devices": db.get_print_counter_mode_devices(),
         },
     )
 
