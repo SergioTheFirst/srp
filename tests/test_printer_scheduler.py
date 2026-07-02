@@ -194,3 +194,66 @@ def test_poll_now_wires_discovery_to_cycle():
     ips = sorted(r["ip"] for _, r in stored)
     assert ips == ["192.168.1.50", "192.168.1.51"]  # static list + spooler hint both polled
     assert res["polled"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# IPP Get-Jobs wiring (З.10-P1): opt-in, only fires on a live, confirmed answer
+# --------------------------------------------------------------------------- #
+
+
+def test_poll_cycle_collects_ipp_jobs_when_enabled_and_printer_online():
+    calls: list[str] = []
+    stored: list[tuple] = []
+
+    def fake_probe(ip, **kw):
+        return PrinterReading(ip=ip, serial="CNX-1", status="idle")
+
+    scheduler.run_poll_cycle(
+        [_cand("192.168.1.10")],
+        PrinterConfig(ipp_jobs=True),
+        probe=fake_probe,
+        store=lambda *a, **k: None,
+        jobs_probe=lambda ip, **k: calls.append(ip) or [{"job_id": 1, "user_name": "u"}],
+        jobs_store=lambda pid, jobs, received_at=None: stored.append((pid, jobs)),
+    )
+    assert calls == ["192.168.1.10"]
+    assert len(stored) == 1 and stored[0][1] == [{"job_id": 1, "user_name": "u"}]
+
+
+def test_poll_cycle_skips_ipp_jobs_when_disabled():
+    calls: list[str] = []
+    scheduler.run_poll_cycle(
+        [_cand("192.168.1.10")],
+        PrinterConfig(ipp_jobs=False),
+        probe=lambda ip, **kw: PrinterReading(ip=ip, serial="CNX-1", status="idle"),
+        store=lambda *a, **k: None,
+        jobs_probe=lambda ip, **k: calls.append(ip) or [],
+        jobs_store=lambda *a, **k: None,
+    )
+    assert calls == []
+
+
+def test_poll_cycle_skips_ipp_jobs_when_printer_unreachable():
+    calls: list[str] = []
+    scheduler.run_poll_cycle(
+        [_cand("192.168.1.10")],
+        PrinterConfig(ipp_jobs=True),
+        probe=lambda ip, **kw: None,  # unreachable
+        store=lambda *a, **k: None,
+        jobs_probe=lambda ip, **k: calls.append(ip) or [],
+        jobs_store=lambda *a, **k: None,
+    )
+    assert calls == []
+
+
+def test_poll_cycle_skips_ipp_jobs_store_when_probe_returns_nothing():
+    stored: list = []
+    scheduler.run_poll_cycle(
+        [_cand("192.168.1.10")],
+        PrinterConfig(ipp_jobs=True),
+        probe=lambda ip, **kw: PrinterReading(ip=ip, serial="CNX-1", status="idle"),
+        store=lambda *a, **k: None,
+        jobs_probe=lambda ip, **k: [],  # printer answered SNMP but had no completed jobs
+        jobs_store=lambda pid, jobs, received_at=None: stored.append((pid, jobs)),
+    )
+    assert stored == []

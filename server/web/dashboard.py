@@ -524,8 +524,11 @@ def printer_card(request: Request, printer_id: str, days: int = 30):
         raise HTTPException(status_code=404, detail="printer not found")
     # Ф6: embed the topology section of this printer's network twin (FK from Ф1).
     nd = db.get_linked_net_device(printer_id=printer_id)
+    # З.10-P1: dominant/supplementary IPP job history (may be empty -- printer
+    # doesn't answer Get-Jobs, or ipp_jobs is off in server/config.json).
+    ipp_jobs = db.get_printer_ipp_jobs(printer_id)
     return _TEMPLATES.TemplateResponse(
-        request, "printer_detail.html", {"d": d, "days": days, "nd": nd}
+        request, "printer_detail.html", {"d": d, "days": days, "nd": nd, "ipp_jobs": ipp_jobs}
     )
 
 
