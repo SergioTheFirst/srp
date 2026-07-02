@@ -2771,6 +2771,30 @@ _PRINT_BASE_FROM = (
 )
 
 
+def get_print_counter_mode_devices(days: int = 7) -> list[dict[str, Any]]:
+    """ПК, чья печать за окно пришла ТОЛЬКО counter-фолбэком (журнал выключен).
+
+    На таких ПК user_name пуст -- оператор должен включить PrintService/Operational
+    (агент пытается сам; GPO-парк требует централизованного включения).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.device_id, d.hostname AS hostname, MAX(p.ts) AS last_ts
+            FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id
+            WHERE p.ts >= ? AND p.source = 'counter'
+              AND NOT EXISTS (
+                SELECT 1 FROM print_jobs e
+                WHERE e.device_id = p.device_id AND e.source = 'events' AND e.ts >= ?
+              )
+            GROUP BY p.device_id ORDER BY hostname
+            """,
+            (cutoff, cutoff),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _date_cutoff_utc(date_str: Optional[str], *, end: bool) -> Optional[str]:
     """'YYYY-MM-DD' local date -> UTC ISO cutoff (no suffix) for lexical compare
     against stored UTC print ts (mirrors _local_day_start_utc). end=False -> start

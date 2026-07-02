@@ -10,11 +10,12 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from client.collectors.ps import as_list, run_ps
+from client.collectors.ps import NO_WINDOW, as_list, run_ps
 from client.collectors.sources import PRINT_JOBS, CollectorResult, failed, field_status, health
 
 _VIRTUAL = (
@@ -237,6 +238,30 @@ def _detect_mode() -> str:
     return "events"
 
 
+_PRINT_LOG = "Microsoft-Windows-PrintService/Operational"
+_ENABLE_ATTEMPTED = False  # 1 попытка на процесс агента: не бодаться с GPO каждый sweep
+
+
+def _try_enable_print_log() -> None:
+    """SYSTEM-агент включает операционный журнал печати, если он выключен.
+
+    То же действие выполняет инсталлятор; здесь — самолечение уже развёрнутого
+    парка (журнал бывает выключен GPO или на до-инсталляторных установках).
+    Провал глотается: следующий sweep честно останется в counter-режиме.
+    """
+    global _ENABLE_ATTEMPTED
+    if _ENABLE_ATTEMPTED:
+        return
+    _ENABLE_ATTEMPTED = True
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(  # nosec B603 B607 -- фиксированный argv, системная утилита
+            ["wevtutil", "sl", _PRINT_LOG, "/e:true"],
+            capture_output=True,
+            timeout=15,
+            creationflags=NO_WINDOW,
+        )
+
+
 def _counter_jobs(
     queues: list[dict[str, Any]], baselines: dict[str, int], sweep_ts: str
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -339,7 +364,7 @@ def _collect_via_counter(
     return CollectorResult(payload, {PRINT_JOBS: health(field_status(True))})
 
 
-def collect_print_jobs(state_path: Path) -> CollectorResult:
+def collect_print_jobs(state_path: Path, autoenable: bool = True) -> CollectorResult:
     """Sweep printed pages; the mode is re-decided EVERY sweep (self-healing).
 
     Log enabled -> events (rich per-job detail); disabled -> counter fallback.
@@ -351,5 +376,7 @@ def collect_print_jobs(state_path: Path) -> CollectorResult:
     sweep_ts = datetime.now(timezone.utc).isoformat()
     if mode == "events":
         return _collect_via_events(state_path, state, sweep_ts)
+    if autoenable:
+        _try_enable_print_log()  # самолечение: этот sweep остаётся counter (журнал пока пуст)
     reseed = str(state.get("mode", "events")) != "counter"
     return _collect_via_counter(state_path, state, sweep_ts, reseed=reseed)

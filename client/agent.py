@@ -59,7 +59,11 @@ class Agent:
         state_path = cfg.resolved_buffer_path().with_name("print_state.json")
         self._print_state_path = state_path
         self._tasks: list[tuple[str, Collector, str]] = list(TASKS) + [
-            ("print_jobs", partial(collect_print_jobs, state_path), "print_interval_sec"),
+            (
+                "print_jobs",
+                partial(collect_print_jobs, state_path, autoenable=cfg.print_log_autoenable),
+                "print_interval_sec",
+            ),
         ]
 
     def run_once(self) -> None:

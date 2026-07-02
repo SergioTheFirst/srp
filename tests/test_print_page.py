@@ -51,3 +51,36 @@ def test_print_page_csv_link_present(client: TestClient) -> None:
     h = client.get("/print").text
     assert 'id="csv-link"' in h
     assert "/fleet/print/export.csv" in h
+
+
+def _post_job(client: TestClient, device_id: str, source: str) -> None:
+    from datetime import datetime, timezone
+
+    from tests.conftest import envelope
+
+    job = {
+        "job_id": None,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "printer": "HP",
+        "pages": 2,
+        "source": source,
+    }
+    r = client.post(
+        "/api/v1/ingest",
+        json=envelope(device_id, "print_jobs", {"jobs": [job], "window_from": None}),
+    )
+    assert r.status_code == 200
+
+
+def test_print_page_banner_lists_counter_mode_devices(client: TestClient) -> None:
+    """ПК только с counter-печатью (журнал выключен) виден в баннере на /print."""
+    _post_job(client, "dev-ctr", "counter")
+    h = client.get("/print").text
+    assert "Журнал печати" in h
+    assert "выключен на 1 ПК" in h
+
+
+def test_print_page_no_banner_when_events_flow(client: TestClient) -> None:
+    _post_job(client, "dev-ok", "events")
+    h = client.get("/print").text
+    assert "Журнал печати" not in h

@@ -29,6 +29,7 @@ _PREAMBLE = (
 # from allocating a window -- essential for the per-user tray cert check and for
 # any non-session-0 launch. Absent off-Windows, where 0 is the harmless default.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+NO_WINDOW = _NO_WINDOW  # public: единый флаг «без окна» для ВСЕХ subprocess в client/
 
 
 class PsResult(NamedTuple):
