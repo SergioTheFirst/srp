@@ -1,0 +1,17 @@
+<script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>

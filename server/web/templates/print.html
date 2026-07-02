@@ -206,6 +206,7 @@
   </div>
 </div>
 
+{% include "_plotly_hover.html" %}
 <script>
 (function () {
   var API = "/api/v1/fleet/print";
@@ -356,6 +357,7 @@
       showlegend: true,
       legend: { orientation: "h", font: { size: 10 }, y: -0.16, x: 0, xanchor: "left", yanchor: "top" },
       autosize: true,
+      hoverlabel: srpHoverLabel(),
     }, { responsive: true, displayModeBar: false });
   }
   function loadSeries() {
@@ -423,6 +425,7 @@
       xaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
       yaxis: { gridcolor: "#132030", tickfont: { size: 11 } },
       showlegend: false, autosize: true,
+      hoverlabel: srpHoverLabel(),
     }, o);
   }
   function detectAnomalies(daily) {
