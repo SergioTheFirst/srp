@@ -212,6 +212,89 @@ def test_linked_agent_enriches_sparse_net_device_facts():
     assert n["hostname"] == "pc-d1"
 
 
+# --------------------------------------------------------------------------- #
+# З.4: linked printer_id must upgrade a pre-classified "endpoint" glyph too --
+# not only "unknown" -- so the netmap type filter (which reads n.dev_type) can
+# ever select it as "printer". Infra types (router/switch/ap/server) must NOT
+# be overridden by a mere printer_id link (a print server is not a printer).
+# --------------------------------------------------------------------------- #
+def test_linked_printer_upgrades_endpoint_glyph_via_seed():
+    pr = device_nid(mac=PR)
+    g = build_network_map(
+        [_nd(pr, "endpoint", "192.168.1.20", PR, printer_id="p1")],
+        [],
+        [],
+        [],
+    )
+    n = _by_nid(g)[pr]
+    assert n["dev_type"] == "printer"
+
+
+def test_merge_printer_upgrades_existing_endpoint_node():
+    pr = device_nid(mac=PR)
+    g = build_network_map(
+        [_nd(pr, "endpoint", "192.168.1.20", PR)],
+        [],
+        [],
+        [_printer("p2", mac=PR, ip="192.168.1.20")],
+    )
+    n = _by_nid(g)[pr]
+    assert n["dev_type"] == "printer" and n["printer_id"] == "p2"
+
+
+def test_stored_infra_type_survives_printer_link():
+    # A print server classified as "server" must not be repainted as a printer
+    # just because a printer_id FK happens to point at it.
+    sv = device_nid(mac=SW)
+    g = build_network_map(
+        [_nd(sv, "server", mac=SW, printer_id="p3")],
+        [],
+        [],
+        [],
+    )
+    assert _by_nid(g)[sv]["dev_type"] == "server"
+
+
+def test_stored_infra_type_survives_printer_merge():
+    # Same guarantee via the OTHER upgrade path: _merge_printers/_enrich_printer
+    # matching a "printers" row onto an already-seeded infra node by MAC/IP must
+    # not repaint a print server as a printer either.
+    sv = device_nid(mac=SW)
+    g = build_network_map(
+        [_nd(sv, "server", "192.168.1.30", SW)],
+        [],
+        [],
+        [_printer("p4", mac=SW, ip="192.168.1.30")],
+    )
+    n = _by_nid(g)[sv]
+    assert n["dev_type"] == "server" and n["printer_id"] == "p4"
+
+
+# --------------------------------------------------------------------------- #
+# З.5: agent-uplink medium must reflect the adapter that is actually UP, not
+# whichever adapter happens to list the gateway first (a stale/disabled NIC
+# with a leftover gateway must not paint a live Wi-Fi uplink as wired).
+# --------------------------------------------------------------------------- #
+def test_uplink_medium_prefers_up_adapter_over_first_listed():
+    snap = _snap("d1", A1, kind="ethernet")
+    snap["adapters"][0]["up"] = False  # stale ethernet, gateway leftover
+    snap["adapters"].append(
+        {
+            "name": "wifi0",
+            "kind": "wifi",
+            "mac": A2,
+            "up": True,
+            "ipv4": ["192.168.1.12"],
+            "gateway": "192.168.1.1",
+        }
+    )
+    g = build_network_map([], [], [snap], [])
+    uplinks = [e for e in g["links"] if e["link_kind"] == "agent-uplink"]
+    assert len(uplinks) == 1
+    assert uplinks[0]["medium"] == "wireless"
+    assert g["totals"]["wireless_links"] == 1
+
+
 def test_linked_printer_enriches_sparse_net_device_facts():
     nid = "nd-sn-SPARSE-PRINTER"
     g = build_network_map(

@@ -504,6 +504,15 @@ def test_netmap_node_predicate_is_in_outer_scope_for_pick(client):
     assert body.count("function nodeFilteredOut(") == 1
 
 
+def test_netmap_type_filter_reads_dev_type(client):
+    """Пин З.4: чекбокс типа (``state.types``) и рендер узла читают ОДНО поле
+    (``dev_type`` -> ``n.type``) -- фильтр «принтер» действует на любой узел,
+    чей dev_type == "printer", а не на отдельную классификацию."""
+    body = client.get("/netmap").text
+    assert "state.types[n.type]" in body
+    assert 'n.dev_type || "unknown"' in body
+
+
 # --- Ф10: «Топология» demolished -> one entry point, /netmap -------------------
 
 
