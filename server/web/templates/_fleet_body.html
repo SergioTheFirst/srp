@@ -82,8 +82,8 @@
         data-risk="{{ d.risk_exposure or 0 }}">
 
       {# ── Device name + identity sub-line ─────────────────────────────── #}
-      <td data-name="{{ (d.hostname or d.device_id)|lower }}">
-        <a href="/device/{{ d.device_id }}">{{ d.hostname or d.device_id }}</a>{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
+      <td data-name="{{ d.display_name|lower }}">
+        <a href="/device/{{ d.device_id }}" title="{{ d.device_id }}">{{ d.display_name }}</a>{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
         <div class="dev-sub2">
           {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
           {%- if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
@@ -168,7 +168,7 @@
         </button>
         <button class="delbtn"
                 data-id="{{ d.device_id }}"
-                data-name="{{ d.hostname or d.device_id }}"
+                data-name="{{ d.display_name }}"
                 title="удалить запись и все её данные из базы">✕</button>
       </td>
     </tr>

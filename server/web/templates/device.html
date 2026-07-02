@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ d.hostname or d.device_id }} · SRP{% endblock %}
+{% block title %}{{ d.display_name }} · SRP{% endblock %}
 {% block subtitle %}{{ d.model or "" }}{% if d.chassis %} · {{ d.chassis }}{% endif %}{% endblock %}
 
 {% set s = d.scores %}
@@ -117,7 +117,7 @@
 </p>
 
 <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">
-  <h1 style="font:700 24px/1.2 var(--mono);margin:0">{{ d.hostname or d.device_id }}</h1>
+  <h1 style="font:700 24px/1.2 var(--mono);margin:0" title="{{ d.device_id }}">{{ d.display_name }}</h1>
   {% if d.chassis %}<span class="pill">{{ d.chassis }}</span>{% endif %}
 </div>
 <div class="small muted mono" style="margin-bottom:20px">
@@ -127,6 +127,8 @@
   {% if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
   · агент {{ d.agent_version or "?" }}
   · контакт {{ fmt_age(d.last_seen_age_sec) }} назад
+  {% if card and card.ip %} · IP {{ card.ip }}{% if card.net_nid and "net" in card.sources and card.sources|length > 1 %} <span class="chip-unk" title="дополнено картой сети">карта</span>{% endif %}{% endif %}
+  {% if card and card.mac %} · MAC {{ card.mac }}{% endif %}
 </div>
 
 {% if not s %}
