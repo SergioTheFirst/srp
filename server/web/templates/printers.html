@@ -111,6 +111,7 @@ td.r, th.r { text-align:right; }
 </div>
 {% endif %}
 
+{% include "_plotly_hover.html" %}
 <script id="pages-series-data" type="application/json">{{ pages_series|tojson }}</script>
 <script>
 function pollNow() {
@@ -172,6 +173,7 @@ function filterRows() {
         xaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", type: "date" },
         yaxis: { gridcolor: css.getPropertyValue("--line").trim() || "#132030", title: { text: "страниц (всего)", font: { size: 11 } }, automargin: true },
         legend: { orientation: "h", font: { size: 10 } }, autosize: true,
+        hoverlabel: srpHoverLabel(),
       }, { responsive: true, displayModeBar: false });
     }
     draw();

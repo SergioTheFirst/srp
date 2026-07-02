@@ -89,6 +89,7 @@ td.r,th.r{text-align:right;}
   {% else %}<div class="no-data">Нет сопоставленных данных печати с ПК (имя принтера на ПК может отличаться от сетевого).</div>{% endif %}
 </div>
 
+{% include "_plotly_hover.html" %}
 <script id="series-data" type="application/json">{{ d.series|tojson }}</script>
 <script>
 (function () {
@@ -114,6 +115,7 @@ td.r,th.r{text-align:right;}
       margin: { t: 8, r: 14, b: 40, l: 60 },
       xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "стр", font: { size: 11 } } },
       showlegend: false, autosize: true,
+      hoverlabel: srpHoverLabel(),
     }, { responsive: true, displayModeBar: false });
   }
   draw();
