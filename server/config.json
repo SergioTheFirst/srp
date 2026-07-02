@@ -4,6 +4,7 @@
   "db_path": "srp.db",
   "retain_heartbeats": 500,
   "retain_events": 1000,
+  "stale_after_sec": 600,
   "printer_poll_enabled": true,
   "printers": {
     "poll_interval_sec": 900,

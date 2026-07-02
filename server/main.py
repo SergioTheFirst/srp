@@ -300,6 +300,7 @@ async def _netdisco_adapter_loop(cfg: ServerConfig) -> None:
 
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     cfg = cfg or load_config()
+    db.set_stale_threshold(cfg.stale_after_sec)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

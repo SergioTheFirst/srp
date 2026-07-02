@@ -330,8 +330,29 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             clock_drift_sec=drift,
         )
         db.store_print_jobs(did, env.payload.get("jobs", []), received_at=received_at)
+    elif env.msg_type == "liveness":
+        # Только last_seen: ни строк телеметрии, ни trust-оценки (source_health
+        # у liveness пуст), ни рескоринга (skip-set ниже). Дешёвый пинг «я жив».
+        db.touch_device(
+            did,
+            ts,
+            env.agent_version,
+            hostname=env.hostname,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            org_code=env.org_code,
+            dept_code=env.dept_code,
+            comment=env.comment,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
+        )
 
-    if env.source_health:
+    # liveness carries no telemetry by contract (LivenessPayload = {alive}) and must
+    # never enter trust evaluation -- enforced here, not merely assumed from the
+    # client never populating source_health, since a forged envelope could otherwise
+    # smuggle a fabricated "ok" source reading through this msg_type-agnostic gate.
+    if env.msg_type != "liveness" and env.source_health:
         # Convert SourceHealth pydantic objects to plain dicts for evaluate_trust
         raw_health = {
             src: {"status": sh.status, "collected_at": sh.collected_at}
@@ -344,7 +365,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # events message is pure waste (and now drags in the O(n^2) W4.1 trend pass),
     # so we store the events above and skip the recompute. Message types that do
     # change scores still rescore synchronously, so fresh scores land on ingest.
-    scores = None if env.msg_type in {"events", "print_jobs"} else recompute_scores(did)
+    scores = None if env.msg_type in {"events", "print_jobs", "liveness"} else recompute_scores(did)
     return {
         "device_id": did,
         "msg_type": env.msg_type,
