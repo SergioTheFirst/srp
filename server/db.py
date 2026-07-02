@@ -1528,14 +1528,25 @@ def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dic
     return {"ts": row["ts"], **json.loads(row["payload"])}
 
 
-# The agent reports on a 14400s (4h) full-cycle cadence, so a device only counts
-# as "stale" once it has missed ~2 cycles -- a normal gap between beats must not
-# read as offline. This is a dashboard-only signal (fleet "stale" flag + KPI); it
-# does NOT feed trust gating (the "stale" *trust* state is a separate per-source
-# verdict set by server/trust, unrelated to this wall-clock threshold).
-_AGENT_CADENCE_SEC = 14400
-_STALE_AFTER_SEC = _AGENT_CADENCE_SEC * 2 + 900  # ~8.25h silent -> "stale"
+# Liveness-пинг агента идёт каждые ~300 с (client/config.py liveness_interval_sec),
+# так что 2 пропущенных пинга = offline (~10 минут вместо прежних ~8.25 ч на
+# 4-часовом телеметрийном каденсе). Порог настраивается: server/config.json
+# "stale_after_sec" -> set_stale_threshold() при старте (main.create_app).
+# Это dashboard-only сигнал (fleet "stale" flag + KPI); он НЕ питает trust-гейт
+# (per-source trust-порог живёт отдельно в server/trust/gate.py).
+_AGENT_CADENCE_SEC = 14400  # полный телеметрийный цикл (справочно)
+_DEFAULT_STALE_AFTER_SEC = 600
+_STALE_AFTER_SEC = _DEFAULT_STALE_AFTER_SEC
 STALE_AFTER_SEC = _STALE_AFTER_SEC  # public alias for dashboard
+
+
+def set_stale_threshold(seconds: int) -> None:
+    """Применить порог offline из server/config.json (вызывается при старте)."""
+    global _STALE_AFTER_SEC, STALE_AFTER_SEC
+    _STALE_AFTER_SEC = max(60, int(seconds))
+    STALE_AFTER_SEC = _STALE_AFTER_SEC
+
+
 _CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
 
 

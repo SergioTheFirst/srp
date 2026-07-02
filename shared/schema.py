@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_VERSION = "0.1.0"
 
-MsgType = Literal["inventory", "historical", "heartbeat", "events", "print_jobs"]
+MsgType = Literal["inventory", "historical", "heartbeat", "events", "print_jobs", "liveness"]
 
 
 def utcnow_iso() -> str:
@@ -243,6 +243,17 @@ class HeartbeatPayload(_Base):
 
 
 # --------------------------------------------------------------------------- #
+# Liveness  (частый пинг «я жив»; НИКАКОЙ телеметрии — сервер обновляет только
+# devices.last_seen. Аддитивный msg_type: CONTRACT_VERSION не бампится — старый
+# агент его не шлёт, старому серверу новый агент шлёт напрасно (422 -> drop),
+# телеметрийные конверты при этом не страдают.)
+# --------------------------------------------------------------------------- #
+class LivenessPayload(_Base):
+    # Одно непустое поле: transport пропускает конверты с пустым payload.
+    alive: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------- #
 # Events  (whitelisted log batch)
 # --------------------------------------------------------------------------- #
 class EventItem(_Base):
@@ -333,6 +344,7 @@ _PAYLOAD_MODELS: dict[str, type[_Base]] = {
     "heartbeat": HeartbeatPayload,
     "events": EventBatchPayload,
     "print_jobs": PrintJobsPayload,
+    "liveness": LivenessPayload,
 }
 
 

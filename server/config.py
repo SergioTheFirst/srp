@@ -26,6 +26,8 @@ class ServerConfig:
     db_path: str = "srp.db"  # relative -> resolved against project root
     retain_heartbeats: int = 500  # per device, keep last N (MVP cap)
     retain_events: int = 1000  # per device
+    # Порог «offline» на дашборде, сек: 2 пропущенных liveness-пинга агента (300 с).
+    stale_after_sec: int = 600
     # Device-ghost hygiene (2026-06-16): auto-delete a device after this many days
     # of silence (judged on the server-stamped last_seen). 0 disables auto-purge.
     device_retention_days: int = 30

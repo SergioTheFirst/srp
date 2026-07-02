@@ -51,6 +51,7 @@ class ClientConfig:
     heartbeat_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
     events_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
     print_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    liveness_interval_sec: int = 300  # пинг «я жив»; offline на дашборде виден за ~10 мин
     http_timeout_sec: int = 15
     buffer_path: str = "buffer.jsonl"  # offline spool, relative to config dir
     # Site/org identity.  Empty string means "not assigned"; server COALESCE keeps

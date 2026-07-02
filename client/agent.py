@@ -30,6 +30,7 @@ from client.collectors import (
     collect_heartbeat,
     collect_historical,
     collect_inventory,
+    collect_liveness,
 )
 from client.collectors.print_jobs import collect_print_jobs
 from client.collectors.sources import CollectorResult
@@ -47,6 +48,9 @@ TASKS: list[tuple[str, Collector, str]] = [
     ("historical", collect_historical, "historical_interval_sec"),
     ("heartbeat", collect_heartbeat, "heartbeat_interval_sec"),
     ("events", collect_events, "events_interval_sec"),
+    # Частый «я жив» без телеметрии: сервер лишь обновляет last_seen -> offline
+    # на дашборде виден за ~2 пропущенных пинга, а не за 4-часовой цикл.
+    ("liveness", collect_liveness, "liveness_interval_sec"),
 ]
 
 _MAX_SLEEP_SEC = 60.0  # cap so a buffered backlog gets retried even when idle
