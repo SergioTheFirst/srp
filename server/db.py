@@ -107,7 +107,11 @@ CREATE TABLE IF NOT EXISTS devices (
   dept_code       TEXT,
   comment         TEXT,
   last_reported_ts TEXT,
-  clock_drift_sec REAL
+  clock_drift_sec REAL,
+  update_state    TEXT,
+  update_error    TEXT,
+  update_checked_at TEXT,
+  version_changed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS inventory (
   device_id TEXT PRIMARY KEY,
@@ -450,6 +454,11 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("dept_code", "TEXT"),
         ("comment", "TEXT"),
         ("department", "TEXT"),
+        # T1 agent auto-update: self-update status + last agent_version change.
+        ("update_state", "TEXT"),
+        ("update_error", "TEXT"),
+        ("update_checked_at", "TEXT"),
+        ("version_changed_at", "TEXT"),
     ),
     "print_jobs": (("source", "TEXT"),),
     # Phase 1 net-map unification: FK link to the agent (devices) / printer record.
@@ -532,8 +541,8 @@ def upsert_device(
               (device_id, hostname, manufacturer, model, chassis,
                agent_version, first_seen, last_seen,
                site_code, site_name, org_code, dept_code, comment,
-               last_reported_ts, clock_drift_sec)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               last_reported_ts, clock_drift_sec, version_changed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               hostname     = COALESCE(excluded.hostname, devices.hostname),
               manufacturer = COALESCE(excluded.manufacturer, devices.manufacturer),
@@ -547,7 +556,10 @@ def upsert_device(
               dept_code    = COALESCE(excluded.dept_code, devices.dept_code),
               comment      = COALESCE(excluded.comment, devices.comment),
               last_reported_ts = excluded.last_reported_ts,
-              clock_drift_sec  = excluded.clock_drift_sec
+              clock_drift_sec  = excluded.clock_drift_sec,
+              version_changed_at = CASE
+                WHEN excluded.agent_version IS NOT devices.agent_version
+                THEN excluded.last_seen ELSE devices.version_changed_at END
             """,
             (
                 device_id,
@@ -565,6 +577,7 @@ def upsert_device(
                 comment,
                 reported,
                 clock_drift_sec,
+                recv,
             ),
         )
 
@@ -587,6 +600,11 @@ def touch_device(
 
     last_seen is the server receipt time (W0.2): staleness must not depend on the
     client clock. last_reported_ts retains the client's self-reported time.
+
+    T1 agent auto-update: ON CONFLICT now also refreshes agent_version (it used
+    to only get set on the initial INSERT, so a version bump was visible only on
+    the next rare inventory cadence) and maintains version_changed_at -- a
+    deliberate behavior change, covered by tests/test_update_status_ingest.py.
     """
     recv = received_at or _now_iso()
     reported = last_reported_ts or ts
@@ -596,18 +614,22 @@ def touch_device(
             INSERT INTO devices
               (device_id, hostname, agent_version, first_seen, last_seen,
                site_code, site_name, org_code, dept_code, comment,
-               last_reported_ts, clock_drift_sec)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               last_reported_ts, clock_drift_sec, version_changed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id) DO UPDATE SET
               last_seen = excluded.last_seen,
               hostname   = COALESCE(excluded.hostname, devices.hostname),
+              agent_version = excluded.agent_version,
               site_code  = COALESCE(excluded.site_code, devices.site_code),
               site_name  = COALESCE(excluded.site_name, devices.site_name),
               org_code   = COALESCE(excluded.org_code, devices.org_code),
               dept_code  = COALESCE(excluded.dept_code, devices.dept_code),
               comment    = COALESCE(excluded.comment, devices.comment),
               last_reported_ts = excluded.last_reported_ts,
-              clock_drift_sec  = excluded.clock_drift_sec
+              clock_drift_sec  = excluded.clock_drift_sec,
+              version_changed_at = CASE
+                WHEN excluded.agent_version IS NOT devices.agent_version
+                THEN excluded.last_seen ELSE devices.version_changed_at END
             """,
             (
                 device_id,
@@ -622,6 +644,7 @@ def touch_device(
                 comment,
                 reported,
                 clock_drift_sec,
+                recv,
             ),
         )
 
@@ -1795,9 +1818,11 @@ def get_devices() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT d.device_id, d.hostname, d.model, d.chassis, d.last_seen,
+            SELECT d.device_id, d.hostname, d.model, d.chassis, d.agent_version, d.last_seen,
                    d.site_code, d.site_name, d.org_code, d.dept_code, d.comment,
                    d.department, d.last_reported_ts, d.clock_drift_sec,
+                   d.update_state, d.update_error, d.update_checked_at,
+                   d.version_changed_at,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    h.payload AS hist_payload,
                    a.note AS ack_note, a.acked_at AS ack_at,
@@ -1838,6 +1863,7 @@ def get_devices() -> list[dict[str, Any]]:
                 ),
                 "model": r["model"],
                 "chassis": r["chassis"],
+                "agent_version": r["agent_version"],
                 "last_seen": r["last_seen"],
                 "last_seen_age_sec": age,
                 # Карта сети знает IP там, где редкий телеметрийный цикл ещё не
@@ -1854,6 +1880,10 @@ def get_devices() -> list[dict[str, Any]]:
                 "dept_code": r["dept_code"],
                 "comment": r["comment"],
                 "department": r["department"],
+                "update_state": r["update_state"],
+                "update_error": r["update_error"],
+                "update_checked_at": r["update_checked_at"],
+                "version_changed_at": r["version_changed_at"],
                 "performance": r["performance"],
                 "reliability": r["reliability"],
                 "wear": r["wear"],
@@ -1935,6 +1965,10 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "dept_code": d["dept_code"],
         "comment": d["comment"],
         "agent_version": d["agent_version"],
+        "update_state": d["update_state"],
+        "update_error": d["update_error"],
+        "update_checked_at": d["update_checked_at"],
+        "version_changed_at": d["version_changed_at"],
         "first_seen": d["first_seen"],
         "last_seen": d["last_seen"],
         "last_reported_ts": d["last_reported_ts"],
@@ -3729,3 +3763,25 @@ def set_device_comment(device_id: str, comment: Optional[str]) -> bool:
             (comment, device_id),
         ).rowcount
     return n > 0
+
+
+def set_update_status(
+    device_id: str,
+    state: Optional[str],
+    error: Optional[str],
+    checked_at: Optional[str],
+) -> None:
+    """Persist the agent's self-update status (update_status msg_type, T1).
+
+    Called after touch_device already ensured the row exists, so this is a
+    plain UPDATE, not an upsert. error is clipped to 500 chars as a belt to the
+    schema's max_length=500 -- pipeline passes the raw payload dict here, not a
+    validated model instance.
+    """
+    clipped_error = error[:500] if error else error
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE devices SET update_state=?, update_error=?, update_checked_at=? "
+            "WHERE device_id=?",
+            (state, clipped_error, checked_at, device_id),
+        )

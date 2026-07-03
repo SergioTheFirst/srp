@@ -26,7 +26,7 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from client.config import hash_password
 from client.winflags import NO_WINDOW
@@ -42,6 +42,7 @@ EXIT_TASK_AUTOSTART = 5
 DEST = r"C:\SRP"
 SPOOL_DIR = "spool"  # user-writable subdir for the tray's personal-cert spool (stage 8)
 TASK_NAME = "SRP Agent"
+UPDATE_TASK_NAME = "SRP Agent Update"  # one-shot task that runs staging setup.exe --update
 RUN_KEY = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "SRP-Tray"
 PRINT_LOG = "Microsoft-Windows-PrintService/Operational"
@@ -72,6 +73,7 @@ class SetupOptions:
     quiet: bool = False
     uninstall: bool = False
     purge: bool = False
+    update: bool = False  # staging setup.exe --update: apply an already-staged package
 
 
 class SetupError(Exception):
@@ -102,9 +104,11 @@ def parse_args(argv: list[str]) -> SetupOptions:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--purge", action="store_true")
+    p.add_argument("--update", action="store_true")
     a = p.parse_args(argv)
-    # Auto-quiet: a fully-specified command runs unattended (spec §6).
-    quiet = a.quiet or (bool(a.server) and bool(a.org))
+    # Auto-quiet: a fully-specified command runs unattended (spec §6); --update is
+    # always unattended too -- it runs from a SYSTEM scheduled task, no user session.
+    quiet = a.quiet or (bool(a.server) and bool(a.org)) or a.update
     return SetupOptions(
         server=a.server,
         org=a.org,
@@ -118,13 +122,14 @@ def parse_args(argv: list[str]) -> SetupOptions:
         quiet=quiet,
         uninstall=a.uninstall,
         purge=a.purge,
+        update=a.update,
     )
 
 
 def validate(opts: SetupOptions, *, template_has_server: bool = False) -> None:
     """Raise :class:`SetupError` (exit 2) on bad/incomplete install parameters."""
-    if opts.uninstall:
-        return
+    if opts.uninstall or opts.update:
+        return  # update reads everything from the already-installed C:\SRP; no params needed
     if not _CODE_RE.match(opts.org):
         raise SetupError(
             EXIT_BAD_PARAMS, "код организации обязателен (формат ^[A-Za-z0-9_-]{1,16}$)"
@@ -240,6 +245,13 @@ def schtasks_delete_cmd(task_name: str = TASK_NAME) -> list[str]:
     return ["schtasks", "/delete", "/tn", task_name, "/f"]
 
 
+def update_task_delete_cmd() -> list[str]:
+    # Best-effort cleanup: the one-shot task currently executing us deletes its own
+    # registration here. Supported schtasks use -- the process already launched, so
+    # the registration is no longer needed; the caller ignores the return code.
+    return ["schtasks", "/delete", "/tn", UPDATE_TASK_NAME, "/f"]
+
+
 def reg_add_run_cmd(tray_exe: str) -> list[str]:
     return ["reg", "add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", tray_exe, "/f"]
 
@@ -254,6 +266,10 @@ def wevtutil_enable_cmd() -> list[str]:
 
 def taskkill_tray_cmd() -> list[str]:
     return ["taskkill", "/im", TRAY_EXE, "/f"]
+
+
+def taskkill_agent_cmd() -> list[str]:
+    return ["taskkill", "/im", AGENT_EXE, "/f"]
 
 
 # --------------------------------------------------------------------------- #
@@ -337,6 +353,43 @@ def _payload_dir() -> Path:
     return base / "payload"
 
 
+# --------------------------------------------------------------------------- #
+# process-dead probe -- language-independent, NEVER parses tasklist output
+# --------------------------------------------------------------------------- #
+
+
+def _file_unlocked(path: Path) -> bool:
+    """True if *path* is not locked for writing -- a stopped-process probe.
+
+    Windows keeps a running EXE's image locked against writes; successfully
+    opening it for append means the process holding it has already exited.
+    """
+    if not path.exists():
+        return True
+    try:
+        path.open("ab").close()
+        return True
+    except OSError:
+        return False
+
+
+def _wait_files_unlocked(
+    paths: list[Path],
+    timeout_sec: float = 60.0,
+    probe: Callable[[Path], bool] = _file_unlocked,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Poll *paths* once a second until all unlock, or *timeout_sec* elapses."""
+    elapsed = 0.0
+    while True:
+        if all(probe(p) for p in paths):
+            return True
+        if elapsed >= timeout_sec:
+            return False
+        sleep(1.0)
+        elapsed += 1.0
+
+
 def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     destp = Path(dest)
     destp.mkdir(parents=True, exist_ok=True)
@@ -416,6 +469,63 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     return EXIT_OK
 
 
+def _stop_running_processes(dest: str) -> bool:
+    """End the agent task + kill agent/tray, then wait for their EXEs to unlock.
+
+    schtasks /end may no-op when this very run IS that task -- harmless, ignored.
+    The tray is not relaunched here: SYSTEM cannot reach the interactive user
+    session, and the Run key already relaunches it at the next logon.
+    """
+    _run(schtasks_stop_cmd())
+    _run(taskkill_agent_cmd())
+    _run(taskkill_tray_cmd())
+    destp = Path(dest)
+    return _wait_files_unlocked([destp / AGENT_EXE, destp / TRAY_EXE])
+
+
+def run_update(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
+    """Apply an already-staged update package (``setup.exe --update``, spec T3).
+
+    No validation pass here: the server was just reachable moments ago -- the
+    package that got staged came from it.
+    """
+    destp = Path(dest)
+    _log(dest, "update start")
+    with contextlib.suppress(OSError):
+        version = (payload.parent / "VERSION").read_text(encoding="utf-8").strip()
+        _log(dest, f"update: package version {version}")
+
+    if not _stop_running_processes(dest):
+        _log(dest, "update: агент/трей не освободили файлы за 60 с")
+        return EXIT_COPY_ACL
+    _log(dest, "трей не перезапущен из SYSTEM -- поднимется при следующем входе пользователя")
+
+    if _run(robocopy_cmd(str(payload), dest)) > _ROBOCOPY_OK_MAX:
+        _log(dest, "update: robocopy failed")
+        return EXIT_COPY_ACL
+    if _run(icacls_cmd(dest)) != 0:
+        _log(dest, "update: icacls failed")
+        return EXIT_COPY_ACL
+
+    try:
+        _write_task_xml_utf16(destp / TASK_XML)
+    except OSError as exc:
+        _log(dest, f"update: task XML re-encode failed: {exc}")
+    if _run(schtasks_create_cmd(destp / TASK_XML)) != 0:
+        _log(dest, "update: schtasks create failed")
+        return EXIT_TASK_AUTOSTART
+    _run(schtasks_start_cmd())
+
+    # Two independent best-effort steps: a locked/missing pkg.zip must not skip
+    # the task deregistration (a shared suppress block would abort at the first raise).
+    with contextlib.suppress(OSError):
+        (destp / "update" / "pkg.zip").unlink(missing_ok=True)
+    _run(update_task_delete_cmd())
+
+    _log(dest, "update done")
+    return EXIT_OK
+
+
 def run_uninstall(opts: SetupOptions, *, dest: str = DEST) -> int:
     _run(schtasks_stop_cmd())
     _run(taskkill_tray_cmd())
@@ -447,6 +557,16 @@ def _interactive(opts: SetupOptions) -> SetupOptions:
 
 def main(argv: Optional[list[str]] = None) -> int:
     opts = parse_args(sys.argv[1:] if argv is None else argv)
+    if opts.update:
+        payload = _payload_dir()
+        if not payload.is_dir():
+            print("[setup] пакет обновления не найден (staging неполный)", file=sys.stderr)
+            return EXIT_BAD_PARAMS
+        try:
+            return run_update(opts, payload=payload)
+        except OSError as exc:
+            print(f"[setup] {exc}", file=sys.stderr)
+            return EXIT_OTHER
     if not opts.quiet and not opts.uninstall and (not opts.server or not opts.org):
         opts = _interactive(opts)
     payload = _payload_dir()

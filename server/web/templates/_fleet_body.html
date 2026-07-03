@@ -87,7 +87,7 @@
         <div class="dev-sub2">
           {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
           {%- if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
-          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}
+          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновл.</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}
         </div>
       </td>
 

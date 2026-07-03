@@ -31,10 +31,13 @@ copy /y "client\deploy\config.template.json" "%SHARE%\config.template.json"    >
 copy /y "client\deploy\task_template.xml"    "%SHARE%\payload\task_template.xml" >nul || goto :err
 copy /y "VERSION"                            "%SHARE%\VERSION"                 >nul || goto :err
 
+python packaging\make_update_package.py || goto :err
+
 echo.
 echo Build complete: %SHARE%
 echo Copy its contents to the hidden, IT-only share \\server\srp$\
 echo Then deploy a PC with:  \\server\srp$\setup.exe --server http://IP:8000 --org 101
+echo Copy dist\updates\*.zip + manifest.json to server\updates\ to enable agent auto-update
 exit /b 0
 
 :err

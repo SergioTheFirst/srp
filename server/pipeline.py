@@ -228,6 +228,13 @@ def evaluate_trust(
 # Main pipeline entry points
 # --------------------------------------------------------------------------- #
 
+# Message types that carry no real telemetry (liveness = {alive} only;
+# update_status = self-update state) and must never enter trust evaluation --
+# a forged envelope could otherwise smuggle a fabricated source_health reading
+# through the msg_type-agnostic gate below (the same HIGH finding closed for
+# liveness in B2 ops-fixes now also covers update_status).
+_NO_TRUST_MSG_TYPES = frozenset({"liveness", "update_status"})
+
 
 def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # Validate payload shape against the typed model (raises ValueError on bad type).
@@ -347,12 +354,37 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             last_reported_ts=ts,
             clock_drift_sec=drift,
         )
+    elif env.msg_type == "update_status":
+        # Статус самообновления агента: last_seen + update_state/error/checked_at.
+        # available_version контрактом принимается, но сервер его не хранит --
+        # актуальную версию сервер знает из своего манифеста (server/updates.py).
+        db.touch_device(
+            did,
+            ts,
+            env.agent_version,
+            hostname=env.hostname,
+            site_code=env.site_code,
+            site_name=env.site_name,
+            org_code=env.org_code,
+            dept_code=env.dept_code,
+            comment=env.comment,
+            received_at=received_at,
+            last_reported_ts=ts,
+            clock_drift_sec=drift,
+        )
+        db.set_update_status(
+            did,
+            env.payload.get("state"),
+            env.payload.get("error"),
+            env.payload.get("checked_at"),
+        )
 
-    # liveness carries no telemetry by contract (LivenessPayload = {alive}) and must
-    # never enter trust evaluation -- enforced here, not merely assumed from the
-    # client never populating source_health, since a forged envelope could otherwise
-    # smuggle a fabricated "ok" source reading through this msg_type-agnostic gate.
-    if env.msg_type != "liveness" and env.source_health:
+    # liveness/update_status carry no telemetry by contract (LivenessPayload =
+    # {alive}; UpdateStatusPayload = self-update state) and must never enter trust
+    # evaluation -- enforced here, not merely assumed from the client never
+    # populating source_health, since a forged envelope could otherwise smuggle a
+    # fabricated "ok" source reading through this msg_type-agnostic gate.
+    if env.msg_type not in _NO_TRUST_MSG_TYPES and env.source_health:
         # Convert SourceHealth pydantic objects to plain dicts for evaluate_trust
         raw_health = {
             src: {"status": sh.status, "collected_at": sh.collected_at}
@@ -365,7 +397,8 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # events message is pure waste (and now drags in the O(n^2) W4.1 trend pass),
     # so we store the events above and skip the recompute. Message types that do
     # change scores still rescore synchronously, so fresh scores land on ingest.
-    scores = None if env.msg_type in {"events", "print_jobs", "liveness"} else recompute_scores(did)
+    no_rescore = {"events", "print_jobs", "liveness", "update_status"}
+    scores = None if env.msg_type in no_rescore else recompute_scores(did)
     return {
         "device_id": did,
         "msg_type": env.msg_type,

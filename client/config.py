@@ -76,9 +76,8 @@ class ClientConfig:
     # Password protection for config changes.
     # Format: "pbkdf2:sha256:<iters>:<salt_hex>:<hash_hex>"; empty = no password.
     config_password_hash: str = ""  # nosec B105
-    # Update channel placeholder -- used by future self-update logic.
-    agent_version: str = "0.0.0"
     update_channel: str = "stable"  # "stable" | "beta" | "none"
+    update_check_interval_sec: int = 3600  # период проверки обновлений
 
     def resolved_buffer_path(self) -> Path:
         p = Path(self.buffer_path)
