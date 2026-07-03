@@ -14,6 +14,10 @@
    assembler-provided ``card_url`` (agent>printer>net-infra), never a raw
    attacker-controlled href. CSV export neutralises formula injection. #}
 <style>
+/* wireless-edge tint: scoped here (not base.html, this partial owns the canvas
+   engine) but defined for both themes exactly like the other --* tokens. */
+:root { --wireless: #a78bfa; }
+[data-theme="meta"] { --wireless: #7c3aed; }
 .netgraph-stage {
   position: relative; margin-bottom: 20px; overflow: hidden;
   border: 1px solid var(--line); border-radius: var(--r-card);
@@ -38,10 +42,20 @@
 .ng-tri { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid var(--accent); flex-shrink: 0; }
 .ng-ci  { width: 9px; height: 9px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
 .ng-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--na); flex-shrink: 0; }
-.ng-wifi { width: 14px; height: 0; border-top: 2px dashed var(--muted); flex-shrink: 0; }
+.ng-wifi { width: 14px; height: 0; border-top: 2.5px dashed var(--wireless); flex-shrink: 0; }
 .netgraph-hint {
   position: absolute; left: 12px; bottom: 8px; z-index: 5; pointer-events: none;
   font: 500 11px/1.5 var(--mono); color: var(--muted); opacity: .75;
+}
+.netgraph-empty-links {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 5; pointer-events: none; text-align: center; max-width: 420px;
+  padding: 14px 18px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); font: 500 12px/1.6 var(--mono); color: var(--muted);
+  opacity: .95;
+}
+.netgraph-empty-links .ng-empty-head {
+  font-weight: 700; font-size: 13.5px; letter-spacing: .2px; margin-bottom: 6px;
 }
 .netgraph-tip {
   position: absolute; z-index: 30; pointer-events: none;
@@ -144,6 +158,12 @@
         <span class="ng-key"><i class="ng-dot"></i>устройство</span>
         <span class="ng-key"><i class="ng-wifi"></i>беспроводная связь</span>
       </div>
+      {% if not graph.totals.links %}
+      <div class="netgraph-empty-links">
+        <div class="ng-empty-head">Связи не построены</div>
+        <div>Обнаружено {{ graph.totals.nodes }} узлов (скан, SNMP, NetBIOS). Рёбра появятся, когда агент начнёт отправлять сетевой снимок с аплинком до шлюза (тогда включится и анимация качества), либо когда инфраструктура — роутер или свитч — отдаст SNMP-топологию (LLDP, FDB, маршруты).</div>
+      </div>
+      {% endif %}
       <div class="netgraph-hint">колесо — масштаб · мышь — панорама и узлы · двойной клик — сброс · клик по узлу — детали и карточка</div>
     </div>
   </div>
@@ -252,7 +272,7 @@
   var C = {};
   function readTheme() {
     var s = getComputedStyle(document.body);
-    ["good", "warn", "bad", "na", "accent", "muted", "text", "line"].forEach(function (n) {
+    ["good", "warn", "bad", "na", "accent", "muted", "text", "line", "wireless"].forEach(function (n) {
       C[n] = s.getPropertyValue("--" + n).trim() || "#888";
     });
     C.mono = s.getPropertyValue("--mono").trim() || "monospace";
@@ -809,9 +829,17 @@
         if (cause.downSet[L.a.nid] || cause.downSet[L.b.nid]) lcls = aC || bC ? "bad" : "warn";
       }
       var baseAlpha = dim ? 0.04 : (focus || onP ? 0.95 : neighFocus ? 0.85 : (L.kind === "agent-uplink" ? 0.4 : confAlpha(L.conf)));
+      var lw = onP ? 3.2 : Math.max(lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1, speedWidth(L.speed));
+      if (L.medium === "wireless" && !dim) {  /* violet halo makes wireless unmistakable at a glance, independently of the quality/confidence colour drawn on top */
+        ctx.globalAlpha = baseAlpha * 0.4;
+        ctx.strokeStyle = C.wireless;
+        ctx.lineWidth = lw + 2.6;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();
+        ctx.lineCap = "butt";
+      }
       ctx.globalAlpha = baseAlpha;
       ctx.strokeStyle = C[lcls];
-      var lw = onP ? 3.2 : Math.max(lcls === "bad" ? 1.8 : L.conf === "high" ? 1.6 : 1, speedWidth(L.speed));
       ctx.lineWidth = lw;
       ctx.setLineDash((L.medium === "wireless" || L.ambiguous) && !onP ? [4, 4] : []);
       ctx.beginPath(); ctx.moveTo(L.a.x, L.a.y); ctx.lineTo(L.b.x, L.b.y); ctx.stroke();

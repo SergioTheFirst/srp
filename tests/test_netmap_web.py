@@ -208,6 +208,27 @@ def test_netmap_wireless_uplink_marked(client):
     assert up["medium"] == "wireless"
 
 
+def test_netmap_wireless_edges_get_distinct_stroke_beyond_dash(client):
+    """Operator complaint: wireless vs wired edges were only dash-vs-solid at the same
+    faint colour, hard to tell apart. Pin the fix's *source* (pytest cannot execute
+    canvas JS): a dedicated ``--wireless`` theme token exists for BOTH themes, is read
+    into the canvas engine's theme object, and strokes wireless edges with a distinct
+    colour halo in addition to the existing dash."""
+    p = _net_payload()
+    p["network_adapters"][0]["kind"] = "wifi"
+    _ingest(client, "map-wifi-style", p)
+    body = client.get("/netmap").text
+    # theme token defined for dark (:root) AND light ([data-theme="meta"]) -- never one-sided
+    assert body.count("--wireless:") == 2
+    # readTheme() carries the new token into the JS theme object C{}
+    assert '"line", "wireless"' in body
+    # the wireless edge gets its own stroke pass (not just a dash toggle)
+    assert 'L.medium === "wireless" && !dim' in body
+    assert "ctx.strokeStyle = C.wireless;" in body
+    # legend swatch matches the new look
+    assert "var(--wireless)" in body
+
+
 def test_netmap_hides_arp_only_nodes(client):
     # The agentless ARP neighbour from _net_payload (192.168.1.50) must not appear on
     # the map -- not in the SSR body, not in the canvas JSON island. Gateways and
@@ -225,6 +246,36 @@ def test_netmap_page_without_data_has_no_canvas(client):
     body = client.get("/netmap").text
     assert 'id="netgraph-canvas"' not in body
     assert "карта появится" in body  # empty state survives
+
+
+def test_netmap_shows_hint_when_nodes_have_no_links(client):
+    """Honest empty-edge state: net_devices can be discovered (scan/SNMP/NetBIOS) with
+    zero links when no agent reports an uplink and no infrastructure gives up SNMP
+    topology. The operator must see an explicit explanation instead of a silent
+    dust-cloud of disconnected dots."""
+    _seed_net_device("nd-lonely-1", "10.0.9.1", "lonely-switch", dev_type="switch")
+    _seed_net_device("nd-lonely-2", "10.0.9.2", "lonely-ap", dev_type="ap")
+    cache = getattr(client.app.state, "network_map_cache", None)
+    if cache is not None:
+        cache.invalidate()
+    body = client.get("/netmap").text
+    assert 'id="netgraph-canvas"' in body  # nodes exist -> the canvas branch renders
+    g = _embedded_graph(body)
+    assert g["totals"]["nodes"] >= 1
+    assert g["totals"]["links"] == 0
+    assert "Связи не построены" in body
+    # the node count in the hint is the real SSR total, not a hardcoded/wrong number
+    assert f"Обнаружено {g['totals']['nodes']} узлов" in body
+
+
+def test_netmap_no_empty_links_hint_once_links_exist(client):
+    """The honest-empty-state hint must disappear the moment real links/uplinks exist --
+    it must never linger and mislead once the map is actually populated."""
+    _ingest(client, "map-haslinks", _net_payload())
+    body = client.get("/netmap").text
+    g = _embedded_graph(body)
+    assert g["totals"]["links"] > 0
+    assert "Связи не построены" not in body
 
 
 def test_netmap_embedded_json_cannot_break_out_of_script(client):
