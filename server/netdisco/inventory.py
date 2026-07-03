@@ -46,6 +46,7 @@ def _blank(nid: str) -> dict[str, Any]:
         "nid": nid,
         "ip": None,
         "hostname": None,
+        "hostname_hint": None,
         "mac": None,
         "vendor": None,
         "dev_type": None,
@@ -54,6 +55,29 @@ def _blank(nid: str) -> dict[str, Any]:
         "last_seen": None,
         "sources": set(),
     }
+
+
+_MAX_HINT_NAME = 15  # a real NetBIOS name is <=15 chars
+
+
+def _clean_hint(name: Any) -> Optional[str]:
+    """A neighbour NetBIOS name safe to store as a hostname, else ``None``.
+
+    ``NetNeighbor.name`` is only length-capped by the contract and the RAW agent
+    payload is what persists (a schema validator would only reject the whole
+    envelope), so a hostile/MITM agent can smuggle arbitrary bytes here. Mirror
+    the agent's own ``lan_names._clean_name`` allowlist at this consumption
+    boundary (defense-in-depth): control/markup/whitespace bytes are dropped
+    rather than becoming a device hostname. ``isalnum`` keeps legit non-ASCII
+    hostnames while rejecting ``< > " / :`` and spaces."""
+    if not isinstance(name, str):
+        return None
+    text = name.strip()
+    if not text or len(text) > _MAX_HINT_NAME:
+        return None
+    if not all(c.isalnum() or c in "-._" for c in text):
+        return None
+    return text
 
 
 def _add_agents(snapshots: list[dict[str, Any]], by_nid: dict[str, dict[str, Any]]) -> None:
@@ -101,6 +125,11 @@ def _add_neighbors(
             rec["mac"] = rec["mac"] or mac
             rec["ip"] = rec["ip"] or ip
             rec["vendor"] = rec["vendor"] or vendor_for_mac(neighbor.get("mac"))
+            # T2: agent-resolved NetBIOS name, a lowest-priority hint only --
+            # never assigned to rec["hostname"] itself, which upsert_net_device
+            # would let unconditionally overwrite a stronger (e.g. SNMP) name.
+            # Allowlist-cleaned at this trust boundary (raw payload persists).
+            rec["hostname_hint"] = rec["hostname_hint"] or _clean_hint(neighbor.get("name"))
             rec["last_seen"] = _newer(rec["last_seen"], snap.get("last_seen"))
             rec["sources"].add("arp")
 
@@ -110,6 +139,7 @@ def _to_device(rec: dict[str, Any]) -> NetDevice:
         nid=rec["nid"],
         ip=rec["ip"],
         hostname=rec["hostname"],
+        hostname_hint=rec["hostname_hint"],
         mac=rec["mac"],
         vendor=rec["vendor"],
         dev_type=rec["dev_type"] or "unknown",
@@ -131,6 +161,7 @@ def build_inventory(snapshots: list[dict[str, Any]]) -> list[NetDevice]:
 def persist_inventory(
     devices: list[NetDevice],
     upsert: Callable[[dict[str, Any]], None] = db.upsert_net_device,
+    fill: Callable[..., None] = db.fill_net_device_identity,
 ) -> int:
     """Write each inventory device through ``upsert`` (injectable for tests).
 
@@ -152,4 +183,10 @@ def persist_inventory(
                 "status": device.status,
             }
         )
+        # hostname_hint (T2: NetBIOS-resolved neighbor name) is a LOW-priority
+        # hint -- routed through fill's existing-wins COALESCE (not the upsert
+        # above, whose COALESCE lets a fresh value win) so it only ever fills
+        # an empty hostname and can never overwrite a validated SNMP name.
+        if device.hostname_hint:
+            fill(device.nid, hostname=device.hostname_hint)
     return len(devices)

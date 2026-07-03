@@ -173,6 +173,14 @@ class NetNeighbor(_Base):
     ip: Optional[str] = None
     mac: Optional[str] = None
     state: Optional[str] = None
+    # T2: agent-resolved NetBIOS name of this LAN neighbor. The agent is the
+    # only host L2-adjacent to a remote site's LAN -- NBNS (UDP/137) does not
+    # route off-subnet, so this is the only vantage point that can name it.
+    # Additive/optional -> no CONTRACT_VERSION bump. max_length defensively
+    # caps well above a real NetBIOS name (<=15 chars); name_source mirrors
+    # PrintJobRecord.source's small-tag cap.
+    name: Optional[str] = Field(default=None, max_length=63)
+    name_source: Optional[str] = Field(default=None, max_length=16)
 
 
 class NetConnection(_Base):

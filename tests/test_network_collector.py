@@ -9,6 +9,14 @@ from client.collectors.ps import PsResult
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_netbios_network(monkeypatch):
+    """collect_network() now resolves NetBIOS names for its neighbors (T2); keep
+    this suite hermetic -- name resolution itself is covered by
+    tests/test_lan_names.py, and the attach-behavior tests below override this."""
+    monkeypatch.setattr(network, "resolve_netbios_names", lambda ips, **kw: {})
+
+
 def _ok(data):
     return PsResult("ok", data)
 
@@ -384,3 +392,55 @@ def test_collect_network_quality_counts_as_present(monkeypatch):
     monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(only_q))
     res = network.collect_network()
     assert res.source_health[network.NETWORK]["status"] == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# T2: agent-side NetBIOS naming attaches name/name_source to neighbors        #
+# --------------------------------------------------------------------------- #
+def test_collect_network_attaches_netbios_name(monkeypatch):
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+    monkeypatch.setattr(
+        network, "resolve_netbios_names", lambda ips, **k: {"192.168.1.1": "GATEWAY-PC"}
+    )
+    res = network.collect_network()
+    neighbor = res.payload["network_neighbors"][0]
+    assert neighbor["ip"] == "192.168.1.1"
+    assert neighbor["name"] == "GATEWAY-PC"
+    assert neighbor["name_source"] == "netbios"
+
+
+def test_collect_network_neighbor_without_resolved_name_has_no_name_keys(monkeypatch):
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+    monkeypatch.setattr(network, "resolve_netbios_names", lambda ips, **k: {})
+    res = network.collect_network()
+    neighbor = res.payload["network_neighbors"][0]
+    assert "name" not in neighbor
+    assert "name_source" not in neighbor
+
+
+def test_collect_network_resolver_failure_does_not_break_collection(monkeypatch):
+    """A resolver crash is best-effort enrichment gone wrong -- must never take
+    down the rest of the network collection (adapters/connections/quality)."""
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+
+    def boom(ips, **k):
+        raise RuntimeError("resolver blew up")
+
+    monkeypatch.setattr(network, "resolve_netbios_names", boom)
+    res = network.collect_network()
+    assert res.payload is not None
+    assert len(res.payload["network_neighbors"]) == 1
+    assert "name" not in res.payload["network_neighbors"][0]
+
+
+def test_collect_network_resolver_receives_only_neighbor_ips(monkeypatch):
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+    seen = []
+
+    def fake_resolver(ips, **k):
+        seen.append(list(ips))
+        return {}
+
+    monkeypatch.setattr(network, "resolve_netbios_names", fake_resolver)
+    network.collect_network()
+    assert seen == [["192.168.1.1"]]  # the multicast neighbor was already dropped
