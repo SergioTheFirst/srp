@@ -347,6 +347,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
+    app.state.updates_dir = cfg.resolved_updates_dir()  # agent auto-update package drop
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
     # Ф3: the unified network-map graph cache is created up-front (the handler no

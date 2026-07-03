@@ -19,6 +19,7 @@ from server import db, org_directory
 from server.analytics.netmap import subnet_context_for, subnet_hint
 from server.netdisco.cache import GraphCache
 from server.netdisco.unified import historical_graph_from_snapshot
+from server.updates import get_update_info
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 
@@ -45,6 +46,18 @@ def _unified_map_graph(request: Request) -> dict:
     outside it."""
     cache = getattr(request.app.state, "network_map_cache", None) or GraphCache()
     return cache.get() or _EMPTY_GRAPH
+
+
+def _fleet_available_version(request: Request) -> Optional[str]:
+    """Version currently offered by the update package in ``server/updates``
+    (``request.app.state.updates_dir``). No token/HMAC involved -- this is a
+    read-only version comparison for the dashboard, not package authentication.
+    None when no updates_dir is configured or no valid package is staged."""
+    updates_dir = getattr(request.app.state, "updates_dir", None)
+    if updates_dir is None:
+        return None
+    info = get_update_info(Path(updates_dir))
+    return info["version"] if info else None
 
 
 def health_color(v: Optional[float]) -> str:
@@ -279,31 +292,32 @@ def _is_recent(iso: Optional[str], *, days: int) -> bool:
     return age is not None and -days <= age <= 0
 
 
-def _enrich_fleet(devices: list) -> list:
+def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
     """Decorate each device with decoded identity labels + version/new flags.
 
-    'Outdated' is data-driven: the highest agent_version present in the fleet is
-    treated as current, so a half-finished rollout is visible without the server
-    knowing the 'latest' version out of band.
+    'Outdated' compares against ``available`` (the version staged in
+    ``server/updates``) when given -- the server-authoritative "latest". Without a
+    staged package, falls back to the highest agent_version present in the fleet,
+    so a half-finished rollout is still visible with no update channel configured.
     """
     parsed = [parse_version(d.get("agent_version")) for d in devices]
-    newest = max([v for v in parsed if v is not None], default=None)
+    current = parse_version(available) or max([v for v in parsed if v is not None], default=None)
     enriched = []
     for d, ver in zip(devices, parsed):
         enriched.append(
             {
                 **d,
                 **_identity_labels(d),
-                "version_outdated": bool(newest is not None and ver is not None and ver < newest),
+                "version_outdated": bool(current is not None and ver is not None and ver < current),
                 "is_new": _is_recent(d.get("first_seen"), days=7),
             }
         )
     return enriched
 
 
-def _fleet_context(devices: list) -> dict:
+def _fleet_context(devices: list, available: Optional[str] = None) -> dict:
     # Build enriched copies (do not mutate db-owned dicts) -- immutable pattern.
-    decorated = _enrich_fleet(devices)
+    decorated = _enrich_fleet(devices, available)
     enriched = [{**d, "flags": _device_flags(d)} for d in decorated]
     return {"summary": _fleet_summary(enriched), "groups": _group_by_site(enriched)}
 
@@ -348,15 +362,15 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 def fleet(request: Request):
-    return _TEMPLATES.TemplateResponse(request, "fleet.html", _fleet_context(db.get_devices()))
+    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    return _TEMPLATES.TemplateResponse(request, "fleet.html", ctx)
 
 
 @router.get("/fleet/fragment", response_class=HTMLResponse)
 def fleet_fragment(request: Request):
     """KPI + table partial, polled by the dashboard for near-real-time updates."""
-    return _TEMPLATES.TemplateResponse(
-        request, "_fleet_body.html", _fleet_context(db.get_devices())
-    )
+    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    return _TEMPLATES.TemplateResponse(request, "_fleet_body.html", ctx)
 
 
 @router.get("/pipeline", response_class=HTMLResponse)
@@ -375,6 +389,8 @@ def device(request: Request, device_id: str):
         **d,
         "last_seen_age_sec": age,
         "stale": age is not None and age > db.STALE_AFTER_SEC,
+        "update_checked_at_age_sec": db.age_seconds(d.get("update_checked_at")),
+        "version_changed_at_age_sec": db.age_seconds(d.get("version_changed_at")),
         "display_name": db.display_name(
             d.get("hostname"), model=d.get("model"), chassis=d.get("chassis")
         ),
@@ -391,7 +407,15 @@ def device(request: Request, device_id: str):
     # reported yet, from what the network map already knows about this MAC.
     card = db.get_identity_card(device_id=device_id)
     return _TEMPLATES.TemplateResponse(
-        request, "device.html", {"d": d, "net_subnet_note": net_note, "nd": nd, "card": card}
+        request,
+        "device.html",
+        {
+            "d": d,
+            "net_subnet_note": net_note,
+            "nd": nd,
+            "card": card,
+            "available_version": _fleet_available_version(request),
+        },
     )
 
 
@@ -543,6 +567,13 @@ def deploy(request: Request):
     """
     orgs = org_directory.get_directory().as_picker()
     default_server = str(request.base_url).rstrip("/")
+    updates_dir = getattr(request.app.state, "updates_dir", "server/updates")
     return _TEMPLATES.TemplateResponse(
-        request, "deploy.html", {"orgs": orgs, "default_server": default_server}
+        request,
+        "deploy.html",
+        {
+            "orgs": orgs,
+            "default_server": default_server,
+            "update_info": get_update_info(Path(updates_dir)),
+        },
     )

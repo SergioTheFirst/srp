@@ -125,11 +125,17 @@
   {% if d.manufacturer or d.model %} · {{ d.manufacturer or "" }} {{ d.model or "" }}{% endif %}
   {% if d.org_label.text %} · {{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
   {% if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
-  · агент {{ d.agent_version or "?" }}
+  · агент {{ d.agent_version or "?" }}{% if available_version and available_version != d.agent_version %} <span class="badge warn" title="доступна версия {{ available_version }}">обновление доступно</span>{% endif %}{% if d.update_state == "updating" %} <span class="badge warn">обновляется</span>{% elif d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновления</span>{% endif %}
   · контакт {{ fmt_age(d.last_seen_age_sec) }} назад
   {% if card and card.ip %} · IP {{ card.ip }}{% if card.net_nid and "net" in card.sources and card.sources|length > 1 %} <span class="chip-unk" title="дополнено картой сети">карта</span>{% endif %}{% endif %}
   {% if card and card.mac %} · MAC {{ card.mac }}{% endif %}
 </div>
+{% set upd_parts = [] %}
+{% if d.update_checked_at %}{% set _ = upd_parts.append("проверка обновления: " ~ fmt_age(d.update_checked_at_age_sec) ~ " назад") %}{% endif %}
+{% if d.version_changed_at %}{% set _ = upd_parts.append("последнее обновление версии: " ~ fmt_age(d.version_changed_at_age_sec) ~ " назад") %}{% endif %}
+{% if upd_parts %}
+<div class="small muted mono" style="margin-bottom:20px">{{ upd_parts|join(" · ") }}</div>
+{% endif %}
 
 {% if not s %}
   <div class="muted" style="padding:24px 0">

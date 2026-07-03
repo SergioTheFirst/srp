@@ -24,7 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_VERSION = "0.1.0"
 
-MsgType = Literal["inventory", "historical", "heartbeat", "events", "print_jobs", "liveness"]
+MsgType = Literal[
+    "inventory", "historical", "heartbeat", "events", "print_jobs", "liveness", "update_status"
+]
 
 
 def utcnow_iso() -> str:
@@ -254,6 +256,23 @@ class LivenessPayload(_Base):
 
 
 # --------------------------------------------------------------------------- #
+# Update status  (агент рапортует статус самообновления: при старте, при смене
+# состояния и при каждой неудаче -- НЕ телеметрия. Сервер знает актуальную
+# версию из своего манифеста (server/updates.py), поэтому available_version
+# контрактом принимается и валидируется, но сервер его не хранит -- хранить
+# чужое мнение о "актуальной версии" было бы лишним источником рассинхрона.
+# Аддитивный msg_type: CONTRACT_VERSION не бампится -- тот же прецедент, что и
+# liveness выше: старый агент его не шлёт, старому серверу новый агент шлёт
+# напрасно (422 -> drop), телеметрийные конверты при этом не страдают.)
+# --------------------------------------------------------------------------- #
+class UpdateStatusPayload(_Base):
+    checked_at: Optional[str] = None
+    state: Literal["ok", "updating", "failed"]  # машинное значение, English
+    error: Optional[str] = Field(default=None, max_length=500)  # русская проза для оператора
+    available_version: Optional[str] = Field(default=None, max_length=32)
+
+
+# --------------------------------------------------------------------------- #
 # Events  (whitelisted log batch)
 # --------------------------------------------------------------------------- #
 class EventItem(_Base):
@@ -345,6 +364,7 @@ _PAYLOAD_MODELS: dict[str, type[_Base]] = {
     "events": EventBatchPayload,
     "print_jobs": PrintJobsPayload,
     "liveness": LivenessPayload,
+    "update_status": UpdateStatusPayload,
 }
 
 

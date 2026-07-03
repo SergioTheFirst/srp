@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import random
 import sys
 import time
 import urllib.parse
@@ -36,7 +37,8 @@ from client.collectors.print_jobs import collect_print_jobs
 from client.collectors.sources import CollectorResult
 from client.config import ClientConfig, ConfigError, load_config, validate_runtime_config
 from client.status_writer import publish_status
-from client.transport import Transport
+from client.transport import AGENT_VERSION, Transport
+from client.updater import Updater
 
 log = logging.getLogger("srp.agent")
 
@@ -54,12 +56,16 @@ TASKS: list[tuple[str, Collector, str]] = [
 ]
 
 _MAX_SLEEP_SEC = 60.0  # cap so a buffered backlog gets retried even when idle
+_UPDATE_CHECK_MIN_SEC = 60.0  # first update check no sooner than this...
+_UPDATE_CHECK_MAX_SEC = 600.0  # ...and no later than this (anti-thundering-herd)
+_UPDATE_CHECK_MIN_INTERVAL_SEC = 300  # floor for repeat checks even if config sets less
 
 
 class Agent:
     def __init__(self, cfg: ClientConfig) -> None:
         self._cfg = cfg
         self._transport = Transport(cfg)
+        self._updater = Updater(cfg)
         state_path = cfg.resolved_buffer_path().with_name("print_state.json")
         self._print_state_path = state_path
         self._tasks: list[tuple[str, Collector, str]] = list(TASKS) + [
@@ -78,7 +84,13 @@ class Agent:
 
     def run_forever(self) -> None:
         """Loop forever, running each task when its interval comes due."""
+        self._reconcile_update()
         due = {msg_type: time.monotonic() for msg_type, _, _ in self._tasks}  # all due now
+        # Anti-thundering-herd: spread the fleet's first update check over 60-600s
+        # so a restart of many agents at once does not all hit the server together.
+        update_due = time.monotonic() + random.uniform(  # nosec B311 -- timing jitter, not security
+            _UPDATE_CHECK_MIN_SEC, _UPDATE_CHECK_MAX_SEC
+        )
         try:
             while True:
                 for msg_type, collector, interval_attr in self._tasks:
@@ -86,11 +98,18 @@ class Agent:
                         self._run_task(msg_type, collector)
                         interval = max(1, int(getattr(self._cfg, interval_attr)))
                         due[msg_type] = time.monotonic() + interval
+                if time.monotonic() >= update_due:
+                    if self._run_update_check():
+                        break  # restart pending -- let the update task take over
+                    interval = max(
+                        _UPDATE_CHECK_MIN_INTERVAL_SEC, int(self._cfg.update_check_interval_sec)
+                    )
+                    update_due = time.monotonic() + interval
                 # Retry any backlog even when no task is due (no-op if buffer empty).
                 self._transport.flush_buffer()
                 # Refresh the tray's one-way status file every loop iteration.
                 publish_status(self._cfg, self._transport, self._print_state_path)
-                sleep_for = min(due.values()) - time.monotonic()
+                sleep_for = min([*due.values(), update_due]) - time.monotonic()
                 time.sleep(max(1.0, min(sleep_for, _MAX_SLEEP_SEC)))
         except KeyboardInterrupt:
             log.info("interrupted -- shutting down")
@@ -106,6 +125,29 @@ class Agent:
             return
         delivered = self._transport.send(msg_type, result.payload, result.source_health)
         log.info("%s: %s", msg_type, "sent" if delivered else "buffered (offline)")
+
+    def _reconcile_update(self) -> None:
+        """Report the outcome of an update staged before this restart, if any."""
+        try:
+            rec = self._updater.reconcile_after_restart(AGENT_VERSION)
+        except Exception:  # noqa: BLE001 -- a broken updater must not kill the loop
+            log.exception("update reconcile raised")
+            return
+        if rec:
+            self._transport.send("update_status", rec)
+
+    def _run_update_check(self) -> bool:
+        """Run one update check/apply cycle. Returns True if a restart is pending."""
+        try:
+            payload, restart = self._updater.check(AGENT_VERSION)
+        except Exception:  # noqa: BLE001 -- a broken updater must not kill the loop
+            log.exception("update check raised")
+            return False
+        if payload:
+            self._transport.send("update_status", payload)
+        if restart:
+            log.info("update staged -- exiting so the update task can take over")
+        return restart
 
 
 _LOG_MAX_BYTES = 1_000_000  # ~1 MB per file

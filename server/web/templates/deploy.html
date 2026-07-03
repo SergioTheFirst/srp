@@ -47,6 +47,16 @@
   и положите файл в скрытую папку-шару под правами «только ИТ» (дашборд секреты не хранит).
 </p>
 
+<div class="section-label">Обновление агентов</div>
+{% if update_info %}
+<p class="hint">Пакет: <code>{{ update_info.file }}</code> · версия <b>{{ update_info.version }}</b> ·
+{{ (update_info.size / 1048576) | round(1) }} МБ. Выложен в <code>server/updates/</code>.</p>
+{% else %}
+<p class="hint">Пакет обновления не выложен. Соберите <code>build.bat</code> — он положит
+<code>srp-agent-update-&lt;версия&gt;.zip</code> и <code>manifest.json</code> в <code>dist\updates\</code>;
+скопируйте оба файла на сервер в <code>server/updates/</code>.</p>
+{% endif %}
+
 <div class="deploy-grid">
   <div class="field">
     <label for="f-org">Организация</label>

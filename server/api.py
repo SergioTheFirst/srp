@@ -6,14 +6,15 @@ import csv
 import hmac
 import io
 import re
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from shared.schema import Envelope, utcnow_iso
 
-from server import db, org_directory
+from server import db, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.netdisco import reconcile as netdisco_reconcile
@@ -585,3 +586,47 @@ def poll_printers(request: Request) -> dict:
     # poll should be visible on the next map read, not after the graph TTL expires.
     _invalidate_network_map_cache(request)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agent auto-update (T4)
+# ---------------------------------------------------------------------------
+def _require_update_auth(request: Request) -> str:
+    """Same shared-token check as ``/ingest`` (hmac.compare_digest + 401). Returns
+    the expected token (possibly "") so callers can also feed it into
+    ``updates.get_update_info`` for the hmac field."""
+    expected = getattr(request.app.state, "ingest_token", "")
+    provided = request.headers.get("x-srp-token") or ""
+    if expected and not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid or missing ingest token")
+    return expected
+
+
+def _get_update_info_or_404(request: Request) -> dict:
+    expected = _require_update_auth(request)
+    if not check_rate_limit("endpoint:agent_update"):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    updates_dir = getattr(request.app.state, "updates_dir", None)
+    info = updates.get_update_info(Path(updates_dir), expected) if updates_dir else None
+    if info is None:
+        raise HTTPException(status_code=404, detail="no update package")
+    return info
+
+
+@router.get("/agent/update")
+def agent_update_info(request: Request) -> dict:
+    """Hourly agent poll: latest validated package metadata. Never returns the
+    filesystem path or file name as a download URL -- the agent always fetches the
+    fixed ``/agent/update/package`` endpoint below to actually download."""
+    info = _get_update_info_or_404(request)
+    result = {"version": info["version"], "sha256": info["sha256"], "size": info["size"]}
+    if "hmac" in info:
+        result["hmac"] = info["hmac"]
+    return result
+
+
+@router.get("/agent/update/package")
+def agent_update_package(request: Request) -> FileResponse:
+    """Serves the validated update zip once the agent has decided to update."""
+    info = _get_update_info_or_404(request)
+    return FileResponse(info["path"], media_type="application/zip", filename=info["file"])

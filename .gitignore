@@ -57,6 +57,10 @@ client/config.json.bak
 # intentionally NOT ignored. The shipped client/config.json keeps device_id ""
 # (the real MachineGuid is resolved at runtime and must stay out of git).
 
+# --- Agent auto-update package drop (operator-deployed; build.bat output) ---
+server/updates/*
+!server/updates/.gitkeep
+
 # --- IDE / editor ---
 .idea/
 .vscode/

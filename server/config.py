@@ -50,9 +50,16 @@ class ServerConfig:
     netdisco: Optional[dict[str, Any]] = None
     retain_net_readings: int = 2000
     retain_net_snapshots: int = 500
+    # Agent auto-update package drop: the operator copies build.bat's
+    # srp-agent-update-<ver>.zip + manifest.json here. Relative -> project root.
+    updates_dir: str = "server/updates"
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
+        return p if p.is_absolute() else (_PROJECT_ROOT / p)
+
+    def resolved_updates_dir(self) -> Path:
+        p = Path(self.updates_dir)
         return p if p.is_absolute() else (_PROJECT_ROOT / p)
 
     def resolved_org_directory_path(self) -> Path:

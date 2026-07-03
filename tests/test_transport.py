@@ -26,10 +26,15 @@ def _make(tmp_path):
     return Transport(cfg), cfg
 
 
-def test_agent_version_matches_contract():
-    from shared.schema import CONTRACT_VERSION
+def test_agent_version_is_contract_compatible():
+    """AGENT_VERSION (software release) and CONTRACT_VERSION (wire schema) are
+    independent axes -- T6 bumped AGENT_VERSION to 0.2.0 for the auto-update
+    feature while CONTRACT_VERSION stayed 0.1.0 (additive/optional fields never
+    bump it). The invariant that must hold is MAJOR compatibility, not equality:
+    a same-MAJOR agent's envelopes always parse (shared.schema.is_contract_compatible)."""
+    from shared.schema import is_contract_compatible
 
-    assert AGENT_VERSION == CONTRACT_VERSION
+    assert is_contract_compatible(AGENT_VERSION)
 
 
 def test_send_none_payload_is_noop(tmp_path):

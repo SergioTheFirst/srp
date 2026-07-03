@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 # Stamped onto every envelope. Keep in sync with shared.schema.CONTRACT_VERSION
 # (duplicated, not imported, so the client needs no pydantic install).
-AGENT_VERSION = "0.1.0"
+AGENT_VERSION = "0.2.0"
 
 _MAX_BUFFER_LINES = 5000  # oldest dropped past this -- bound disk use
 _SEND_ATTEMPTS = 2  # quick in-process retries before buffering
