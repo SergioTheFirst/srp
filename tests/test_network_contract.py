@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from shared.schema import CONTRACT_VERSION, HistoricalPayload
 
 pytestmark = pytest.mark.unit
@@ -49,3 +50,37 @@ def test_network_fields_round_trip():
 
 def test_contract_version_unchanged():
     assert CONTRACT_VERSION == "0.1.0"
+
+
+# --------------------------------------------------------------------------- #
+# T2: agent-resolved NetBIOS neighbor name (additive; no CONTRACT_VERSION bump) #
+# --------------------------------------------------------------------------- #
+
+
+def test_neighbor_name_and_name_source_round_trip():
+    p = HistoricalPayload(
+        network_neighbors=[
+            {
+                "ip": "192.168.9.6",
+                "mac": "AA-BB-CC-00-11-22",
+                "name": "MEDPOST",
+                "name_source": "netbios",
+            }
+        ]
+    )
+    assert p.network_neighbors[0].name == "MEDPOST"
+    assert p.network_neighbors[0].name_source == "netbios"
+
+
+def test_neighbor_name_absent_is_fine():
+    """An older agent (or a neighbor NBNS never answered) sends no name -> None."""
+    p = HistoricalPayload(
+        network_neighbors=[{"ip": "192.168.1.1", "mac": "AA-BB-CC-00-11-22", "state": "Reachable"}]
+    )
+    assert p.network_neighbors[0].name is None
+    assert p.network_neighbors[0].name_source is None
+
+
+def test_neighbor_name_over_max_length_is_rejected():
+    with pytest.raises(ValidationError):
+        HistoricalPayload(network_neighbors=[{"ip": "192.168.1.1", "name": "X" * 64}])

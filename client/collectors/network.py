@@ -9,8 +9,9 @@ English enum names (Status/State); never localized text. Privacy: external
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from client.collectors.lan_names import resolve_netbios_names
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import NETWORK, CollectorResult, failed, field_status, health
 
@@ -219,6 +220,32 @@ foreach ($tg in $targets) {
 """
 
 
+def _with_names(
+    neighbors: list[dict[str, Any]],
+    resolve_names_fn: Callable[[list[str]], dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Attach an agent-resolved NetBIOS name to each neighbor that has one.
+
+    The agent is the only host L2-adjacent to this LAN, so it is the only
+    vantage point NBNS (UDP/137) can name neighbors from -- the server can't
+    reach it off-subnet. Best-effort: a resolver failure/timeout must never
+    break the rest of network collection, so any exception just leaves the
+    neighbor list untouched (fail-closed, mirrors resolve_netbios_names itself)."""
+    ips = [n["ip"] for n in neighbors if n.get("ip")]
+    if not ips:
+        return neighbors
+    try:
+        names = resolve_names_fn(ips)
+    except Exception:
+        return neighbors
+    if not names:
+        return neighbors
+    return [
+        {**n, "name": names[n["ip"]], "name_source": "netbios"} if n.get("ip") in names else n
+        for n in neighbors
+    ]
+
+
 def collect_network() -> CollectorResult:
     # Phase 1 runs ONE script: a policy-blocked individual cmdlet (under
     # SilentlyContinue) yields an empty block inside an "ok" result — per-block
@@ -233,10 +260,11 @@ def collect_network() -> CollectorResult:
     neighbors = [n for n in (_parse_neighbor(x) for x in as_list(d.get("neighbors"))) if n]
     connections = [c for c in (_parse_connection(x) for x in as_list(d.get("connections"))) if c]
     quality = [q for q in (_parse_quality(x) for x in as_list(d.get("quality"))) if q]
+    neighbors = _with_names(neighbors[:_MAX_NEIGHBORS], resolve_netbios_names)
 
     payload = {
         "network_adapters": adapters[:_MAX_ADAPTERS],
-        "network_neighbors": neighbors[:_MAX_NEIGHBORS],
+        "network_neighbors": neighbors,
         "network_connections": connections[:_MAX_CONNECTIONS],
         "network_quality": quality[:_MAX_QUALITY],
     }

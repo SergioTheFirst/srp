@@ -100,3 +100,11 @@ class NetDevice:
     sources: tuple[str, ...] = ()  # which discovery sources found it
     first_seen: Optional[str] = None
     last_seen: Optional[str] = None
+    # T2: a lowest-priority hostname hint (currently: agent-resolved NetBIOS
+    # name of an ARP neighbor). Deliberately NOT the same field as ``hostname``
+    # (which upsert_net_device applies with new-wins-if-present COALESCE, right
+    # for an agent's own authoritative name) -- this hint must only ever fill
+    # an EMPTY hostname, so persist_inventory routes it through
+    # fill_net_device_identity's existing-wins COALESCE instead. Transient
+    # build artifact, no net_devices column of its own.
+    hostname_hint: Optional[str] = None
