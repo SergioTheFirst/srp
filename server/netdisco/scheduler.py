@@ -31,7 +31,12 @@ from server.netdisco.discovery import gather_candidates
 from server.netdisco.drivers import select_driver
 from server.netdisco.evidence import collect_lldp_mgmt
 from server.netdisco.identity import device_nid, link_identities
-from server.netdisco.inventory import build_inventory, persist_agent_routes, persist_inventory
+from server.netdisco.inventory import (
+    build_inventory,
+    collect_relayed_lan_hints,
+    persist_agent_routes,
+    persist_inventory,
+)
 from server.netdisco.models import DeviceProfile
 from server.printers.discovery import is_rfc1918
 from server.printers.snmp import SnmpSession
@@ -45,6 +50,7 @@ UpsertFn = Callable[[dict[str, Any]], None]
 SetLinksFn = Callable[[str, Optional[str], Optional[str]], None]
 ScanFn = Callable[[NetdiscoConfig], List[str]]
 PersistRoutesFn = Callable[[list[dict[str, Any]]], int]
+CollectHintsFn = Callable[[list[dict[str, Any]]], dict[str, dict]]
 
 
 def run_inventory_cycle(
@@ -55,19 +61,23 @@ def run_inventory_cycle(
     get_printers: GetKnownFn = db.get_printers,
     set_links: SetLinksFn = db.set_net_device_links,
     persist_routes: PersistRoutesFn = persist_agent_routes,
+    collect_lan_hints: CollectHintsFn = collect_relayed_lan_hints,
+    fill_hints: FillFn = db.fill_net_device_identity,
 ) -> dict[str, int]:
     """Rebuild + persist the inventory, persist each agent's OWN routing-table
-    entries (T1: net_routes -> the existing L3 map-edge path), then FK-link each
+    entries (T1: net_routes -> the existing L3 map-edge path), fold each
+    agent's relayed mDNS/SSDP/WSD captures into the same per-field passive
+    fill the server's own local passive cycle uses (P1), then FK-link each
     device to its agent / printer record by normalised MAC (Phase 1) -- all
     under one cycle lock.
 
-    Returns ``{"persisted": N, "linked": M, "routes": R, "busy": 0}`` normally, or
-    ``{"persisted": 0, "linked": 0, "routes": 0, "busy": 1}`` when another cycle
+    Returns ``{"persisted": N, "linked": M, "routes": R, "hints": H, "busy": 0}``
+    normally, or the same shape zeroed with ``"busy": 1`` when another cycle
     holds the lock. Dependencies are injectable so tests exercise the cycle
     without the DB/network.
     """
     if not _poll_lock.acquire(blocking=False):
-        return {"persisted": 0, "linked": 0, "routes": 0, "busy": 1}
+        return {"persisted": 0, "linked": 0, "routes": 0, "hints": 0, "busy": 1}
     try:
         snapshots = get_snapshots()
         devices = build_inventory(snapshots)
@@ -78,6 +88,13 @@ def run_inventory_cycle(
             _log.exception("agent route persist step failed; persisted inventory is intact")
             routes = 0
         try:
+            hints = _apply_relayed_lan_hints(
+                snapshots, get_net_devices, collect_lan_hints, fill_hints
+            )
+        except Exception:  # best-effort: a hint-relay error must not break the cycle
+            _log.exception("agent lan-hint relay step failed; persisted inventory is intact")
+            hints = 0
+        try:
             linked = _link_inventory_identities(
                 snapshots,
                 get_net_devices=get_net_devices,
@@ -87,9 +104,37 @@ def run_inventory_cycle(
         except Exception:  # link = best-effort enrichment; persisted inventory stays intact
             _log.exception("identity link step failed; persisted inventory is intact")
             linked = 0
-        return {"persisted": persisted, "linked": linked, "routes": routes, "busy": 0}
+        return {
+            "persisted": persisted,
+            "linked": linked,
+            "routes": routes,
+            "hints": hints,
+            "busy": 0,
+        }
     finally:
         _poll_lock.release()
+
+
+def _apply_relayed_lan_hints(
+    snapshots: list[dict[str, Any]],
+    get_net_devices: GetKnownFn,
+    collect_lan_hints: CollectHintsFn,
+    fill: FillFn,
+) -> int:
+    """P1: fold agent-relayed mDNS/SSDP/WSD captures into the exact same
+    per-field precedence fill (``_apply_passive_hints``) the server's own
+    local passive cycle uses below -- reuse, not a second fill path."""
+    collected = collect_lan_hints(snapshots)
+    if not collected:
+        return 0
+    by_ip = {
+        dev["ip"]: dev["device_nid"]
+        for dev in get_net_devices()
+        if dev.get("ip") and dev.get("device_nid") and is_rfc1918(dev["ip"])
+    }
+    if not by_ip:
+        return 0
+    return _apply_passive_hints(by_ip, collected, fill)
 
 
 def _link_inventory_identities(

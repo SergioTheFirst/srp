@@ -9,6 +9,7 @@ is RFC1918/link-local, and stop at a hard cap. RED first.
 
 from __future__ import annotations
 
+import base64
 import socket
 from typing import List, Tuple
 
@@ -178,3 +179,68 @@ def test_collect_ssdp_drops_public_source_and_caps():
     assert len(out) == 1  # cap honoured
     assert "10.0.0.7" in out
     assert sock.sent and sock.sent[0][1][1] == 1900  # an M-SEARCH actually went out
+
+
+# --------------------------------------------------------------------------- #
+# P1: parse_relayed_hint -- agent-relayed captures, parsed with the SAME       #
+# parse_mdns/parse_ssdp/parse_wsd as this server's own local capture          #
+# --------------------------------------------------------------------------- #
+
+
+def _record(source: str, ip: str, data: bytes) -> dict:
+    return {"ip": ip, "source": source, "data_b64": base64.b64encode(data).decode("ascii")}
+
+
+def test_parse_relayed_hint_dispatches_mdns_to_parse_mdns():
+    hint = passive.parse_relayed_hint(_record("mdns", "10.0.0.9", _mdns_response()))
+    assert hint is not None
+    assert hint.source == "mdns"
+    assert hint.subtype == "printer"
+    assert hint.hostname == "Office-Printer"
+
+
+def test_parse_relayed_hint_dispatches_ssdp_to_parse_ssdp():
+    data = _ssdp_response("", "urn:schemas-upnp-org:device:Printer:1")
+    hint = passive.parse_relayed_hint(_record("ssdp", "10.0.0.7", data))
+    assert hint is not None
+    assert hint.source == "ssdp"
+    assert hint.subtype == "printer"
+
+
+def test_parse_relayed_hint_dispatches_wsd_to_parse_wsd():
+    hint = passive.parse_relayed_hint(
+        _record("wsd", "10.0.0.5", _wsd_probematch("wprt:PrintDeviceType"))
+    )
+    assert hint is not None
+    assert hint.source == "wsd"
+    assert hint.subtype == "printer"
+
+
+def test_parse_relayed_hint_rejects_unknown_source():
+    hint = passive.parse_relayed_hint(_record("netbios", "10.0.0.3", _netbios_nbstat("DESKTOP-7")))
+    assert hint is None  # netbios has its own dedicated unicast collector, not a relay source
+
+
+def test_parse_relayed_hint_fail_closed_on_bad_base64():
+    bad = {"ip": "10.0.0.9", "source": "mdns", "data_b64": "not-valid-base64!!"}
+    assert passive.parse_relayed_hint(bad) is None
+
+
+def test_parse_relayed_hint_fail_closed_on_non_local_ip():
+    """Defense-in-depth: even a well-formed capture from a public/spoofed
+    source address must never be trusted (mirrors the local collectors)."""
+    hint = passive.parse_relayed_hint(_record("mdns", "8.8.8.8", _mdns_response()))
+    assert hint is None
+
+
+def test_parse_relayed_hint_fail_closed_on_malformed_record():
+    assert passive.parse_relayed_hint({}) is None
+    assert passive.parse_relayed_hint({"ip": "10.0.0.9"}) is None  # missing source/data_b64
+    assert passive.parse_relayed_hint("not-a-dict") is None
+
+
+def test_parse_relayed_hint_delegates_fail_closed_parsing_to_the_shared_parser():
+    """Junk bytes for a KNOWN source still go through the real parser and come
+    back None -- parse_relayed_hint adds no parsing logic of its own."""
+    hint = passive.parse_relayed_hint(_record("mdns", "10.0.0.9", b"\xff\xff not dns"))
+    assert hint is None

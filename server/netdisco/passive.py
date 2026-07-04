@@ -19,6 +19,8 @@ socket factory is injectable so the suite never opens a real socket.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import ipaddress
 import socket
@@ -282,6 +284,36 @@ def parse_wsd(data: bytes, src_ip: str) -> Optional[PassiveHint]:
         if token in text:
             return PassiveHint(ip=src_ip, source="wsd", subtype=stype)
     return None
+
+
+# --------------------------------------------------------------------------- #
+# P1: agent-relayed captures                                                   #
+# --------------------------------------------------------------------------- #
+#
+# The agent (client/collectors/lan_discovery.py) is L2-adjacent to LANs this
+# server may not be; it relays a raw capture instead of re-implementing the
+# parsers above. One wire-format implementation, two capture vantage points.
+
+_RELAYED_PARSERS: Dict[str, _Parser] = {"mdns": parse_mdns, "ssdp": parse_ssdp, "wsd": parse_wsd}
+
+
+def parse_relayed_hint(record: Dict[str, Any]) -> Optional[PassiveHint]:
+    """Decode one agent-relayed raw capture and parse it with the SAME parser
+    used for this server's own local multicast capture, else ``None``
+    (fail-closed on anything malformed/untrusted)."""
+    if not isinstance(record, dict):
+        return None
+    source = record.get("source")
+    parser = _RELAYED_PARSERS.get(source) if isinstance(source, str) else None
+    ip = record.get("ip")
+    b64 = record.get("data_b64")
+    if parser is None or not isinstance(ip, str) or not _is_local(ip) or not isinstance(b64, str):
+        return None
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return parser(data, ip)
 
 
 # --------------------------------------------------------------------------- #

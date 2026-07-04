@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import server.db as db
-from server.netdisco.inventory import build_inventory, persist_agent_routes, persist_inventory
+from server.netdisco import passive
+from server.netdisco.inventory import (
+    build_inventory,
+    collect_relayed_lan_hints,
+    persist_agent_routes,
+    persist_inventory,
+)
 from server.netdisco.unified import build_network_map
 
 # Two agents on one subnet. Each sees the gateway (VMware OUI 00-50-56), the
@@ -332,3 +338,77 @@ def test_persist_agent_routes_then_route_links_yields_l3_edge() -> None:
     assert len(l3) == 1
     assert {l3[0]["a"], l3[0]["b"]} == {"nd-mac-AA-BB-CC-DD-EE-01", "nd-mac-AA-BB-CC-DD-EE-02"}
     assert l3[0]["medium"] == "l3"
+
+
+# --------------------------------------------------------------------------- #
+# P1: collect_relayed_lan_hints -- pure fold, parsing itself lives in         #
+# tests/test_netdisco_passive_p8.py (monkeypatched here to isolate concerns) #
+# --------------------------------------------------------------------------- #
+
+
+def test_collect_relayed_lan_hints_groups_by_source_and_ip(monkeypatch) -> None:
+    monkeypatch.setattr(
+        passive,
+        "parse_relayed_hint",
+        lambda record: passive.PassiveHint(ip=record["ip"], source=record["source"], hostname="X"),
+    )
+    snap = {
+        **_SNAP_A,
+        "lan_hints": [
+            {"ip": "10.0.0.30", "source": "mdns", "data_b64": "AAAA"},
+            {"ip": "10.0.0.31", "source": "ssdp", "data_b64": "AAAA"},
+        ],
+    }
+    collected = collect_relayed_lan_hints([snap])
+    assert set(collected) == {"mdns", "ssdp"}
+    assert collected["mdns"]["10.0.0.30"].hostname == "X"
+    assert collected["ssdp"]["10.0.0.31"].hostname == "X"
+
+
+def test_collect_relayed_lan_hints_keeps_first_per_source_and_ip(monkeypatch) -> None:
+    monkeypatch.setattr(
+        passive,
+        "parse_relayed_hint",
+        lambda record: passive.PassiveHint(
+            ip=record["ip"], source=record["source"], hostname=record["data_b64"]
+        ),
+    )
+    snap = {
+        **_SNAP_A,
+        "lan_hints": [
+            {"ip": "10.0.0.30", "source": "mdns", "data_b64": "first"},
+            {"ip": "10.0.0.30", "source": "mdns", "data_b64": "second"},
+        ],
+    }
+    collected = collect_relayed_lan_hints([snap])
+    assert collected["mdns"]["10.0.0.30"].hostname == "first"
+
+
+def test_collect_relayed_lan_hints_skips_records_the_parser_rejects(monkeypatch) -> None:
+    monkeypatch.setattr(passive, "parse_relayed_hint", lambda record: None)
+    snap = {**_SNAP_A, "lan_hints": [{"ip": "10.0.0.30", "source": "mdns", "data_b64": "junk"}]}
+    assert collect_relayed_lan_hints([snap]) == {}
+
+
+def test_collect_relayed_lan_hints_redrops_public_ip_server_side(monkeypatch) -> None:
+    """Defense-in-depth: a hostile/MITM agent bypasses the client-side RFC1918
+    filter and smuggles a public-looking hint -- it must never seed identity
+    enrichment no matter what a (fake, here) parser returns."""
+    monkeypatch.setattr(
+        passive,
+        "parse_relayed_hint",
+        lambda record: passive.PassiveHint(ip="8.8.8.8", source="mdns"),
+    )
+    snap = {**_SNAP_A, "lan_hints": [{"ip": "8.8.8.8", "source": "mdns", "data_b64": "x"}]}
+    assert collect_relayed_lan_hints([snap]) == {}
+
+
+def test_collect_relayed_lan_hints_ignores_non_dict_records(monkeypatch) -> None:
+    monkeypatch.setattr(passive, "parse_relayed_hint", lambda record: None)
+    snap = {**_SNAP_A, "lan_hints": ["not-a-dict", 123, None]}
+    assert collect_relayed_lan_hints([snap]) == {}
+
+
+def test_collect_relayed_lan_hints_empty_input_returns_empty() -> None:
+    assert collect_relayed_lan_hints([]) == {}
+    assert collect_relayed_lan_hints([_SNAP_A]) == {}  # no lan_hints key at all

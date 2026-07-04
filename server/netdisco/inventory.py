@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional
 from server import db
 from server.analytics.netmap import agent_mac_index
 from server.analytics.oui import normalize_mac, vendor_for_mac
+from server.netdisco import passive
 from server.netdisco.identity import device_nid
 from server.netdisco.models import NetDevice
 from server.printers.discovery import is_rfc1918, is_rfc1918_cidr
@@ -191,6 +192,34 @@ def persist_inventory(
         if device.hostname_hint:
             fill(device.nid, hostname=device.hostname_hint)
     return len(devices)
+
+
+def collect_relayed_lan_hints(
+    snapshots: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """P1: decode each agent-relayed mDNS/SSDP/WSD capture
+    (client/collectors/lan_discovery.py) into the same ``{source: {ip:
+    PassiveHint}}`` shape ``scheduler._apply_passive_hints`` already consumes
+    for the server's own local passive cycle -- one fill path, two capture
+    vantage points. Pure: no DB/network I/O.
+
+    Defense-in-depth: a decoded hint's ip is re-validated RFC1918 here even
+    though the agent already filters at capture time (mirrors
+    ``persist_agent_routes``) -- a hostile/MITM agent bypasses the client-side
+    filter, and a public address must never seed identity enrichment no
+    matter what an envelope claims. Deliberately stricter than
+    ``passive.parse_relayed_hint``'s own ``_is_local`` check (which also
+    allows link-local): this is the last gate before a hint can fill a
+    device record, so it narrows to RFC1918-only.
+    """
+    collected: dict[str, dict[str, Any]] = {}
+    for snap in snapshots:
+        for record in snap.get("lan_hints") or []:
+            hint = passive.parse_relayed_hint(record) if isinstance(record, dict) else None
+            if hint is None or not is_rfc1918(hint.ip):
+                continue
+            collected.setdefault(hint.source, {}).setdefault(hint.ip, hint)
+    return collected
 
 
 AddRouteFn = Callable[..., None]
