@@ -629,7 +629,7 @@
   <tbody>
   {% for a in hist.network_adapters %}
   <tr>
-    <td class="small">{{ (a.name or "—")[:40] }}</td>
+    <td class="small">{{ (a.name or "—")[:40] }}{% if a.tunnel %} <span class="chip accent" title="Похоже на VPN/туннель — трафик адаптера идёт не напрямую в офисную сеть">🔒 туннель</span>{% endif %}</td>
     <td class="small muted">{{ a.kind or "—" }}</td>
     <td class="small mono">{{ (a.ipv4 or [])|join(", ") or "—" }}</td>
     <td class="small mono">{{ a.gateway or "—" }}</td>

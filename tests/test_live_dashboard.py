@@ -94,3 +94,44 @@ def test_ip_column_falls_back_when_no_network_data(client):
     client.post("/api/v1/ingest", json=_env("d6", "inventory", healthy("inventory")))
     body = client.get("/fleet/fragment").text
     assert '<th title="локальный IP — клик копирует">IP</th>' in body
+
+
+# --------------------------------------------------------------------------- #
+# T3: device page shows a badge for VPN/tunnel adapters                       #
+# --------------------------------------------------------------------------- #
+def _historical_with_adapter(adapter: dict) -> dict:
+    p = healthy("historical")
+    p["network_adapters"] = [adapter]
+    return p
+
+
+def test_device_page_shows_tunnel_badge(client):
+    adapter = {
+        "name": "Local Area Connection 7",
+        "desc": "TAP-Windows Adapter V9 for OpenVPN Connect",
+        "kind": "tunnel",
+        "role": "tunnel",
+        "tunnel": True,
+        "mac": "AA-BB-CC-00-00-02",
+        "up": True,
+        "ipv4": ["10.8.0.2"],
+    }
+    client.post("/api/v1/ingest", json=_env("d7", "historical", _historical_with_adapter(adapter)))
+    body = client.get("/device/d7").text
+    assert "туннель" in body.lower()
+
+
+def test_device_page_no_tunnel_badge_for_lan_adapter(client):
+    adapter = {
+        "name": "Ethernet",
+        "desc": "Realtek PCIe GbE Family Controller",
+        "kind": "ethernet",
+        "role": "lan",
+        "tunnel": False,
+        "mac": "AA-BB-CC-00-00-03",
+        "up": True,
+        "ipv4": ["192.168.1.20"],
+    }
+    client.post("/api/v1/ingest", json=_env("d8", "historical", _historical_with_adapter(adapter)))
+    body = client.get("/device/d8").text
+    assert "туннель" not in body.lower()

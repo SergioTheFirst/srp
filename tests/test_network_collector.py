@@ -101,6 +101,68 @@ def test_parse_adapter_wifi_iftype():
     assert a["link_mbps"] is None
 
 
+# --------------------------------------------------------------------------- #
+# T3: adapter role classification (VPN/tunnel egress flag)                    #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "name,desc,iftype,expected_role,expected_tunnel",
+    [
+        # real examples from the architect's own box
+        (
+            "Local Area Connection 7",
+            "TAP-Windows Adapter V9 for OpenVPN Connect",
+            6,
+            "tunnel",
+            True,
+        ),
+        ("Ethernet 2", "OpenVPN Data Channel Offload", 6, "tunnel", True),
+        ("tun2socks Tunnel", "tun2socks Tunnel", 6, "tunnel", True),
+        ("Local Area Connection 8", "TAP-Windows Adapter V9", 6, "tunnel", True),  # Outline
+        ("Ethernet 3", "WireGuard Tunnel", 6, "tunnel", True),
+        ("Tailscale", "Tailscale Tunnel", 6, "tunnel", True),
+        ("Ethernet 9", "WAN Miniport (L2TP)", 6, "tunnel", True),
+        # plain kind-based fallbacks
+        ("Ethernet", "Realtek PCIe GbE Family Controller", 6, "lan", False),
+        ("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", 71, "wifi", False),
+        ("Ethernet 6", "Unknown NIC", 0, "other", False),
+        # virtual adapters -- not a tunnel, not a real LAN/Wi-Fi uplink either
+        ("vEthernet (Default Switch)", "Hyper-V Virtual Ethernet Adapter", 6, "virtual", False),
+        ("Ethernet 4", "VMware Virtual Ethernet Adapter for VMnet8", 6, "virtual", False),
+        ("Loopback Pseudo-Interface 1", "Software Loopback Interface 1", 24, "virtual", False),
+        (
+            "Bluetooth Network Connection",
+            "Bluetooth Device (Personal Area Network)",
+            6,
+            "virtual",
+            False,
+        ),
+        # false-positive guard: "tun" is a substring of "Fortune" -- bare tun/tap
+        # tokens are deliberately NOT in the tunnel list (see ponytail note in
+        # _adapter_role), so this must classify as a plain LAN adapter.
+        ("Ethernet 5", "Fortune Networks Gigabit Adapter", 6, "lan", False),
+    ],
+)
+def test_parse_adapter_classifies_role_and_tunnel(
+    name, desc, iftype, expected_role, expected_tunnel
+):
+    a = network._parse_adapter({"name": name, "desc": desc, "iftype": iftype})
+    assert a["role"] == expected_role
+    assert a["tunnel"] is expected_tunnel
+
+
+def test_adapter_role_tunnel_wins_over_kind():
+    """Even if the driver reports iftype as wifi, a VPN adapter's name/desc wins."""
+    assert network._adapter_role("Ethernet", "OpenVPN Data Channel Offload", "wifi") == (
+        "tunnel",
+        True,
+    )
+
+
+def test_adapter_role_handles_missing_name_and_desc():
+    assert network._adapter_role(None, None, "ethernet") == ("lan", False)
+    assert network._adapter_role(None, None, "other") == ("other", False)
+
+
 def test_parse_adapter_rejects_non_dict():
     assert network._parse_adapter(None) is None
     assert network._parse_adapter("nope") is None
