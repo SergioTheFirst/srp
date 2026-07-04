@@ -84,3 +84,30 @@ def test_neighbor_name_absent_is_fine():
 def test_neighbor_name_over_max_length_is_rejected():
     with pytest.raises(ValidationError):
         HistoricalPayload(network_neighbors=[{"ip": "192.168.1.1", "name": "X" * 64}])
+
+
+# --------------------------------------------------------------------------- #
+# T3: adapter role/tunnel classification (additive; no CONTRACT_VERSION bump) #
+# --------------------------------------------------------------------------- #
+
+
+def test_adapter_role_and_tunnel_round_trip():
+    p = HistoricalPayload(
+        network_adapters=[
+            {"name": "TAP-Windows Adapter V9", "kind": "tunnel", "role": "tunnel", "tunnel": True}
+        ]
+    )
+    assert p.network_adapters[0].role == "tunnel"
+    assert p.network_adapters[0].tunnel is True
+
+
+def test_adapter_role_and_tunnel_absent_is_fine():
+    """An older agent that sends no role/tunnel must still validate."""
+    p = HistoricalPayload(network_adapters=[{"name": "Ethernet", "kind": "ethernet"}])
+    assert p.network_adapters[0].role is None
+    assert p.network_adapters[0].tunnel is None
+
+
+def test_adapter_role_over_max_length_is_rejected():
+    with pytest.raises(ValidationError):
+        HistoricalPayload(network_adapters=[{"name": "Ethernet", "role": "X" * 17}])

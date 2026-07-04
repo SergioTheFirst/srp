@@ -59,6 +59,46 @@ def _kind(iftype: Any) -> str:
     return "other"
 
 
+# T3: adapter role/tunnel classification -- pure substring match over metadata
+# the agent already collects (name/desc/kind); no new probing or network I/O.
+# ponytail: bare "tun"/"tap" are NOT in this list -- they are short enough to
+# false-hit on ordinary words (e.g. "tun" inside "Fortune"). Real tunnel drivers
+# announce themselves with longer, distinctive vendor tokens (tap-windows,
+# tun2socks, wintun, wireguard...) which are already enough to cover them.
+_TUNNEL_TOKENS = (
+    "openvpn",
+    "tap-windows",
+    "wireguard",
+    "tun2socks",
+    "outline",
+    "tailscale",
+    "zerotier",
+    "wintun",
+    "pptp",
+    "l2tp",
+    "ppp",
+    "wan miniport",
+    "vpn",
+    "data channel offload",
+)
+# "virtual" alone already covers "VirtualBox Host-Only ..." and "Wi-Fi Direct
+# Virtual Adapter", so those don't need their own separate tokens.
+_VIRTUAL_TOKENS = ("hyper-v", "vethernet", "vmware", "virtual", "loopback", "npcap", "bluetooth")
+
+
+def _adapter_role(name: Optional[str], desc: Optional[str], kind: str) -> tuple[str, bool]:
+    text = f"{name or ''} {desc or ''}".lower()
+    if any(tok in text for tok in _TUNNEL_TOKENS):
+        return "tunnel", True
+    if any(tok in text for tok in _VIRTUAL_TOKENS):
+        return "virtual", False
+    if kind == "ethernet":
+        return "lan", False
+    if kind == "wifi":
+        return "wifi", False
+    return "other", False
+
+
 def _is_internal(ip: Optional[str]) -> bool:
     """True only for RFC1918 LAN addresses (the spec's privacy contract).
 
@@ -95,11 +135,15 @@ def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
     bps = _i(raw.get("link_bps"))
     if bps is not None and (bps == _SPEED_UNKNOWN_32 or bps > _SPEED_MAX_PLAUSIBLE_BPS):
         bps = None
+    kind = _kind(raw.get("iftype"))
+    role, tunnel = _adapter_role(raw.get("name"), raw.get("desc"), kind)
     return {
         "name": (raw.get("name") or None),
         "desc": (raw.get("desc") or None),
         "mac": (raw.get("mac") or None),
-        "kind": _kind(raw.get("iftype")),
+        "kind": kind,
+        "role": role,
+        "tunnel": tunnel,
         "up": (bool(raw.get("up")) if raw.get("up") is not None else None),
         "link_mbps": (round(bps / 1_000_000, 1) if bps else None),
         "ipv4": _clean_strs(raw.get("ipv4")),

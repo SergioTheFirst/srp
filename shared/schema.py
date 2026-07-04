@@ -157,6 +157,10 @@ class NetAdapter(_Base):
     desc: Optional[str] = None
     mac: Optional[str] = None
     kind: Optional[str] = None  # "ethernet" | "wifi" | "other"
+    # T3: derived from name/desc/kind, agent-side, no new data leaves the box.
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors NetNeighbor.name).
+    role: Optional[str] = Field(default=None, max_length=16)  # lan|wifi|tunnel|virtual|other
+    tunnel: Optional[bool] = None  # True iff this adapter is a VPN/tunnel egress
     up: Optional[bool] = None
     link_mbps: Optional[float] = None
     ipv4: list[str] = Field(default_factory=list)
