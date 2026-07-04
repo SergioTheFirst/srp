@@ -102,6 +102,116 @@ def test_parse_adapter_wifi_iftype():
 
 
 # --------------------------------------------------------------------------- #
+# T1: routing table -> net_routes filter (RFC1918 dest+next_hop, gateway-skip) #
+# --------------------------------------------------------------------------- #
+def test_parse_route_keeps_internal_route_via_non_gateway_router():
+    r = network._parse_route(
+        {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10},
+        set(),
+    )
+    assert r == {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10}
+
+
+def test_parse_route_drops_default_route_via_gateway():
+    assert network._parse_route({"dest": "0.0.0.0/0", "next_hop": "10.0.0.1"}, {"10.0.0.1"}) is None
+
+
+def test_parse_route_drops_bogon_dest_via_gateway():
+    """A bogon TEST-NET destination whose next_hop is the adapter gateway: dropped
+    twice over (non-RFC1918 dest AND a gateway next_hop)."""
+    r = network._parse_route({"dest": "192.0.2.0/24", "next_hop": "10.0.0.1"}, {"10.0.0.1"})
+    assert r is None
+
+
+def test_parse_route_drops_onlink_route():
+    """next_hop 0.0.0.0 (on-link) is not RFC1918 -- dropped by the same check as
+    any other non-internal next_hop, no special-casing needed."""
+    assert network._parse_route({"dest": "10.0.0.0/24", "next_hop": "0.0.0.0"}, set()) is None
+
+
+def test_parse_route_drops_public_destination():
+    assert network._parse_route({"dest": "8.8.8.0/24", "next_hop": "10.0.0.5"}, set()) is None
+
+
+def test_parse_route_drops_public_next_hop():
+    assert network._parse_route({"dest": "10.0.0.0/24", "next_hop": "8.8.8.8"}, set()) is None
+
+
+def test_parse_route_malformed_dest_is_skipped_not_crashed():
+    assert network._parse_route({"dest": "not-a-cidr", "next_hop": "10.0.0.5"}, set()) is None
+
+
+def test_parse_route_missing_fields_are_skipped():
+    assert network._parse_route({}, set()) is None
+
+
+def test_parse_route_non_dict_is_skipped():
+    assert network._parse_route("garbage", set()) is None
+
+
+def test_collect_network_keeps_only_the_filtered_routes(monkeypatch):
+    data = {
+        "adapters": [
+            {
+                "name": "Ethernet",
+                "mac": "AA-BB-CC-00-11-22",
+                "iftype": 6,
+                "gateway": "10.0.0.1",
+                "ipv4": ["10.0.0.5"],
+            }
+        ],
+        "neighbors": [],
+        "connections": [],
+        "quality": [],
+        "routes": [
+            {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10},
+            {"dest": "0.0.0.0/0", "next_hop": "10.0.0.1", "if_index": 4, "metric": 0},  # gateway
+            {"dest": "8.8.8.0/24", "next_hop": "10.0.0.5", "if_index": 4, "metric": 5},  # public
+        ],
+    }
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(data))
+    res = network.collect_network()
+    assert res.payload["network_routes"] == [
+        {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10}
+    ]
+
+
+def test_collect_network_caps_routes(monkeypatch):
+    many = {
+        "adapters": [],
+        "neighbors": [],
+        "connections": [],
+        "quality": [],
+        "routes": [
+            {
+                "dest": f"10.{i % 250 + 1}.0.0/24",
+                "next_hop": "10.0.85.1",
+                "if_index": 1,
+                "metric": 1,
+            }
+            for i in range(100)
+        ],
+    }
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(many))
+    res = network.collect_network()
+    assert len(res.payload["network_routes"]) == network._MAX_ROUTES
+
+
+def test_collect_network_routes_only_counts_as_present(monkeypatch):
+    """A routes-only snapshot is data, not 'empty'."""
+    only_r = {
+        "adapters": [],
+        "neighbors": [],
+        "connections": [],
+        "quality": [],
+        "routes": [{"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10}],
+    }
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(only_r))
+    res = network.collect_network()
+    assert res.source_health[network.NETWORK]["status"] == "ok"
+
+
+# --------------------------------------------------------------------------- #
 # T3: adapter role classification (VPN/tunnel egress flag)                    #
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
@@ -387,6 +497,7 @@ def test_historical_network_failure_sets_empty_fields(monkeypatch):
     res = historical.collect_historical()
     assert res.payload["network_adapters"] == []
     assert res.payload["network_connections"] == []
+    assert res.payload["network_routes"] == []
 
 
 # --------------------------------------------------------------------------- #

@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import server.db as db
-from server.netdisco.inventory import build_inventory, persist_inventory
+from server.netdisco.inventory import build_inventory, persist_agent_routes, persist_inventory
+from server.netdisco.unified import build_network_map
 
 # Two agents on one subnet. Each sees the gateway (VMware OUI 00-50-56), the
 # other agent, and (agent A only) a VirtualBox host (OUI 08-00-27).
@@ -223,3 +224,111 @@ def test_persist_inventory_netbios_hint_fills_a_real_empty_row(tmp_path: Path) -
     finally:
         con.close()
     assert row["hostname"] == "SKPD3"
+
+
+# --------------------------------------------------------------------------- #
+# T1: agent-reported routing table -> net_routes (persist_agent_routes)       #
+# --------------------------------------------------------------------------- #
+
+_SNAP_WITH_ROUTE: dict[str, Any] = {
+    **_SNAP_A,
+    "routes": [{"dest": "10.30.0.0/24", "next_hop": "10.0.0.20", "if_index": 5, "metric": 10}],
+}
+
+
+def test_persist_agent_routes_writes_route_keyed_to_agent_nid() -> None:
+    captured: list[dict[str, Any]] = []
+
+    def _add_route(nid: str, *, cidr: str, next_hop: str, ifindex: Any) -> None:
+        captured.append({"device_nid": nid, "cidr": cidr, "next_hop": next_hop, "ifindex": ifindex})
+
+    written = persist_agent_routes([_SNAP_WITH_ROUTE], add_route=_add_route)
+    assert written == 1
+    assert captured == [
+        {
+            # agent A's OWN identity (primary-adapter derivation), not a neighbour's
+            "device_nid": "nd-mac-AA-BB-CC-DD-EE-01",
+            "cidr": "10.30.0.0/24",
+            "next_hop": "10.0.0.20",
+            "ifindex": 5,
+        }
+    ]
+
+
+def test_persist_agent_routes_skips_snapshot_without_usable_identity() -> None:
+    snap = {
+        "device_id": "dev-x",
+        "adapters": [],  # no MAC/IP anywhere -> device_nid resolves nd-unknown
+        "routes": [{"dest": "10.30.0.0/24", "next_hop": "10.0.0.20"}],
+    }
+    captured: list[Any] = []
+    written = persist_agent_routes([snap], add_route=lambda *a, **kw: captured.append((a, kw)))
+    assert written == 0
+    assert captured == []
+
+
+def test_persist_agent_routes_ignores_snapshot_with_no_routes_key() -> None:
+    written = persist_agent_routes([_SNAP_A], add_route=lambda *a, **kw: None)
+    assert written == 0
+
+
+def test_persist_agent_routes_redrops_public_next_hop_server_side() -> None:
+    """Defense-in-depth: a hostile/MITM agent bypasses the client filter and
+    smuggles a public next_hop straight into the historical payload -- the
+    server must never let it into net_routes."""
+    snap = {**_SNAP_A, "routes": [{"dest": "10.30.0.0/24", "next_hop": "8.8.8.8", "if_index": 1}]}
+    captured: list[Any] = []
+    written = persist_agent_routes([snap], add_route=lambda *a, **kw: captured.append((a, kw)))
+    assert written == 0
+    assert captured == []
+
+
+def test_persist_agent_routes_redrops_public_dest_server_side() -> None:
+    """Same defense-in-depth, the other field: a bogon/public destination must
+    also never reach net_routes, even when next_hop looks internal."""
+    snap = {**_SNAP_A, "routes": [{"dest": "8.8.8.0/24", "next_hop": "10.0.0.20", "if_index": 1}]}
+    captured: list[Any] = []
+    written = persist_agent_routes([snap], add_route=lambda *a, **kw: captured.append((a, kw)))
+    assert written == 0
+    assert captured == []
+
+
+def test_persist_agent_routes_counts_multiple_routes_across_snapshots() -> None:
+    snap_a = {**_SNAP_A, "routes": [{"dest": "10.30.0.0/24", "next_hop": "10.0.0.20"}]}
+    snap_b = {**_SNAP_B, "routes": [{"dest": "10.40.0.0/24", "next_hop": "10.0.0.10"}]}
+    written = persist_agent_routes([snap_a, snap_b], add_route=lambda *a, **kw: None)
+    assert written == 2
+
+
+def test_persist_agent_routes_then_route_links_yields_l3_edge() -> None:
+    """Integration sanity (T1): an agent-fed route resolves through the SAME
+    _route_links/build_network_map path the SNMP-harvested routes already use --
+    confirms no netmap/template change is needed for this to render."""
+    written_routes: list[dict[str, Any]] = []
+
+    def _add_route(nid: str, *, cidr: str, next_hop: str, ifindex: Any) -> None:
+        written_routes.append(
+            {"device_nid": nid, "cidr": cidr, "next_hop": next_hop, "ifindex": ifindex}
+        )
+
+    persist_agent_routes([_SNAP_WITH_ROUTE], add_route=_add_route)
+
+    net_devices = [
+        {
+            "device_nid": "nd-mac-AA-BB-CC-DD-EE-01",
+            "ip": "10.0.0.10",
+            "mac": "AA-BB-CC-DD-EE-01",
+            "dev_type": "agent",
+        },
+        {
+            "device_nid": "nd-mac-AA-BB-CC-DD-EE-02",
+            "ip": "10.0.0.20",
+            "mac": "AA-BB-CC-DD-EE-02",
+            "dev_type": "agent",
+        },
+    ]
+    graph = build_network_map(net_devices, [], [], [], net_routes=written_routes)
+    l3 = [e for e in graph["links"] if e["link_kind"] == "l3-route"]
+    assert len(l3) == 1
+    assert {l3[0]["a"], l3[0]["b"]} == {"nd-mac-AA-BB-CC-DD-EE-01", "nd-mac-AA-BB-CC-DD-EE-02"}
+    assert l3[0]["medium"] == "l3"

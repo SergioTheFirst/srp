@@ -16,6 +16,7 @@ def test_historical_payload_valid_without_network_fields():
     assert p.network_neighbors == []
     assert p.network_connections == []
     assert p.network_quality == []
+    assert p.network_routes == []
 
 
 def test_network_fields_round_trip():
@@ -42,10 +43,17 @@ def test_network_fields_round_trip():
                 "samples": 3,
             }
         ],
+        network_routes=[
+            {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1", "if_index": 4, "metric": 10}
+        ],
     )
     assert p.network_adapters[0].ipv4 == ["192.168.1.5"]
     assert p.network_connections[0].remote_port == 445
     assert p.network_quality[0].latency_ms == 1.4
+    assert p.network_routes[0].dest == "10.20.0.0/16"
+    assert p.network_routes[0].next_hop == "10.0.85.1"
+    assert p.network_routes[0].if_index == 4
+    assert p.network_routes[0].metric == 10
 
 
 def test_contract_version_unchanged():
@@ -111,3 +119,28 @@ def test_adapter_role_and_tunnel_absent_is_fine():
 def test_adapter_role_over_max_length_is_rejected():
     with pytest.raises(ValidationError):
         HistoricalPayload(network_adapters=[{"name": "Ethernet", "role": "X" * 17}])
+
+
+# --------------------------------------------------------------------------- #
+# T1: routing table -> net_routes (additive; no CONTRACT_VERSION bump)        #
+# --------------------------------------------------------------------------- #
+
+
+def test_route_if_index_and_metric_absent_is_fine():
+    """An older agent (or a route with no interface/metric data) sends only
+    dest/next_hop -> the rest must still validate as None."""
+    p = HistoricalPayload(network_routes=[{"dest": "10.20.0.0/16", "next_hop": "10.0.85.1"}])
+    assert p.network_routes[0].if_index is None
+    assert p.network_routes[0].metric is None
+
+
+def test_route_dest_over_max_length_is_rejected():
+    with pytest.raises(ValidationError):
+        HistoricalPayload(
+            network_routes=[{"dest": "10.0.0.0/24" + "0" * 64, "next_hop": "10.0.0.1"}]
+        )
+
+
+def test_route_next_hop_over_max_length_is_rejected():
+    with pytest.raises(ValidationError):
+        HistoricalPayload(network_routes=[{"dest": "10.0.0.0/24", "next_hop": "1" * 65}])

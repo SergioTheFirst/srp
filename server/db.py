@@ -2079,7 +2079,9 @@ def get_network_snapshots() -> list[dict[str, Any]]:
         adapters = (payload.get("network_adapters") or [])[:64]
         neighbors = (payload.get("network_neighbors") or [])[:512]
         quality = (payload.get("network_quality") or [])[:16]
-        if not (adapters or neighbors or quality):
+        # T1: internal routing-table entries (read-side cap mirrors NET_ROUTES_MAX).
+        routes = (payload.get("network_routes") or [])[:64]
+        if not (adapters or neighbors or quality or routes):
             continue
         out.append(
             {
@@ -2091,6 +2093,7 @@ def get_network_snapshots() -> list[dict[str, Any]]:
                 "adapters": adapters,
                 "neighbors": neighbors,
                 "quality": quality,
+                "routes": routes,
             }
         )
     return out

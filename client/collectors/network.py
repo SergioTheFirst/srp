@@ -1,5 +1,6 @@
 """Network collector (Phase 1): adapter/IP/Wi-Fi health, ARP neighbors,
-internal-only TCP connections, and link quality. Pure stdlib.
+internal-only TCP connections, link quality, and (T1) internal routing-table
+entries. Pure stdlib.
 
 Language independence: the PowerShell script emits only numeric values and
 English enum names (Status/State); never localized text. Privacy: external
@@ -21,6 +22,7 @@ _MAX_ADAPTERS = 64
 _MAX_NEIGHBORS = 256
 _MAX_CONNECTIONS = 256
 _MAX_QUALITY = 16
+_MAX_ROUTES = 64
 _BAD_MACS = {"", "00-00-00-00-00-00", "FF-FF-FF-FF-FF-FF"}
 _MCAST_MAC_PREFIXES = ("01-00-5E", "33-33", "01-80-C2")
 
@@ -123,6 +125,29 @@ def _is_internal(ip: Optional[str]) -> bool:
     return any(a in net for net in _RFC1918)
 
 
+def _is_rfc1918_cidr(cidr: Any) -> bool:
+    """True only for an IPv4 network fully contained in an RFC1918 block.
+
+    T1 route filter: a route's *destination* must itself be a private network,
+    never merely a private-looking string. Mirrors
+    ``server/printers/discovery.is_rfc1918_cidr`` (duplicated, not imported --
+    ``client/`` stays pure stdlib with zero cross-package imports). Fail-closed
+    on anything malformed or non-IPv4: a route we can't parse never leaves the
+    agent.
+    """
+    if not cidr or not isinstance(cidr, str):
+        return False
+    try:
+        net = ipaddress.ip_network(cidr.strip(), strict=False)
+    except ValueError:
+        return False
+    if not isinstance(net, ipaddress.IPv4Network):
+        return False
+    return any(
+        isinstance(block, ipaddress.IPv4Network) and net.subnet_of(block) for block in _RFC1918
+    )
+
+
 def _clean_strs(value: Any) -> list[str]:
     return [str(x) for x in as_list(value) if x]
 
@@ -198,6 +223,30 @@ def _parse_quality(raw: Any) -> Optional[dict[str, Any]]:
     }
 
 
+def _parse_route(raw: Any, gateways: set) -> Optional[dict[str, Any]]:
+    """Keep a routing-table entry only when it is real inter-subnet reachability:
+
+    dest and next_hop both RFC1918, AND next_hop is not any adapter's own default
+    gateway (the default route + bogon anti-leak routes all point at the gateway
+    and are already the agent-uplink edge -- feeding them would just duplicate it).
+    This is the whole T1 privacy contract: nothing else ever leaves the agent.
+    """
+    if not isinstance(raw, dict):
+        return None
+    next_hop = raw.get("next_hop")
+    dest = raw.get("dest")
+    if not _is_internal(next_hop) or not _is_rfc1918_cidr(dest):
+        return None
+    if next_hop in gateways:
+        return None
+    return {
+        "dest": dest,
+        "next_hop": next_hop,
+        "if_index": _i(raw.get("if_index")),
+        "metric": _i(raw.get("metric")),
+    }
+
+
 _NET_SCRIPT = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -235,6 +284,12 @@ foreach ($t in Get-NetTCPConnection) {
     remote_ip="$($t.RemoteAddress)"; remote_port=[int]$t.RemotePort; state="$($t.State)" }
 }
 
+$routes = @()
+foreach ($r in Get-NetRoute -AddressFamily IPv4) {
+  $routes += [ordered]@{ dest="$($r.DestinationPrefix)"; next_hop="$($r.NextHop)";
+    if_index=[int]$r.InterfaceIndex; metric=[int]$r.RouteMetric }
+}
+
 $targets = @()
 foreach ($a in $adapters) {
   if ($a.gateway) { $targets += [pscustomobject]@{ kind='gateway'; addr=$a.gateway } }
@@ -259,7 +314,8 @@ foreach ($tg in $targets) {
     loss_pct=[math]::Round(((3 - $recv) / 3.0) * 100, 1); samples=3 }
 }
 
-[ordered]@{ adapters=@($adapters); neighbors=@($neighbors); connections=@($conns); quality=@($quality) } |
+[ordered]@{ adapters=@($adapters); neighbors=@($neighbors); connections=@($conns);
+  quality=@($quality); routes=@($routes) } |
   ConvertTo-Json -Depth 5 -Compress
 """
 
@@ -304,6 +360,8 @@ def collect_network() -> CollectorResult:
     neighbors = [n for n in (_parse_neighbor(x) for x in as_list(d.get("neighbors"))) if n]
     connections = [c for c in (_parse_connection(x) for x in as_list(d.get("connections"))) if c]
     quality = [q for q in (_parse_quality(x) for x in as_list(d.get("quality"))) if q]
+    gateways = {a["gateway"] for a in adapters if a.get("gateway")}
+    routes = [r for r in (_parse_route(x, gateways) for x in as_list(d.get("routes"))) if r]
     neighbors = _with_names(neighbors[:_MAX_NEIGHBORS], resolve_netbios_names)
 
     payload = {
@@ -311,6 +369,7 @@ def collect_network() -> CollectorResult:
         "network_neighbors": neighbors,
         "network_connections": connections[:_MAX_CONNECTIONS],
         "network_quality": quality[:_MAX_QUALITY],
+        "network_routes": routes[:_MAX_ROUTES],
     }
-    present = bool(adapters or neighbors or connections or quality)
+    present = bool(adapters or neighbors or connections or quality or routes)
     return CollectorResult(payload, {NETWORK: health(field_status(present))})
