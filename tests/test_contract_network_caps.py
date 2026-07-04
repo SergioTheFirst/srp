@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from shared.schema import (
     NET_ADAPTERS_MAX,
     NET_CONNECTIONS_MAX,
+    NET_LAN_HINTS_MAX,
     NET_NEIGHBORS_MAX,
     NET_QUALITY_MAX,
     NET_ROUTES_MAX,
@@ -27,6 +28,7 @@ _ITEMS = {
     "network_connections": {"local_ip": "192.168.1.2", "remote_ip": "192.168.1.3"},
     "network_quality": {"target_kind": "gateway", "target": "192.168.1.1"},
     "network_routes": {"dest": "10.20.0.0/16", "next_hop": "10.0.85.1"},
+    "lan_hints": {"ip": "192.168.1.10", "source": "mdns", "data_b64": "AAAA"},
 }
 _CAPS = {
     "network_adapters": NET_ADAPTERS_MAX,
@@ -34,6 +36,7 @@ _CAPS = {
     "network_connections": NET_CONNECTIONS_MAX,
     "network_quality": NET_QUALITY_MAX,
     "network_routes": NET_ROUTES_MAX,
+    "lan_hints": NET_LAN_HINTS_MAX,
 }
 
 
@@ -64,6 +67,7 @@ def test_agent_caps_within_contract_caps():
     assert network._MAX_CONNECTIONS <= NET_CONNECTIONS_MAX
     assert network._MAX_QUALITY <= NET_QUALITY_MAX
     assert network._MAX_ROUTES <= NET_ROUTES_MAX
+    assert network._MAX_LAN_HINTS <= NET_LAN_HINTS_MAX
 
 
 @pytest.mark.unit

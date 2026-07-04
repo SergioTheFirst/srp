@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from server.netdisco import scheduler
+from server.netdisco import passive, scheduler
 
 _SNAP: dict[str, Any] = {
     "device_id": "dev-A",
@@ -123,9 +123,80 @@ def test_run_inventory_cycle_returns_zero_routes_when_locked() -> None:
     try:
         result = scheduler.run_inventory_cycle(get_snapshots=lambda: [_SNAP], upsert=lambda d: None)
         assert result["routes"] == 0
+        assert result["hints"] == 0
         assert result["busy"] == 1
     finally:
         scheduler._poll_lock.release()
+
+
+# --- P1: relayed lan_hints (mDNS/SSDP/WSD) folded into the passive fill -----
+
+
+def test_run_inventory_cycle_applies_relayed_lan_hints() -> None:
+    filled: list[tuple[str, dict[str, Any]]] = []
+
+    def _collect_hints(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        assert snapshots == [_SNAP]  # invoked with the SAME snapshots the inventory was built from
+        return {
+            "mdns": {
+                "10.0.0.30": passive.PassiveHint(
+                    ip="10.0.0.30", source="mdns", hostname="PRINTER-1"
+                )
+            }
+        }
+
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: [{"ip": "10.0.0.30", "device_nid": "nd-x"}],
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+        collect_lan_hints=_collect_hints,
+        fill_hints=lambda nid, **kw: filled.append((nid, kw)),
+    )
+    assert result["hints"] == 1
+    assert result["busy"] == 0
+    assert filled == [("nd-x", {"hostname": "PRINTER-1"})]
+
+
+def test_run_inventory_cycle_lan_hints_ignored_when_ip_not_known() -> None:
+    filled: list[tuple[str, dict[str, Any]]] = []
+
+    def _collect_hints(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {
+            "mdns": {
+                "10.0.0.99": passive.PassiveHint(ip="10.0.0.99", source="mdns", hostname="GHOST")
+            }
+        }
+
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: [{"ip": "10.0.0.30", "device_nid": "nd-x"}],  # different ip
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+        collect_lan_hints=_collect_hints,
+        fill_hints=lambda nid, **kw: filled.append((nid, kw)),
+    )
+    assert result["hints"] == 0
+    assert filled == []
+
+
+def test_run_inventory_cycle_lan_hints_failure_does_not_break_cycle() -> None:
+    def _boom(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        raise RuntimeError("lan hint relay blew up")
+
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: [],
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+        collect_lan_hints=_boom,
+    )
+    assert result["hints"] == 0  # swallowed, not propagated
+    assert result["busy"] == 0
+    assert result["persisted"] == 2  # the inventory persist step still ran to completion
 
 
 # --- Phase 5: active discovery cycle (scan -> gather -> upsert new only) ---

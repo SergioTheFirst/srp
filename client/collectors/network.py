@@ -12,6 +12,7 @@ from __future__ import annotations
 import ipaddress
 from typing import Any, Callable, Optional
 
+from client.collectors.lan_discovery import collect_lan_discovery
 from client.collectors.lan_names import resolve_netbios_names
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import NETWORK, CollectorResult, failed, field_status, health
@@ -23,6 +24,7 @@ _MAX_NEIGHBORS = 256
 _MAX_CONNECTIONS = 256
 _MAX_QUALITY = 16
 _MAX_ROUTES = 64
+_MAX_LAN_HINTS = 128
 _BAD_MACS = {"", "00-00-00-00-00-00", "FF-FF-FF-FF-FF-FF"}
 _MCAST_MAC_PREFIXES = ("01-00-5E", "33-33", "01-80-C2")
 
@@ -223,6 +225,34 @@ def _parse_quality(raw: Any) -> Optional[dict[str, Any]]:
     }
 
 
+def _lan_adapter_ips(adapters: list[dict[str, Any]]) -> list[str]:
+    """Adapter addresses worth joining P1's multicast listen on: real LAN/Wi-Fi
+    uplinks only. A tunnel adapter can ALSO carry an RFC1918 address (e.g. an
+    Outline/OpenVPN endpoint at 10.x.x.x), so ``role`` -- not RFC1918-ness --
+    is the gate that keeps the join off the VPN tunnel."""
+    return [
+        ip
+        for a in adapters
+        if a.get("role") in ("lan", "wifi")
+        for ip in (a.get("ipv4") or [])
+        if ip
+    ]
+
+
+def _lan_hints(
+    ips: list[str],
+    collect_fn: Callable[[list[str]], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Best-effort: a multicast-listen failure (blocked port, no permission)
+    must never break the rest of network collection (mirrors ``_with_names``)."""
+    if not ips:
+        return []
+    try:
+        return collect_fn(ips)
+    except Exception:
+        return []
+
+
 def _parse_route(raw: Any, gateways: set) -> Optional[dict[str, Any]]:
     """Keep a routing-table entry only when it is real inter-subnet reachability:
 
@@ -363,6 +393,7 @@ def collect_network() -> CollectorResult:
     gateways = {a["gateway"] for a in adapters if a.get("gateway")}
     routes = [r for r in (_parse_route(x, gateways) for x in as_list(d.get("routes"))) if r]
     neighbors = _with_names(neighbors[:_MAX_NEIGHBORS], resolve_netbios_names)
+    lan_hints = _lan_hints(_lan_adapter_ips(adapters), collect_lan_discovery)[:_MAX_LAN_HINTS]
 
     payload = {
         "network_adapters": adapters[:_MAX_ADAPTERS],
@@ -370,6 +401,7 @@ def collect_network() -> CollectorResult:
         "network_connections": connections[:_MAX_CONNECTIONS],
         "network_quality": quality[:_MAX_QUALITY],
         "network_routes": routes[:_MAX_ROUTES],
+        "lan_hints": lan_hints,
     }
-    present = bool(adapters or neighbors or connections or quality or routes)
+    present = bool(adapters or neighbors or connections or quality or routes or lan_hints)
     return CollectorResult(payload, {NETWORK: health(field_status(present))})

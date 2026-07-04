@@ -17,6 +17,16 @@ def _no_netbios_network(monkeypatch):
     monkeypatch.setattr(network, "resolve_netbios_names", lambda ips, **kw: {})
 
 
+@pytest.fixture(autouse=True)
+def _no_lan_discovery_network(monkeypatch):
+    """collect_network() now also relays passive mDNS/SSDP/WSD captures (P1);
+    keep this suite hermetic and fast -- _NET_FULL's adapter is role="lan" with
+    a real ipv4, so without this stub every test here would open real sockets
+    and block for the real listen budget. Collector internals are covered by
+    tests/test_lan_discovery.py; the wiring tests below override this."""
+    monkeypatch.setattr(network, "collect_lan_discovery", lambda ips, **kw: [])
+
+
 def _ok(data):
     return PsResult("ok", data)
 
@@ -617,3 +627,78 @@ def test_collect_network_resolver_receives_only_neighbor_ips(monkeypatch):
     monkeypatch.setattr(network, "resolve_netbios_names", fake_resolver)
     network.collect_network()
     assert seen == [["192.168.1.1"]]  # the multicast neighbor was already dropped
+
+
+# --------------------------------------------------------------------------- #
+# P1: lan_hints wiring (collector internals -> tests/test_lan_discovery.py)   #
+# --------------------------------------------------------------------------- #
+
+
+def test_lan_adapter_ips_keeps_only_lan_and_wifi_role():
+    adapters = [
+        {"role": "lan", "ipv4": ["10.0.0.5"]},
+        {"role": "wifi", "ipv4": ["10.0.0.6"]},
+        {"role": "tunnel", "ipv4": ["10.0.85.2"]},  # e.g. an Outline endpoint -- RFC1918 too
+        {"role": "virtual", "ipv4": ["10.0.0.7"]},
+        {"role": "other", "ipv4": ["10.0.0.8"]},
+    ]
+    assert network._lan_adapter_ips(adapters) == ["10.0.0.5", "10.0.0.6"]
+
+
+def test_lan_adapter_ips_skips_empty_ipv4():
+    assert network._lan_adapter_ips([{"role": "lan", "ipv4": []}]) == []
+    assert network._lan_adapter_ips([{"role": "lan"}]) == []
+
+
+def test_collect_network_includes_lan_hints_from_lan_adapters(monkeypatch):
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+    seen = []
+
+    def fake_collect(ips, **k):
+        seen.append(list(ips))
+        return [{"ip": "192.168.1.9", "source": "mdns", "data_b64": "AAAA"}]
+
+    monkeypatch.setattr(network, "collect_lan_discovery", fake_collect)
+    res = network.collect_network()
+    assert seen == [["192.168.1.5"]]  # the one "lan"-role adapter's own ipv4
+    assert res.payload["lan_hints"] == [{"ip": "192.168.1.9", "source": "mdns", "data_b64": "AAAA"}]
+
+
+def test_collect_network_lan_discovery_failure_does_not_break_collection(monkeypatch):
+    """A multicast-listen failure (blocked port, no permission) is best-effort
+    enrichment gone wrong -- must never take down the rest of collection."""
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+
+    def boom(ips, **k):
+        raise RuntimeError("lan_discovery blew up")
+
+    monkeypatch.setattr(network, "collect_lan_discovery", boom)
+    res = network.collect_network()
+    assert res.payload is not None
+    assert res.payload["lan_hints"] == []
+    assert len(res.payload["network_adapters"]) == 1  # rest of the payload is intact
+
+
+def test_collect_network_caps_lan_hints(monkeypatch):
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(_NET_FULL))
+    oversized = [
+        {"ip": f"192.168.1.{i}", "source": "mdns", "data_b64": "AAAA"}
+        for i in range(network._MAX_LAN_HINTS + 10)
+    ]
+    monkeypatch.setattr(network, "collect_lan_discovery", lambda ips, **k: oversized)
+    res = network.collect_network()
+    assert len(res.payload["lan_hints"]) == network._MAX_LAN_HINTS
+
+
+def test_collect_network_no_lan_role_adapter_skips_lan_discovery_entirely(monkeypatch):
+    """No real LAN/Wi-Fi adapter (e.g. only a tunnel) -> collect_lan_discovery
+    must not even be called (nothing to join multicast on)."""
+    tunnel_only = {**_NET_FULL, "adapters": [{**_NET_FULL["adapters"][0], "name": "OpenVPN"}]}
+    monkeypatch.setattr(network, "run_ps", lambda *a, **k: _ok(tunnel_only))
+
+    def boom(ips, **k):
+        raise AssertionError("must not be called with no lan/wifi adapter")
+
+    monkeypatch.setattr(network, "collect_lan_discovery", boom)
+    res = network.collect_network()
+    assert res.payload["lan_hints"] == []

@@ -150,6 +150,7 @@ NET_NEIGHBORS_MAX = 512
 NET_CONNECTIONS_MAX = 512
 NET_QUALITY_MAX = 16
 NET_ROUTES_MAX = 64  # T1: internal (non-default) routing-table entries
+NET_LAN_HINTS_MAX = 128  # P1: relayed raw mDNS/SSDP/WSD captures (see NetLanHint)
 PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers phase 3)
 
 
@@ -218,6 +219,23 @@ class NetRoute(_Base):
     metric: Optional[int] = None
 
 
+class NetLanHint(_Base):
+    """P1: one raw passive-discovery capture (mDNS/SSDP/WSD) relayed by the agent.
+
+    The server's own passive collectors (server/netdisco/passive.py) never see
+    this traffic when it isn't L2-adjacent to the target LAN -- multicast does
+    not cross a router. The agent IS L2-adjacent, so it listens (never queries
+    -- zero new egress) and relays a capped raw capture; parsing stays
+    server-side in the existing passive.parse_mdns/parse_ssdp/parse_wsd, so the
+    wire-format parsing logic exists exactly once. ``data_b64`` is capped to
+    768 raw bytes, which base64-encodes to exactly 1024 chars (768 / 3 * 4).
+    Additive/optional -> no CONTRACT_VERSION bump (mirrors network_routes)."""
+
+    ip: Optional[str] = Field(default=None, max_length=45)
+    source: Optional[str] = Field(default=None, max_length=8)  # "mdns" | "ssdp" | "wsd"
+    data_b64: Optional[str] = Field(default=None, max_length=1024)
+
+
 class PrinterPortHint(_Base):
     """A network-printer the agent prints to, learned from its own spooler config
     (Get-Printer/Get-PrinterPort). A discovery seed, NOT trust/scoring telemetry.
@@ -250,6 +268,9 @@ class HistoricalPayload(_Base):
     # T1: internal non-default routes from the agent's own routing table.
     # Additive/optional -> no CONTRACT_VERSION bump (mirrors network_adapters et al.).
     network_routes: list[NetRoute] = Field(default_factory=list, max_length=NET_ROUTES_MAX)
+    # P1: raw mDNS/SSDP/WSD captures relayed for server-side parsing (see NetLanHint).
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors network_routes).
+    lan_hints: list[NetLanHint] = Field(default_factory=list, max_length=NET_LAN_HINTS_MAX)
     # Silent printer-discovery hints from the agent's spooler config (phase 3);
     # informational, not a trust source. Additive/optional -> no CONTRACT_VERSION bump.
     printer_ports: list[PrinterPortHint] = Field(default_factory=list, max_length=PRINTER_PORTS_MAX)
