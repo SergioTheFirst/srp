@@ -181,6 +181,7 @@ def collect_historical() -> CollectorResult:
         raw["network_neighbors"] = []
         raw["network_connections"] = []
         raw["network_quality"] = []
+        raw["network_routes"] = []
     sh.update(net.source_health)
 
     # Printer-port discovery hints: reads local spooler config (silent, not a scan).

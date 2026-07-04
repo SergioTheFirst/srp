@@ -78,6 +78,56 @@ def test_run_inventory_cycle_returns_busy_when_a_cycle_is_running() -> None:
         scheduler._poll_lock.release()
 
 
+# --- T1: agent-reported routing table -> net_routes, hooked into the same cycle ---
+
+
+def test_run_inventory_cycle_persists_agent_routes() -> None:
+    calls: list[list[dict[str, Any]]] = []
+
+    def _persist_routes(snapshots: list[dict[str, Any]]) -> int:
+        calls.append(snapshots)
+        return 3
+
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: [],
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+        persist_routes=_persist_routes,
+    )
+    assert result["routes"] == 3
+    assert result["busy"] == 0
+    assert calls == [[_SNAP]]  # invoked with the SAME snapshots the inventory was built from
+
+
+def test_run_inventory_cycle_route_persist_failure_does_not_break_cycle() -> None:
+    def _boom(snapshots: list[dict[str, Any]]) -> int:
+        raise RuntimeError("route persist blew up")
+
+    result = scheduler.run_inventory_cycle(
+        get_snapshots=lambda: [_SNAP],
+        upsert=lambda d: None,
+        get_net_devices=lambda: [],
+        get_printers=lambda: [],
+        set_links=lambda *a: None,
+        persist_routes=_boom,
+    )
+    assert result["routes"] == 0  # swallowed, not propagated
+    assert result["busy"] == 0
+    assert result["persisted"] == 2  # the inventory persist step still ran to completion
+
+
+def test_run_inventory_cycle_returns_zero_routes_when_locked() -> None:
+    scheduler._poll_lock.acquire()
+    try:
+        result = scheduler.run_inventory_cycle(get_snapshots=lambda: [_SNAP], upsert=lambda d: None)
+        assert result["routes"] == 0
+        assert result["busy"] == 1
+    finally:
+        scheduler._poll_lock.release()
+
+
 # --- Phase 5: active discovery cycle (scan -> gather -> upsert new only) ---
 
 from server.netdisco.config import NetdiscoConfig  # noqa: E402

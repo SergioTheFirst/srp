@@ -31,7 +31,7 @@ from server.netdisco.discovery import gather_candidates
 from server.netdisco.drivers import select_driver
 from server.netdisco.evidence import collect_lldp_mgmt
 from server.netdisco.identity import device_nid, link_identities
-from server.netdisco.inventory import build_inventory, persist_inventory
+from server.netdisco.inventory import build_inventory, persist_agent_routes, persist_inventory
 from server.netdisco.models import DeviceProfile
 from server.printers.discovery import is_rfc1918
 from server.printers.snmp import SnmpSession
@@ -44,6 +44,7 @@ GetKnownFn = Callable[[], list[dict[str, Any]]]
 UpsertFn = Callable[[dict[str, Any]], None]
 SetLinksFn = Callable[[str, Optional[str], Optional[str]], None]
 ScanFn = Callable[[NetdiscoConfig], List[str]]
+PersistRoutesFn = Callable[[list[dict[str, Any]]], int]
 
 
 def run_inventory_cycle(
@@ -53,20 +54,29 @@ def run_inventory_cycle(
     get_net_devices: GetKnownFn = db.get_net_devices,
     get_printers: GetKnownFn = db.get_printers,
     set_links: SetLinksFn = db.set_net_device_links,
+    persist_routes: PersistRoutesFn = persist_agent_routes,
 ) -> dict[str, int]:
-    """Rebuild + persist the inventory, then FK-link each device to its agent /
-    printer record by normalised MAC (Phase 1) -- all under one cycle lock.
+    """Rebuild + persist the inventory, persist each agent's OWN routing-table
+    entries (T1: net_routes -> the existing L3 map-edge path), then FK-link each
+    device to its agent / printer record by normalised MAC (Phase 1) -- all
+    under one cycle lock.
 
-    Returns ``{"persisted": N, "linked": M, "busy": 0}`` normally, or
-    ``{"persisted": 0, "linked": 0, "busy": 1}`` when another cycle holds the lock.
-    Dependencies are injectable so tests exercise the cycle without the DB/network.
+    Returns ``{"persisted": N, "linked": M, "routes": R, "busy": 0}`` normally, or
+    ``{"persisted": 0, "linked": 0, "routes": 0, "busy": 1}`` when another cycle
+    holds the lock. Dependencies are injectable so tests exercise the cycle
+    without the DB/network.
     """
     if not _poll_lock.acquire(blocking=False):
-        return {"persisted": 0, "linked": 0, "busy": 1}
+        return {"persisted": 0, "linked": 0, "routes": 0, "busy": 1}
     try:
         snapshots = get_snapshots()
         devices = build_inventory(snapshots)
         persisted = persist_inventory(devices, upsert=upsert)
+        try:
+            routes = persist_routes(snapshots)
+        except Exception:  # best-effort: a route-persist error must not break the cycle
+            _log.exception("agent route persist step failed; persisted inventory is intact")
+            routes = 0
         try:
             linked = _link_inventory_identities(
                 snapshots,
@@ -77,7 +87,7 @@ def run_inventory_cycle(
         except Exception:  # link = best-effort enrichment; persisted inventory stays intact
             _log.exception("identity link step failed; persisted inventory is intact")
             linked = 0
-        return {"persisted": persisted, "linked": linked, "busy": 0}
+        return {"persisted": persisted, "linked": linked, "routes": routes, "busy": 0}
     finally:
         _poll_lock.release()
 

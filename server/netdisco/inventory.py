@@ -23,6 +23,7 @@ from server.analytics.netmap import agent_mac_index
 from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco.identity import device_nid
 from server.netdisco.models import NetDevice
+from server.printers.discovery import is_rfc1918, is_rfc1918_cidr
 
 
 def _primary_adapter(adapters: list[dict[str, Any]]) -> dict[str, Any]:
@@ -190,3 +191,45 @@ def persist_inventory(
         if device.hostname_hint:
             fill(device.nid, hostname=device.hostname_hint)
     return len(devices)
+
+
+AddRouteFn = Callable[..., None]
+
+
+def persist_agent_routes(
+    snapshots: list[dict[str, Any]],
+    *,
+    add_route: AddRouteFn = db.add_net_route,
+) -> int:
+    """Persist each agent-reported route (T1) keyed to the REPORTING AGENT's own
+    device_nid -- the same identity derivation ``_add_agents`` uses (primary-
+    adapter MAC/ip). A different source from the SNMP route-harvest off known
+    routers/switches (``scheduler._harvest_infra``), which already writes the
+    same ``net_routes`` table; both simply feed the existing ``_route_links``
+    L3-edge path (no netmap/template change needed).
+
+    Defense-in-depth: dest/next_hop are re-validated RFC1918 here even though
+    the agent already filters them -- a hostile/MITM agent bypasses the client-
+    side filter, and a public address must never enter net_routes no matter
+    what an envelope claims. Snapshots with no usable agent identity are
+    skipped (mirrors ``_add_agents``'s ``nd-unknown`` skip). ``add_route`` is
+    injectable for tests.
+    """
+    written = 0
+    for snap in snapshots:
+        adapters = [a for a in (snap.get("adapters") or []) if isinstance(a, dict)]
+        primary = _primary_adapter(adapters)
+        mac = primary.get("mac")
+        ipv4 = next((ip for ip in (primary.get("ipv4") or []) if ip), None)
+        nid = device_nid(mac=mac, ip=ipv4)
+        if nid == "nd-unknown":
+            continue  # no usable agent identity -> nothing to key the route to
+        for route in snap.get("routes") or []:
+            if not isinstance(route, dict):
+                continue
+            dest, next_hop = route.get("dest"), route.get("next_hop")
+            if not is_rfc1918_cidr(dest) or not is_rfc1918(next_hop):
+                continue  # defense-in-depth: never trust the agent's own filter alone
+            add_route(nid, cidr=dest, next_hop=next_hop, ifindex=route.get("if_index"))
+            written += 1
+    return written

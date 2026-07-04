@@ -149,6 +149,7 @@ NET_ADAPTERS_MAX = 64
 NET_NEIGHBORS_MAX = 512
 NET_CONNECTIONS_MAX = 512
 NET_QUALITY_MAX = 16
+NET_ROUTES_MAX = 64  # T1: internal (non-default) routing-table entries
 PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers phase 3)
 
 
@@ -203,6 +204,20 @@ class NetQuality(_Base):
     samples: Optional[int] = None
 
 
+class NetRoute(_Base):
+    """T1: one internal, non-default routing-table entry (multi-homing / site-to-
+    site VPN reachability) -- feeds server/netdisco's existing net_routes -> L3
+    map-edge path (``_route_links``). ``dest``/``next_hop`` are RFC1918-only by
+    the time they reach here (client/collectors/network.py's privacy filter);
+    max_length backstops a direct (token-authed) poster, well above any real
+    IPv4 CIDR/address string. Additive/optional -> no CONTRACT_VERSION bump."""
+
+    dest: Optional[str] = Field(default=None, max_length=64)
+    next_hop: Optional[str] = Field(default=None, max_length=64)
+    if_index: Optional[int] = None
+    metric: Optional[int] = None
+
+
 class PrinterPortHint(_Base):
     """A network-printer the agent prints to, learned from its own spooler config
     (Get-Printer/Get-PrinterPort). A discovery seed, NOT trust/scoring telemetry.
@@ -232,6 +247,9 @@ class HistoricalPayload(_Base):
         default_factory=list, max_length=NET_CONNECTIONS_MAX
     )
     network_quality: list[NetQuality] = Field(default_factory=list, max_length=NET_QUALITY_MAX)
+    # T1: internal non-default routes from the agent's own routing table.
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors network_adapters et al.).
+    network_routes: list[NetRoute] = Field(default_factory=list, max_length=NET_ROUTES_MAX)
     # Silent printer-discovery hints from the agent's spooler config (phase 3);
     # informational, not a trust source. Additive/optional -> no CONTRACT_VERSION bump.
     printer_ports: list[PrinterPortHint] = Field(default_factory=list, max_length=PRINTER_PORTS_MAX)
