@@ -27,6 +27,14 @@ def _no_lan_discovery_network(monkeypatch):
     monkeypatch.setattr(network, "collect_lan_discovery", lambda ips, **kw: [])
 
 
+@pytest.fixture(autouse=True)
+def _no_active_scan_network(monkeypatch):
+    """collect_network(active_scan=True) now sweeps+rescans (P2); keep this
+    suite hermetic by default -- the active_scan=True wiring tests below
+    override this with a spy."""
+    monkeypatch.setattr(network, "sweep_lan", lambda ips, **kw: 0)
+
+
 def _ok(data):
     return PsResult("ok", data)
 
@@ -475,7 +483,7 @@ def test_historical_merges_network(monkeypatch):
     monkeypatch.setattr(
         historical,
         "collect_network",
-        lambda: network.CollectorResult(
+        lambda active_scan=False: network.CollectorResult(
             {
                 "network_adapters": [{"name": "Ethernet"}],
                 "network_neighbors": [],
@@ -502,7 +510,9 @@ def test_historical_network_failure_sets_empty_fields(monkeypatch):
     monkeypatch.setattr(
         historical,
         "collect_network",
-        lambda: network.CollectorResult(None, network.failed([network.NETWORK], "blocked")),
+        lambda active_scan=False: network.CollectorResult(
+            None, network.failed([network.NETWORK], "blocked")
+        ),
     )
     res = historical.collect_historical()
     assert res.payload["network_adapters"] == []
@@ -702,3 +712,109 @@ def test_collect_network_no_lan_role_adapter_skips_lan_discovery_entirely(monkey
     monkeypatch.setattr(network, "collect_lan_discovery", boom)
     res = network.collect_network()
     assert res.payload["lan_hints"] == []
+
+
+# --------------------------------------------------------------------------- #
+# P2: active-scan wiring (sweep_lan + neighbor rescan; internals ->            #
+# tests/test_lan_scan.py). run_ps is faked to distinguish the first pass       #
+# (_NET_SCRIPT, contains "Get-NetAdapter") from the rescan                     #
+# (_NEIGHBOR_RESCAN_SCRIPT, neighbor-table-only, no "Get-NetAdapter").         #
+# --------------------------------------------------------------------------- #
+_TUNNEL_ADAPTER = {
+    "name": "OpenVPN",
+    "desc": "OpenVPN Data Channel Offload",
+    "mac": "AA-BB-CC-00-11-33",
+    "iftype": 6,
+    "up": True,
+    "link_bps": 0,
+    "ipv4": ["10.0.85.2"],  # RFC1918 too -- must still be excluded via role, not IP
+    "ipv6": [],
+    "gateway": "",
+    "dns": [],
+    "dhcp": False,
+}
+
+
+def _first_pass_fake(data, calls=None):
+    def fake(script, timeout=30):
+        if calls is not None:
+            calls.append(script)
+        if "Get-NetAdapter" in script:
+            return _ok(data)
+        return PsResult("empty")  # no rescan configured -- overridden per-test when needed
+
+    return fake
+
+
+def test_collect_network_active_scan_false_by_default_no_sweep_no_rescan(monkeypatch):
+    calls = []
+    monkeypatch.setattr(network, "run_ps", _first_pass_fake(_NET_FULL, calls))
+
+    def boom(ips, **k):
+        raise AssertionError("sweep_lan must not run when active_scan=False")
+
+    monkeypatch.setattr(network, "sweep_lan", boom)
+    res = network.collect_network()  # active_scan defaults to False
+    assert res.payload is not None
+    assert len(calls) == 1  # only the first-pass script ran -- no rescan call
+
+
+def test_collect_network_active_scan_sweeps_lan_and_wifi_adapters_only(monkeypatch):
+    with_tunnel = {**_NET_FULL, "adapters": [*_NET_FULL["adapters"], _TUNNEL_ADAPTER]}
+    monkeypatch.setattr(network, "run_ps", _first_pass_fake(with_tunnel))
+    seen = []
+
+    def fake_sweep(ips, **kw):
+        seen.append(list(ips))
+        return 0
+
+    monkeypatch.setattr(network, "sweep_lan", fake_sweep)
+    network.collect_network(active_scan=True)
+    assert seen == [["192.168.1.5"]]  # the tunnel adapter's 10.0.85.2 excluded
+
+
+def test_collect_network_active_scan_merges_new_neighbor_from_rescan(monkeypatch):
+    rescan_data = {
+        "neighbors": [
+            {"ip": "192.168.1.1", "mac": "AA-BB-CC-00-11-22", "state": "Reachable"},
+            {"ip": "192.168.1.50", "mac": "AA-BB-CC-00-99-99", "state": "Reachable"},  # new
+        ]
+    }
+
+    def fake_run_ps(script, timeout=30):
+        return _ok(_NET_FULL) if "Get-NetAdapter" in script else _ok(rescan_data)
+
+    monkeypatch.setattr(network, "run_ps", fake_run_ps)
+    res = network.collect_network(active_scan=True)
+    ips = {n["ip"] for n in res.payload["network_neighbors"]}
+    assert ips == {"192.168.1.1", "192.168.1.50"}
+
+
+def test_collect_network_active_scan_rescan_failure_keeps_first_pass_neighbors(monkeypatch):
+    def fake_run_ps(script, timeout=30):
+        return _ok(_NET_FULL) if "Get-NetAdapter" in script else PsResult("blocked")
+
+    monkeypatch.setattr(network, "run_ps", fake_run_ps)
+    res = network.collect_network(active_scan=True)
+    assert [n["ip"] for n in res.payload["network_neighbors"]] == ["192.168.1.1"]
+
+
+def test_collect_network_active_scan_sweep_raising_rescan_still_runs(monkeypatch):
+    rescan_data = {
+        "neighbors": [{"ip": "192.168.1.77", "mac": "AA-BB-CC-00-77-77", "state": "Reachable"}]
+    }
+    calls = []
+
+    def fake_run_ps(script, timeout=30):
+        calls.append(script)
+        return _ok(_NET_FULL) if "Get-NetAdapter" in script else _ok(rescan_data)
+
+    def boom(ips, **kw):
+        raise RuntimeError("sweep blew up")
+
+    monkeypatch.setattr(network, "run_ps", fake_run_ps)
+    monkeypatch.setattr(network, "sweep_lan", boom)
+    res = network.collect_network(active_scan=True)
+    assert len(calls) == 2  # first pass + rescan, despite the sweep raising
+    ips = {n["ip"] for n in res.payload["network_neighbors"]}
+    assert "192.168.1.77" in ips

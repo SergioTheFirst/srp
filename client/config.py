@@ -73,6 +73,16 @@ class ClientConfig:
     # Самолечение журнала печати (PrintService/Operational): SYSTEM-агент включает
     # его, если выключен. False = уважать намеренно выключенный журнал (GPO/политика).
     print_log_autoenable: bool = True
+    # P2 (agent-vantage netdisco): gated active liveness sweep of the agent's own
+    # LAN segment (TCP touches -> Windows ARP-resolves live hosts -> the existing
+    # Get-NetNeighbor read picks them up). RFC1918-only, fixed ports, agent's own
+    # /24 only -- never configurable (2026-06-11 spec G2). Owner authorized active
+    # network scanning in writing 2026-06-19 "by default" for owned segments
+    # (mirrors server-side printers.active_scan / netdisco.active_scan, both true
+    # in shipped server/config.json); there is no separate "shipped template" for
+    # client config the way there is for the server, so this dataclass default IS
+    # the effective default for a freshly installed agent.
+    active_scan: bool = True
     # Password protection for config changes.
     # Format: "pbkdf2:sha256:<iters>:<salt_hex>:<hash_hex>"; empty = no password.
     config_password_hash: str = ""  # nosec B105
