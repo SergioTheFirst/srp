@@ -9,11 +9,13 @@ English enum names (Status/State); never localized text. Privacy: external
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 from typing import Any, Callable, Optional
 
 from client.collectors.lan_discovery import collect_lan_discovery
 from client.collectors.lan_names import resolve_netbios_names
+from client.collectors.lan_scan import sweep as sweep_lan
 from client.collectors.ps import as_list, run_ps
 from client.collectors.sources import NETWORK, CollectorResult, failed, field_status, health
 
@@ -349,6 +351,43 @@ foreach ($tg in $targets) {
   ConvertTo-Json -Depth 5 -Compress
 """
 
+# P2: re-reads ONLY the neighbor table (not the whole _NET_SCRIPT, whose
+# Test-Connection quality block budgets up to ~48s) right after an active sweep,
+# so the sweep's freshly ARP-resolved hosts land in the SAME collection cycle.
+_NEIGHBOR_RESCAN_SCRIPT = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$neighbors = @()
+foreach ($n in Get-NetNeighbor -AddressFamily IPv4) {
+  $neighbors += [ordered]@{ ip="$($n.IPAddress)"; mac="$($n.LinkLayerAddress)"; state="$($n.State)" }
+}
+[ordered]@{ neighbors=@($neighbors) } | ConvertTo-Json -Depth 5 -Compress
+"""
+
+
+def _rescan_neighbors(
+    adapters: list[dict[str, Any]], neighbors: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """P2: best-effort active sweep + an immediate Get-NetNeighbor re-read, so
+    THIS collection cycle (not the next one, hours away) surfaces whatever the
+    sweep ARP-resolved. Every step fails open -- a sweep or rescan problem must
+    never break the rest of network collection, and must never change the
+    neighbor list beyond what a normal passive pass would have produced (the
+    rescan is re-run through the exact same _parse_neighbor privacy filter)."""
+    with contextlib.suppress(Exception):
+        sweep_lan(_lan_adapter_ips(adapters))  # a sweep failure must not skip the rescan
+    try:
+        rescan = run_ps(_NEIGHBOR_RESCAN_SCRIPT, timeout=15)
+    except Exception:  # noqa: BLE001 -- run_ps already self-guards; belt-and-suspenders
+        return neighbors
+    if rescan.status != "ok" or not isinstance(rescan.data, dict):
+        return neighbors
+    fresh = [n for n in (_parse_neighbor(x) for x in as_list(rescan.data.get("neighbors"))) if n]
+    if not fresh:
+        return neighbors
+    merged = {n["ip"]: n for n in neighbors}
+    merged.update({n["ip"]: n for n in fresh})
+    return list(merged.values())
+
 
 def _with_names(
     neighbors: list[dict[str, Any]],
@@ -376,7 +415,7 @@ def _with_names(
     ]
 
 
-def collect_network() -> CollectorResult:
+def collect_network(active_scan: bool = False) -> CollectorResult:
     # Phase 1 runs ONE script: a policy-blocked individual cmdlet (under
     # SilentlyContinue) yields an empty block inside an "ok" result — per-block
     # partial status is deliberately deferred to Phase 2 (spec §5.4 deviation).
@@ -392,6 +431,8 @@ def collect_network() -> CollectorResult:
     quality = [q for q in (_parse_quality(x) for x in as_list(d.get("quality"))) if q]
     gateways = {a["gateway"] for a in adapters if a.get("gateway")}
     routes = [r for r in (_parse_route(x, gateways) for x in as_list(d.get("routes"))) if r]
+    if active_scan:
+        neighbors = _rescan_neighbors(adapters, neighbors)
     neighbors = _with_names(neighbors[:_MAX_NEIGHBORS], resolve_netbios_names)
     lan_hints = _lan_hints(_lan_adapter_ips(adapters), collect_lan_discovery)[:_MAX_LAN_HINTS]
 

@@ -68,7 +68,14 @@ class Agent:
         self._updater = Updater(cfg)
         state_path = cfg.resolved_buffer_path().with_name("print_state.json")
         self._print_state_path = state_path
-        self._tasks: list[tuple[str, Collector, str]] = list(TASKS) + [
+        self._tasks: list[tuple[str, Collector, str]] = [
+            t for t in TASKS if t[0] != "historical"
+        ] + [
+            (
+                "historical",
+                partial(collect_historical, active_scan=cfg.active_scan),
+                "historical_interval_sec",
+            ),
             (
                 "print_jobs",
                 partial(collect_print_jobs, state_path, autoenable=cfg.print_log_autoenable),

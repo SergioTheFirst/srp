@@ -113,7 +113,7 @@ foreach ($store in 'Cert:\LocalMachine\My','Cert:\CurrentUser\My') {
 """
 
 
-def collect_historical() -> CollectorResult:
+def collect_historical(active_scan: bool = False) -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=120)
     owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME, CERTIFICATES, NETWORK]
     if result.status != "ok" or not isinstance(result.data, dict):
@@ -173,7 +173,7 @@ def collect_historical() -> CollectorResult:
     raw["user_certificates"] = collect_user_certs()
 
     # Network metadata: separate script, separate error domain (certificates-style).
-    net = collect_network()
+    net = collect_network(active_scan=active_scan)
     if net.payload is not None:
         raw.update(net.payload)
     else:
