@@ -42,9 +42,17 @@ _MAX_NETBIOS_NAME = 15  # NetBIOS name length ceiling (protocol max, significant
 _SUFFIX_SERVER = "<20>"  # Server-service suffix -- by NetBIOS convention always UNIQUE
 
 _DEFAULT_CAP = 64  # hard ceiling on hosts queried per collection
-_DEFAULT_TIMEOUT = 3.0  # per-host `nbtstat -A` subprocess timeout (seconds)
-_DEFAULT_WORKERS = 16  # bounded thread-pool fan-out (nbtstat blocks ~1-3s per call)
-_DEFAULT_DEADLINE = 15.0  # overall wall-clock budget for the whole batch (seconds)
+# Live-verified on a real multi-adapter box (VPN client installed -- common on
+# managed fleets, not just this dev machine): nbtstat -A queries EVERY local
+# NetBT-bound interface, not just the target, so its cost scales with the
+# AGENT's own adapter count, not the target's responsiveness -- measured a
+# consistent ~4.6s per call against multiple different real targets on a
+# 9-interface box. The old 3.0s/15.0s pair silently timed out on every single
+# call here (0/28 names resolved); still fail-open by design if a machine has
+# even more interfaces than this one.
+_DEFAULT_TIMEOUT = 6.0  # per-host `nbtstat -A` subprocess timeout (seconds)
+_DEFAULT_WORKERS = 16  # bounded thread-pool fan-out
+_DEFAULT_DEADLINE = 25.0  # overall wall-clock budget for the whole batch (seconds)
 
 # Same three RFC1918 blocks enforced in client/collectors/network.py -- kept
 # local (not imported): network.py imports resolve_netbios_names from here, so

@@ -294,7 +294,7 @@ foreach ($a in Get-NetAdapter) {
     name     = "$($a.Name)"
     desc     = "$($a.InterfaceDescription)"
     mac      = "$($a.MacAddress)"
-    iftype   = [int]$a.ifType
+    iftype   = [int]$a.InterfaceType
     up       = ($a.Status -eq 'Up')
     link_bps = [int64]$a.TransmitLinkSpeed
     ipv4     = @($c.IPv4Address.IPAddress)
