@@ -79,6 +79,11 @@ def _hash_serial(serial: Optional[str]) -> Optional[str]:
     return hashlib.sha256(s.encode("utf-8", "replace")).hexdigest()[:16]
 
 
+# Public alias: client/collectors/smart.py hashes raw serials the same way so
+# the disk_key used by the storage/SMART engine matches DiskInfo.serial_hash.
+hash_serial = _hash_serial
+
+
 def _chassis(codes: Any) -> str:
     for c in codes or []:
         try:

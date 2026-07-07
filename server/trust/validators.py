@@ -48,6 +48,64 @@ def validate_storage_item(item: dict, last: Optional[dict]) -> Result:
     return _OK
 
 
+_SMART_MONOTONIC_ATTRS = ("5", "197", "198")
+
+
+def validate_smart_item(item: dict, last: Optional[dict]) -> Result:
+    """Semantic check for the deep-SMART optional storage member (ssd3 Ф1).
+
+    Range-checks percentages/temperature, then -- only against a last_good for
+    the SAME serial_hash -- checks that damage counters never decrease. A
+    different serial_hash means the disk was replaced: a lower reading there
+    is a legitimate reset, not a suspect source (K2: state is not history).
+
+    Known ceiling: serial_hash is agent-self-reported with no independent
+    hardware root of trust, so an agent that varies it every sample would
+    never trip the rollback check. Harmless today -- "smart" only ever
+    contributes/drops in the optional storage-domain slot, it can't gate or
+    weight the domain (see resolve_domain_trust) -- but Ф2 wires these same
+    counters into the storage risk engine's score directly, so a churn-rate
+    check (or cross-anchoring to the same envelope's storage_reliability
+    reading) becomes worth adding there.
+    """
+    for key in ("nvme_spare_pct", "nvme_spare_threshold_pct", "nvme_percentage_used"):
+        status, reason = validate_scalar_range(f"smart.{key}", item.get(key), 0.0, 100.0)
+        if status is not SemanticStatus.PLAUSIBLE:
+            return status, reason
+    temp = _num(item.get("temperature_c"))
+    if temp is not None and (temp < -10 or temp > 100):
+        return SemanticStatus.IMPLAUSIBLE, f"smart.temperature_c={temp}"
+    for key in ("nvme_media_errors", "nvme_unsafe_shutdowns", "power_on_hours"):
+        cur = _num(item.get(key))
+        if cur is not None and cur < 0:
+            return SemanticStatus.IMPLAUSIBLE, f"smart.{key}={cur} (negative)"
+
+    same_disk = (
+        last is not None
+        and item.get("serial_hash") is not None
+        and last.get("serial_hash") == item.get("serial_hash")
+    )
+    if not same_disk:
+        return _OK
+    for key in ("nvme_media_errors", "nvme_unsafe_shutdowns", "power_on_hours"):
+        cur = _num(item.get(key))
+        prev = _num((last or {}).get(key))
+        if cur is not None and prev is not None and cur < prev:
+            return SemanticStatus.INCONSISTENT, f"smart.{key} dropped {prev}->{cur} (counter reset)"
+    attrs = item.get("smart_attrs")
+    last_attrs = (last or {}).get("smart_attrs")
+    if isinstance(attrs, dict) and isinstance(last_attrs, dict):
+        for attr_id in _SMART_MONOTONIC_ATTRS:
+            cur_a = _num(attrs.get(attr_id))
+            prev_a = _num(last_attrs.get(attr_id))
+            if cur_a is not None and prev_a is not None and cur_a < prev_a:
+                return (
+                    SemanticStatus.INCONSISTENT,
+                    f"smart.attr[{attr_id}] dropped {prev_a}->{cur_a} (counter reset)",
+                )
+    return _OK
+
+
 def validate_battery(bat: dict) -> Result:
     if not bat.get("present"):
         return _OK
@@ -90,6 +148,7 @@ MATERIAL_SOURCES = frozenset(
         "throttle",
         "event_counts",
         "network",
+        "smart",
     }
 )
 
@@ -142,6 +201,8 @@ def validate_source(source: str, reading: dict, last: Optional[dict]) -> Result:
         return validate_storage_item(reading, last)
     if source == "battery":
         return validate_battery(reading)
+    if source == "smart":
+        return validate_smart_item(reading, last)
     if source == "free_space":
         return validate_scalar_range(source, reading.get("value"), 0.0, 100.0)
     if source == "reliability":

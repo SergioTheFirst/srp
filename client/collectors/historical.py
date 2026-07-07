@@ -8,15 +8,18 @@ or missing counter yields a neutral gap, not a crash.
 
 from __future__ import annotations
 
+from client.collectors.inventory import hash_serial
 from client.collectors.network import collect_network
 from client.collectors.printer_ports import collect_printer_ports
 from client.collectors.ps import as_list, run_ps
+from client.collectors.smart import collect_smart
 from client.collectors.sources import (
     BATTERY,
     BOOT_TIME,
     CERTIFICATES,
     NETWORK,
     RELIABILITY,
+    SMART,
     STORAGE_RELIABILITY,
     CollectorResult,
     failed,
@@ -56,14 +59,20 @@ try {
 $storage = @()
 try {
   foreach ($pd in Get-PhysicalDisk -ErrorAction SilentlyContinue) {
-    $rc = $pd | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
-    if ($rc) {
-      $storage += [ordered]@{
-        disk="$($pd.FriendlyName)".Trim(); media_type="$($pd.MediaType)";
-        wear_pct=$rc.Wear; power_on_hours=$rc.PowerOnHours;
-        read_errors_total=$rc.ReadErrorsTotal; write_errors_total=$rc.WriteErrorsTotal;
-        temperature_c=$rc.Temperature }
-    }
+    try {
+      $rc = $pd | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+      if ($rc) {
+        $storage += [ordered]@{
+          disk="$($pd.FriendlyName)".Trim(); media_type="$($pd.MediaType)";
+          wear_pct=$rc.Wear; power_on_hours=$rc.PowerOnHours;
+          read_errors_total=$rc.ReadErrorsTotal; write_errors_total=$rc.WriteErrorsTotal;
+          temperature_c=$rc.Temperature;
+          serial="$($pd.SerialNumber)".Trim(); bus_type="$($pd.BusType)";
+          read_errors_uncorrected=$rc.ReadErrorsUncorrected; write_errors_uncorrected=$rc.WriteErrorsUncorrected;
+          start_stop_cycles=$rc.StartStopCycleCount; load_unload_cycles=$rc.LoadUnloadCycleCount;
+          flush_latency_max_ms=$rc.FlushLatencyMax }
+      }
+    } catch {}
   }
 } catch {}
 
@@ -121,6 +130,11 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
         return CollectorResult(None, failed(owned, status))
     raw = result.data
     raw["storage"] = as_list(raw.get("storage"))
+    for row in raw["storage"]:
+        if isinstance(row, dict):
+            # Raw serial hashed immediately -- it must never leave the agent
+            # (see hash_serial; the hash is the disk_key, not the serial).
+            row["serial_hash"] = hash_serial(row.pop("serial", None))
     bat = raw.get("battery")
     if not isinstance(bat, dict):
         raw["battery"] = {"present": False}
@@ -145,6 +159,12 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
         RELIABILITY: health(rel_status),
         BOOT_TIME: health(field_status(raw.get("avg_boot_ms") is not None)),
     }
+
+    # Deep SMART (Tier A ATA via CIM + Tier B NVMe via IOCTL): its own script,
+    # its own error domain, layered onto the base storage rows by serial_hash.
+    merged_storage, smart_status = collect_smart(raw["storage"])
+    raw["storage"] = merged_storage
+    sh[SMART] = health(smart_status)
 
     # Certificate metadata: separate script, separate error domain.
     cert_res = run_ps(_CERT_SCRIPT, timeout=60)

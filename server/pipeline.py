@@ -100,6 +100,22 @@ def _extract_reading(source: str, payload: dict) -> dict:
         return items[0] if items else {}
     if source == "battery":
         return payload.get("battery") or {}
+    if source == "smart":
+        # Deep-SMART decision-material slice (ssd3 Ф1): same first-disk row as
+        # storage_reliability, narrowed to the fields validate_smart_item checks.
+        items = payload.get("storage") or [{}]
+        item = items[0] if items else {}
+        return {
+            "serial_hash": item.get("serial_hash"),
+            "temperature_c": item.get("temperature_c"),
+            "power_on_hours": item.get("power_on_hours"),
+            "nvme_spare_pct": item.get("nvme_spare_pct"),
+            "nvme_spare_threshold_pct": item.get("nvme_spare_threshold_pct"),
+            "nvme_percentage_used": item.get("nvme_percentage_used"),
+            "nvme_media_errors": item.get("nvme_media_errors"),
+            "nvme_unsafe_shutdowns": item.get("nvme_unsafe_shutdowns"),
+            "smart_attrs": item.get("smart_attrs") or {},
+        }
     if source == "free_space":
         return {"value": payload.get("free_space_pct")}
     if source == "throttle":
