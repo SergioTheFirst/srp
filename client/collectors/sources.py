@@ -23,6 +23,7 @@ EVENTS = "events"
 CERTIFICATES = "certificates"
 PRINT_JOBS = "print_jobs"
 NETWORK = "network"  # Phase 2: trust domain gating the network_risk axis
+SMART = "smart"  # ssd3 Ф1: optional storage-domain member, deep SMART tiers
 
 
 class CollectorResult(NamedTuple):

@@ -7,6 +7,7 @@ from server.trust.validators import (
     validate_battery,
     validate_frozen_constant,
     validate_scalar_range,
+    validate_smart_item,
     validate_source,
     validate_storage_item,
 )
@@ -182,3 +183,75 @@ def test_battery_dispatch_no_design_is_inconsistent():
 def test_scalar_range_non_numeric_value_is_plausible():
     status, _ = validate_scalar_range("free_space", "garbage", 0.0, 100.0)
     assert status is SemanticStatus.PLAUSIBLE
+
+
+# ---------------------------------------------------------------------------
+# validate_smart_item (ssd3 Ф1): range checks + same-disk monotonic counters
+# ---------------------------------------------------------------------------
+
+
+def test_smart_percent_out_of_range_is_implausible():
+    status, _ = validate_smart_item({"nvme_percentage_used": 142.0}, last=None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_smart_temperature_out_of_range_is_implausible():
+    status, _ = validate_smart_item({"temperature_c": 250.0}, last=None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_smart_negative_counter_is_implausible():
+    status, _ = validate_smart_item({"nvme_media_errors": -1}, last=None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_smart_clean_item_no_history_is_plausible():
+    status, _ = validate_smart_item(
+        {"serial_hash": "abc123", "nvme_media_errors": 0, "temperature_c": 40.0}, last=None
+    )
+    assert status is SemanticStatus.PLAUSIBLE
+
+
+def test_smart_same_disk_counter_drop_is_inconsistent():
+    status, reason = validate_smart_item(
+        {"serial_hash": "abc123", "nvme_media_errors": 1},
+        last={"serial_hash": "abc123", "nvme_media_errors": 9},
+    )
+    assert status is SemanticStatus.INCONSISTENT
+    assert reason
+
+
+def test_smart_same_disk_attr_drop_is_inconsistent():
+    status, reason = validate_smart_item(
+        {"serial_hash": "abc123", "smart_attrs": {"197": 1}},
+        last={"serial_hash": "abc123", "smart_attrs": {"197": 9}},
+    )
+    assert status is SemanticStatus.INCONSISTENT
+    assert reason
+
+
+def test_smart_different_serial_hash_drop_is_not_suspect():
+    # Disk replaced: a lower reading against the OLD disk's last_good is a
+    # legitimate reset, never flagged (K2 -- state, not history).
+    status, _ = validate_smart_item(
+        {"serial_hash": "new-disk", "nvme_media_errors": 0},
+        last={"serial_hash": "old-disk", "nvme_media_errors": 50},
+    )
+    assert status is SemanticStatus.PLAUSIBLE
+
+
+def test_smart_counter_increase_same_disk_is_plausible():
+    status, _ = validate_smart_item(
+        {"serial_hash": "abc123", "nvme_media_errors": 10},
+        last={"serial_hash": "abc123", "nvme_media_errors": 3},
+    )
+    assert status is SemanticStatus.PLAUSIBLE
+
+
+def test_smart_dispatch_via_validate_source():
+    status, _ = validate_source("smart", {"nvme_percentage_used": 200.0}, last=None)
+    assert status is SemanticStatus.IMPLAUSIBLE
+
+
+def test_smart_is_material_source():
+    assert "smart" in MATERIAL_SOURCES

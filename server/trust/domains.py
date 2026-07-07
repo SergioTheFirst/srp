@@ -16,7 +16,7 @@ from typing import Dict, List
 from server.trust.states import SourceState, SourceTrust
 
 DOMAIN_SOURCES: Dict[str, Dict[str, List[str]]] = {
-    "storage": {"required": ["storage_reliability"], "optional": ["disk_latency"]},
+    "storage": {"required": ["storage_reliability"], "optional": ["disk_latency", "smart"]},
     "battery": {"required": ["battery"], "optional": []},
     "disk_fill": {"required": ["free_space"], "optional": []},
     "os_stability": {"required": ["reliability"], "optional": []},

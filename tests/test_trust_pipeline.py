@@ -73,6 +73,47 @@ def test_storage_blocked_makes_storage_unknown(client):
     assert trust["sources"]["storage_reliability"]["state"] == "unavailable"
 
 
+def test_smart_optional_source_contributes_to_storage_domain(client):
+    from server import db
+
+    payload = healthy("historical")
+    payload["storage"][0]["serial_hash"] = "diskhash1"
+    payload["storage"][0]["nvme_media_errors"] = 0
+    sh = {
+        "storage_reliability": _sh("ok"),
+        "smart": _sh("ok"),
+        "battery": _sh("ok"),
+        "reliability": _sh("ok"),
+        "boot_time": _sh("ok"),
+    }
+    resp = client.post("/api/v1/ingest", json=_env("dev-smart", "historical", payload, sh))
+    assert resp.status_code == 200, resp.text
+    trust = db.get_trust("dev-smart")
+    assert trust["domains"]["storage"]["state"] == "trusted"
+    assert "smart" in trust["domains"]["storage"]["contributing"]
+    assert trust["sources"]["smart"]["state"] == "ok"
+
+
+def test_smart_blocked_optional_source_is_dropped_not_fatal(client):
+    from server import db
+
+    sh = {
+        "storage_reliability": _sh("ok"),
+        "smart": _sh("blocked"),
+        "battery": _sh("ok"),
+        "reliability": _sh("ok"),
+        "boot_time": _sh("ok"),
+    }
+    resp = client.post(
+        "/api/v1/ingest", json=_env("dev-smart2", "historical", healthy("historical"), sh)
+    )
+    assert resp.status_code == 200, resp.text
+    trust = db.get_trust("dev-smart2")
+    # required source alone still trusts the domain; optional smart is only dropped
+    assert trust["domains"]["storage"]["state"] == "trusted"
+    assert "smart" in trust["domains"]["storage"]["dropped"]
+
+
 def test_trust_accumulates_across_message_types(client):
     from server import db
 

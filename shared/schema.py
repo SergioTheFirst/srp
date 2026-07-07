@@ -119,6 +119,27 @@ class StorageReliability(_Base):
     read_errors_total: Optional[int] = None
     write_errors_total: Optional[int] = None
     temperature_c: Optional[int] = None  # best-effort, often absent
+    # ssd3 Ф1: deep SMART (Tier A ATA via CIM + Tier B NVMe via IOCTL health log).
+    serial_hash: Optional[str] = None  # same hash_serial as DiskInfo -- the disk key
+    # string, not int: Get-PhysicalDisk.BusType is already decoded to "NVMe"/"SATA"/...
+    # (matches DiskInfo.bus_type below -- live-verified [int] cast throws on real hardware)
+    bus_type: Optional[str] = None
+    read_errors_uncorrected: Optional[int] = None
+    write_errors_uncorrected: Optional[int] = None
+    start_stop_cycles: Optional[int] = None
+    load_unload_cycles: Optional[int] = None
+    flush_latency_max_ms: Optional[int] = None
+    smart_predict_fail: Optional[bool] = None  # MSStorageDriver_FailurePredictStatus
+    smart_attrs: dict[str, int] = Field(default_factory=dict)  # {"5": raw, ...} decoded ATA attrs
+    nvme_critical_warning: Optional[int] = None
+    nvme_spare_pct: Optional[int] = None
+    nvme_spare_threshold_pct: Optional[int] = None
+    nvme_percentage_used: Optional[int] = None
+    nvme_media_errors: Optional[int] = None
+    nvme_unsafe_shutdowns: Optional[int] = None
+    nvme_error_log_entries: Optional[int] = None
+    nvme_data_units_written: Optional[int] = None
+    nvme_power_cycles: Optional[int] = None
 
 
 class BatteryInfo(_Base):
