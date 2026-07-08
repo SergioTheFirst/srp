@@ -349,6 +349,25 @@ def _gateway_latency_ms(row: dict[str, Any]) -> Optional[float]:
     return median(vals) if vals else None
 
 
+def _disk_tail_ratio(row: dict[str, Any]) -> Optional[float]:
+    """Ф4 (K4/K7): p95/p50 read-latency ratio -- the "cost of operation" shape,
+    a robust-variance stand-in for tail growth at a calm average (a system
+    paying with retries/ECC widens its tail long before the mean moves).
+
+    Noisy from a single heartbeat's 8-sample micro-series (``disk_lat_samples``
+    below 4 means the PS side never had enough valid deltas) -- only trusted as
+    a trend over MANY heartbeats, never a single reading.
+    """
+    samples = row.get("disk_lat_samples")
+    if samples is None or samples < 4:
+        return None
+    p50 = row.get("disk_read_ms_p50")
+    p95 = row.get("disk_read_ms_p95")
+    if p50 is None or p95 is None or p50 == 0:
+        return None
+    return float(p95) / float(p50)
+
+
 def _eta_to_risk(eta_days: float) -> float:
     for horizon, risk in _ETA_RISK_BANDS:
         if eta_days <= horizon:
@@ -421,6 +440,16 @@ def compute_trends(
             historical_series,
             "gateway_latency",
             _gateway_latency_ms,
+            worsening_sign=1,
+            now=now,
+        ),
+        # Ф4 (K4/K7): direction-only -- no physical failure boundary for a
+        # latency-shape ratio, so it never joins the depletion domains / never
+        # drives trajectory_risk (it is Resilience evidence for Ф6, not here).
+        "disk_tail_ratio": build_trend(
+            heartbeat_series,
+            "disk_tail_ratio",
+            _disk_tail_ratio,
             worsening_sign=1,
             now=now,
         ),

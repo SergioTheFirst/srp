@@ -317,6 +317,18 @@ def _stability(
             }
         )
 
+    # ssd3 Ф4: software-aging engine (session-scoped handle/memory leak) --
+    # same supplementary pattern as the other W4.2 engines above.
+    lo_aging = _domain_lo(domain_values, "software_aging_risk", 0.8)
+    if lo_aging > 0.01 and domain_values:
+        v_raw = domain_values.get("software_aging_risk", 0.0)
+        f.append(
+            {
+                "label": f"Software-aging engine (утечки): {v_raw:.0f}/100",
+                "weight": round(lo_aging, 2),
+            }
+        )
+
     # ssd3 Ф3 (T3.3): "Application Hang" (1002) is deliberately excluded from
     # errchain's storage causal chain (server/analytics/errchain.py) -- it is
     # a generic instability symptom, scored here instead, alongside the BSOD

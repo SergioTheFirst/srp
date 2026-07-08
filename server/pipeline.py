@@ -20,6 +20,7 @@ from server.analytics.errchain import analyze_events
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
 from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
+from server.analytics.software_aging import compute_software_aging_risk
 from server.analytics.storage import compute_storage_risk, worst_disk_key
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
@@ -536,6 +537,10 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     network_risk = compute_network_risk(
         hist, device_trust=device_trust, domain_state=net_domain.get("state")
     )
+    # ssd3 Ф4: session-scoped handle/memory-leak verdict (pure Resilience, K2 --
+    # never contributes Damage). Needs only the heartbeat series already fetched
+    # above for the trend engine.
+    software_aging_risk = compute_software_aging_risk(hb_series, device_trust=device_trust)
 
     # W4.3: thin Bayesian prioritizer over domain engines (D5). domain_values feeds
     # the W4.2 outputs (0..100) as supplementary log-odds factors into each class so
@@ -549,6 +554,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         "battery_risk": battery_risk.value,
         "os_degradation_risk": os_degradation_risk.value,
         "disk_fill_risk": disk_fill_risk.value,
+        "software_aging_risk": software_aging_risk.value,
     }
     risk = compute_risk(
         inv,
@@ -592,6 +598,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
     risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)
     risk_block["score100"]["network_risk"] = score_to_dict(network_risk)
+    risk_block["score100"]["software_aging_risk"] = score_to_dict(software_aging_risk)
+    # ssd3 Ф4: same coords-promotion convention as storage_risk above -- Ф6 reads
+    # both engines' flags from the same top-level shape.
+    risk_block["score100"]["software_aging_risk"]["coords"] = (
+        software_aging_risk.source_lineage.get("coords", {"flags": []})
+    )
     risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
 
     scores = {
