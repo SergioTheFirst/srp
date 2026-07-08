@@ -15,6 +15,7 @@
 {% set level_ru = {"Critical": "Критич.", "Error": "Ошибка", "Warning": "Предупр.", "Information": "Инфо"} %}
 
 {% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 <style>
 /* ── Source coverage widget ────────────────────────────────────────────── */
 .coverage-widget {
@@ -313,6 +314,57 @@
   {% endif %}
 {% endfor %}
 </div>
+{% endif %}
+
+{# ssd3 Ф5 (T5.4): 90d daily-rollup disk-latency chart #}
+{% if heartbeat_rollups %}
+<div class="axis-card">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Латентность диска (p95), мс — по дням</div>
+      <div class="axis-reason">посуточная свёртка, 90 дней</div>
+    </div>
+  </div>
+  <div id="chart-disk-p95" style="height:200px; margin-top:6px"></div>
+</div>
+{% include "_plotly_hover.html" %}
+<script id="hb-rollup-data" type="application/json">{{ heartbeat_rollups|tojson }}</script>
+<script>
+(function () {
+  var el = document.getElementById("chart-disk-p95");
+  if (!el || typeof Plotly === "undefined") return;
+  var rows = JSON.parse(document.getElementById("hb-rollup-data").textContent || "[]")
+               .filter(function (r) { return r.day && (r.disk_read_ms_p95 != null || r.disk_write_ms_p95 != null); })
+               .reverse();  // stored newest-first; chart oldest -> newest
+  if (rows.length < 2) { el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>"; return; }
+  var x = rows.map(function (r) { return r.day; });
+  var yRead = rows.map(function (r) { return r.disk_read_ms_p95; });
+  var yWrite = rows.map(function (r) { return r.disk_write_ms_p95; });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    var warn = css.getPropertyValue("--warn").trim() || "#f59e0b";
+    var grid = css.getPropertyValue("--line").trim() || "#132030";
+    Plotly.newPlot(el, [
+      { x: x, y: yRead, name: "чтение", type: "scatter", mode: "lines+markers",
+        line: { color: acc, width: 2 }, marker: { color: acc, size: 4 },
+        hovertemplate: "%{x}<br>чтение <b>%{y:.1f}</b> мс<extra></extra>" },
+      { x: x, y: yWrite, name: "запись", type: "scatter", mode: "lines+markers",
+        line: { color: warn, width: 2 }, marker: { color: warn, size: 4 },
+        hovertemplate: "%{x}<br>запись <b>%{y:.1f}</b> мс<extra></extra>" }
+    ], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+      margin: { t: 8, r: 14, b: 36, l: 46 },
+      xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "мс", font: { size: 11 } } },
+      showlegend: true, legend: { orientation: "h", y: -0.22 }, autosize: true,
+      hoverlabel: srpHoverLabel(),
+    }, { responsive: true, displayModeBar: false });
+  }
+  draw();
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
 {% endif %}
 
 {# Storage risk #}

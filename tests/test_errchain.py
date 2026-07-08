@@ -214,3 +214,50 @@ def test_malformed_event_id_is_ignored_not_raised(bad_id):
     ev = {"source": "disk", "event_id": bad_id, "received_at": _NOW.isoformat(), "level": "Error"}
     chain = analyze_events([ev], now=_NOW)
     assert chain.stage == 0
+
+
+# --------------------------------------------------------------------------- #
+# ssd3 Ф5 (T5.4): recurrent_weeks widened by 90d event_rollup_daily rows,
+# stitched together WITH the 30d raw window (not replacing it -- a rollup
+# pass may be up to purge_interval_hours stale, raw events stay fresh).
+# --------------------------------------------------------------------------- #
+
+
+def test_recurrent_weeks_stitches_rollups_with_raw():
+    raw = [_event("disk", 153, 1)]  # one recent week, inside the 30d raw window
+    rollups = [
+        # both well outside the 30d raw window -- only reachable via rollups
+        {"day": (_NOW - timedelta(days=45)).date().isoformat(), "event_key": "disk:153", "n": 2},
+        {"day": (_NOW - timedelta(days=60)).date().isoformat(), "event_key": "disk:153", "n": 1},
+    ]
+    chain = analyze_events(raw, now=_NOW, rollup_counts=rollups)
+    assert chain.recurrent_weeks == 3  # 1 raw week + 2 rollup weeks, unioned
+
+
+def test_recurrent_weeks_without_rollups_falls_back_to_raw_only():
+    chain = analyze_events([_event("disk", 153, 1)], now=_NOW, rollup_counts=None)
+    assert chain.recurrent_weeks == 1
+    chain_empty_list = analyze_events([_event("disk", 153, 1)], now=_NOW, rollup_counts=[])
+    assert chain_empty_list.recurrent_weeks == 1
+
+
+def test_rollup_weeks_ignore_non_storage_source_and_unclassified_id():
+    rollups = [
+        {"day": "2026-05-01", "event_key": "SomeOtherProvider:153", "n": 5},  # wrong source
+        {"day": "2026-05-08", "event_key": "disk:157", "n": 5},  # unclassified id (К8)
+        {"day": "2026-05-15", "event_key": "disk:1002", "n": 5},  # app_hang, not chain-eligible
+    ]
+    chain = analyze_events([], now=_NOW, rollup_counts=rollups)
+    assert chain.recurrent_weeks == 0
+
+
+def test_rollup_weeks_tolerate_malformed_rows_without_raising():
+    rollups = [
+        {"day": None, "event_key": "disk:153", "n": 1},
+        {"day": "2026-05-01", "event_key": None, "n": 1},
+        {"day": "2026-05-01", "event_key": "disk:153", "n": 0},  # zero count
+        {"day": "not-a-date", "event_key": "disk:153", "n": 1},
+        {"day": "2026-05-01", "event_key": "disk:not-a-number", "n": 1},
+    ]
+    chain = analyze_events([], now=_NOW, rollup_counts=rollups)
+    assert chain.recurrent_weeks == 0  # every row malformed/filtered -> no crash, no weeks

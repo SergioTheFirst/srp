@@ -32,9 +32,7 @@ _retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample T
 _retain_prn = 2000  # printer readings kept per printer (phase 4; downsample TBD)
 _retain_net = 2000  # netdisco device readings kept per device (phase 2)
 _retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
-_retain_disk = (
-    2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2; Ф5 makes it configurable)
-)
+_retain_disk = 2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2), config-driven
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 _lock = threading.Lock()
 
@@ -345,6 +343,28 @@ CREATE TABLE IF NOT EXISTS net_changes (
   detail      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_netchg_ts ON net_changes(id);
+CREATE TABLE IF NOT EXISTS heartbeat_rollup_daily (
+  device_id   TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  cpu_p50 REAL, cpu_p95 REAL, mem_avail_min REAL, pagefile_p95 REAL,
+  disk_read_ms_p95 REAL, disk_write_ms_p95 REAL, disk_queue_p95 REAL,
+  handles_max INTEGER, free_space_min REAL, uptime_max REAL,
+  PRIMARY KEY (device_id, day)
+);
+CREATE TABLE IF NOT EXISTS event_rollup_daily (
+  device_id   TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  event_key   TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  PRIMARY KEY (device_id, day, event_key)
+);
+CREATE TABLE IF NOT EXISTS maintenance_log (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts     TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT
+);
 """
 
 
@@ -357,9 +377,10 @@ def init_db(
     retain_printer_readings: int = 2000,
     retain_net_readings: int = 2000,
     retain_net_snapshots: int = 500,
+    retain_disk_readings: int = 2000,
 ) -> None:
     global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores, _retain_prn
-    global _retain_net, _retain_net_topo
+    global _retain_net, _retain_net_topo, _retain_disk
     _db_path = Path(db_path)
     _retain_hb = retain_heartbeats
     _retain_ev = retain_events
@@ -368,6 +389,7 @@ def init_db(
     _retain_prn = retain_printer_readings
     _retain_net = retain_net_readings
     _retain_net_topo = retain_net_snapshots
+    _retain_disk = retain_disk_readings
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         _migrate_legacy_latest_wins(conn)
@@ -386,6 +408,7 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -869,6 +892,330 @@ def backfill_disk_readings() -> int:
                     )
                     inserted += 1
         return inserted
+
+
+# --------------------------------------------------------------------------- #
+# Rollup + retention maintenance (ssd3 Ф5). day is always the UTC calendar
+# date of the server-stamped received_at (substr(...,1,10) of an isoformat()
+# timestamp) -- never the agent's own clock. The existing per-device row caps
+# (_retain_hb etc.) stay as-is; prune_aged adds a second, age-based bound on
+# top of them (§2: "caps remain the safety net").
+# --------------------------------------------------------------------------- #
+def _pctl(values: list[float], p_num: int) -> Optional[float]:
+    """Nearest-rank percentile (p_num/100, e.g. 95 for p95).
+
+    Integer ceiling division keeps the rank exact instead of drifting on
+    float math.ceil rounding at boundary sample sizes.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    idx = -(-(p_num * n) // 100) - 1
+    return ordered[max(0, min(n - 1, idx))]
+
+
+def _finite_float(value: object) -> Optional[float]:
+    """Safe numeric coercion for agent-supplied telemetry values.
+
+    security-review (Ф5): HeartbeatPayload's numeric fields have no upper
+    bound in the wire contract, so a crafted envelope can carry a Python int
+    too large for float() (raises OverflowError) or a float that survives
+    pydantic (allow_inf_nan defaults True) as inf/nan -- either would abort
+    the whole day's rollup_heartbeats_daily call (all devices batched in one
+    call) and, for inf/nan, serialize to invalid JSON via device.html's
+    |tojson chart island. Reject both here, once, at the source.
+    """
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        f = float(value)
+    except OverflowError:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _rollup_disk_ms(
+    payloads: list[dict[str, Any]], p95_key: str, legacy_sec_key: str
+) -> list[float]:
+    """Ф4 per-heartbeat p95 (already ms) when present, else the legacy
+    per-op latency field scaled to ms -- an old agent without Ф4 fields
+    still contributes to the daily rollup (K2/compat), just less precisely.
+    """
+    out: list[float] = []
+    for p in payloads:
+        f = _finite_float(p.get(p95_key))
+        if f is None:
+            sec = _finite_float(p.get(legacy_sec_key))
+            f = _finite_float(sec * 1000) if sec is not None else None
+        if f is not None:
+            out.append(f)
+    return out
+
+
+def _rollup_heartbeat_agg(payloads: list[dict[str, Any]]) -> tuple[Any, ...]:
+    def nums(key: str) -> list[float]:
+        return [f for p in payloads if (f := _finite_float(p.get(key))) is not None]
+
+    cpu = nums("cpu_pct")
+    mem = nums("mem_avail_mb")
+    free = nums("free_space_pct")
+    handles = nums("handle_count_total")
+    uptime = nums("uptime_hours")
+    return (
+        _pctl(cpu, 50),
+        _pctl(cpu, 95),
+        min(mem, default=None),
+        _pctl(nums("pagefile_pct"), 95),
+        _pctl(_rollup_disk_ms(payloads, "disk_read_ms_p95", "disk_read_sec"), 95),
+        _pctl(_rollup_disk_ms(payloads, "disk_write_ms_p95", "disk_write_sec"), 95),
+        _pctl(nums("disk_queue"), 95),
+        int(max(handles)) if handles else None,
+        min(free, default=None),
+        max(uptime, default=None),
+    )
+
+
+def rollup_heartbeats_daily(day: str) -> int:
+    """Idempotent per-device percentile fold of one UTC day's heartbeats into
+    heartbeat_rollup_daily. Returns the number of devices rolled up."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, payload FROM heartbeats WHERE substr(received_at,1,10)=?",
+            (day,),
+        ).fetchall()
+    by_device: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_device.setdefault(r["device_id"], []).append(json.loads(r["payload"]))
+    if not by_device:
+        return 0
+    with _lock, _connect() as conn:
+        for device_id, payloads in by_device.items():
+            agg = _rollup_heartbeat_agg(payloads)
+            conn.execute(
+                """INSERT OR REPLACE INTO heartbeat_rollup_daily
+                     (device_id, day, n, cpu_p50, cpu_p95, mem_avail_min, pagefile_p95,
+                      disk_read_ms_p95, disk_write_ms_p95, disk_queue_p95,
+                      handles_max, free_space_min, uptime_max)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (device_id, day, len(payloads), *agg),
+            )
+    return len(by_device)
+
+
+# security-review (Ф5): event_rollup_daily's PK includes event_key ("source:id"),
+# and EventItem.source has no max_length in the wire contract -- an ingest-token
+# holder could otherwise grow this table's cardinality without bound (cycling
+# fake source/event_id values) the same way disk_readings could pre-Ф2-review
+# (see _MAX_DISK_KEYS_PER_DEVICE). Clamp the source length and keep only the
+# highest-count keys per (device, day); rare/noise keys are exactly what should
+# lose the seat under pressure, so this doubles as a sane eviction policy.
+_EVENT_SOURCE_MAX_LEN = 64
+_MAX_EVENT_KEYS_PER_DEVICE_DAY = 64
+
+
+def _cap_event_keys_per_device(
+    counts: dict[tuple[str, str], int],
+) -> dict[tuple[str, str], int]:
+    by_device: dict[str, list[tuple[str, int]]] = {}
+    for (device_id, event_key), n in counts.items():
+        by_device.setdefault(device_id, []).append((event_key, n))
+    kept: dict[tuple[str, str], int] = {}
+    for device_id, pairs in by_device.items():
+        pairs.sort(key=lambda p: p[1], reverse=True)
+        for event_key, n in pairs[:_MAX_EVENT_KEYS_PER_DEVICE_DAY]:
+            kept[(device_id, event_key)] = n
+    return kept
+
+
+def rollup_events_daily(day: str) -> int:
+    """Idempotent per-device event-count fold of one UTC day, keyed by
+    'source:event_id'. Returns the number of (device, event_key) rows written."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, source, event_id FROM events WHERE substr(received_at,1,10)=?",
+            (day,),
+        ).fetchall()
+    counts: dict[tuple[str, str], int] = {}
+    for r in rows:
+        if r["event_id"] is None:
+            continue
+        source = (r["source"] or "")[:_EVENT_SOURCE_MAX_LEN]
+        key = (r["device_id"], f"{source}:{r['event_id']}")
+        counts[key] = counts.get(key, 0) + 1
+    counts = _cap_event_keys_per_device(counts)
+    if not counts:
+        return 0
+    with _lock, _connect() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO event_rollup_daily (device_id, day, event_key, n) "
+            "VALUES (?,?,?,?)",
+            [(device_id, day, event_key, n) for (device_id, event_key), n in counts.items()],
+        )
+    return len(counts)
+
+
+def get_heartbeat_rollups(device_id: str, days: int) -> list[dict[str, Any]]:
+    """Daily heartbeat rollups for a device, newest-first, last *days* days."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT day, n, cpu_p50, cpu_p95, mem_avail_min, pagefile_p95,
+                      disk_read_ms_p95, disk_write_ms_p95, disk_queue_p95,
+                      handles_max, free_space_min, uptime_max
+               FROM heartbeat_rollup_daily
+               WHERE device_id=? AND day >= date('now', ?)
+               ORDER BY day DESC""",
+            (device_id, f"-{days} days"),
+        ).fetchall()
+    return [
+        {
+            "day": r["day"],
+            "n": r["n"],
+            "cpu_p50": r["cpu_p50"],
+            "cpu_p95": r["cpu_p95"],
+            "mem_avail_min": r["mem_avail_min"],
+            "pagefile_p95": r["pagefile_p95"],
+            "disk_read_ms_p95": r["disk_read_ms_p95"],
+            "disk_write_ms_p95": r["disk_write_ms_p95"],
+            "disk_queue_p95": r["disk_queue_p95"],
+            "handles_max": r["handles_max"],
+            "free_space_min": r["free_space_min"],
+            "uptime_max": r["uptime_max"],
+        }
+        for r in rows
+    ]
+
+
+def get_event_rollups(device_id: str, days: int) -> list[dict[str, Any]]:
+    """Daily event-count rollups for a device, newest-first, last *days* days."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT day, event_key, n FROM event_rollup_daily
+               WHERE device_id=? AND day >= date('now', ?)
+               ORDER BY day DESC""",
+            (device_id, f"-{days} days"),
+        ).fetchall()
+    return [{"day": r["day"], "event_key": r["event_key"], "n": r["n"]} for r in rows]
+
+
+def _rollup_target_days() -> list[str]:
+    """Empty heartbeat_rollup_daily -> full backfill from raw (every distinct
+    UTC day present in heartbeats/events); otherwise just yesterday+today
+    (today is re-folded each pass as it fills in -- INSERT OR REPLACE makes
+    that idempotent). Both rollup tables are created in the same schema
+    deploy, so gating the backfill decision on one of them is enough.
+    """
+    today = datetime.now(timezone.utc).date()
+    with _connect() as conn:
+        seeded = conn.execute("SELECT 1 FROM heartbeat_rollup_daily LIMIT 1").fetchone()
+        if seeded is not None:
+            return [(today - timedelta(days=1)).isoformat(), today.isoformat()]
+        hb_days = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT substr(received_at,1,10) FROM heartbeats")
+            if r[0] is not None
+        }
+        ev_days = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT substr(received_at,1,10) FROM events")
+            if r[0] is not None
+        }
+    return sorted(hb_days | ev_days)
+
+
+def run_daily_rollup() -> dict[str, int]:
+    """Fold heartbeats/events into their daily rollup tables (ssd3 Ф5, T5.3)."""
+    days = _rollup_target_days()
+    hb_n = ev_n = 0
+    for day in days:
+        hb_n += rollup_heartbeats_daily(day)
+        ev_n += rollup_events_daily(day)
+    if hb_n or ev_n:
+        _log_maintenance("rollup", f"days={len(days)} heartbeat_rows={hb_n} event_rows={ev_n}")
+    return {"days": len(days), "heartbeat_rows": hb_n, "event_rows": ev_n}
+
+
+def prune_aged(
+    *, heartbeat_raw_days: int, events_raw_days: int, rollup_days: int
+) -> dict[str, int]:
+    """Age-based prune layered on top of the existing per-device row caps
+    (ssd3 Ф5, T5.3): the caps stay as a safety net for a noisy device, but a
+    quiet one may never fill its cap, so raw rows need a time bound too. Any
+    *_days <= 0 disables that leg (0 = off, matches device_retention_days).
+    """
+    deleted: dict[str, int] = {}
+    with _lock, _connect() as conn:
+        if heartbeat_raw_days > 0:
+            cur = conn.execute(
+                "DELETE FROM heartbeats WHERE received_at < datetime('now', ?)",
+                (f"-{heartbeat_raw_days} days",),
+            )
+            deleted["heartbeats"] = cur.rowcount
+        if events_raw_days > 0:
+            cur = conn.execute(
+                "DELETE FROM events WHERE received_at < datetime('now', ?)",
+                (f"-{events_raw_days} days",),
+            )
+            deleted["events"] = cur.rowcount
+        if rollup_days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=rollup_days)).date().isoformat()
+            cur = conn.execute("DELETE FROM heartbeat_rollup_daily WHERE day < ?", (cutoff,))
+            deleted["heartbeat_rollup_daily"] = cur.rowcount
+            cur = conn.execute("DELETE FROM event_rollup_daily WHERE day < ?", (cutoff,))
+            deleted["event_rollup_daily"] = cur.rowcount
+    if any(deleted.values()):
+        _log_maintenance("prune_aged", json.dumps(deleted))
+    return deleted
+
+
+_VACUUM_FREELIST_RATIO = 0.2  # VACUUM only once the free-page share exceeds this
+_VACUUM_MIN_INTERVAL_DAYS = 7  # ...and only this long after the previous VACUUM
+
+
+def _last_maintenance_ts(action: str) -> Optional[datetime]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ts FROM maintenance_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,)
+        ).fetchone()
+    return _parse_iso(row[0]) if row else None
+
+
+def _log_maintenance(action: str, detail: Optional[str]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO maintenance_log (ts, action, detail) VALUES (?,?,?)",
+            (_now_iso(), action, detail),
+        )
+
+
+def run_maintenance() -> dict[str, Any]:
+    """PRAGMA optimize every pass; VACUUM only when the freelist share
+    exceeds _VACUUM_FREELIST_RATIO AND >= _VACUUM_MIN_INTERVAL_DAYS have
+    passed since the last one -- VACUUM rewrites the whole file, too
+    expensive to run on every pass (ssd3 Ф5, T5.3).
+    """
+    with _lock, _connect() as conn:
+        conn.execute("PRAGMA optimize")
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        freelist_count = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    _log_maintenance("optimize", None)
+    ratio = (freelist_count / page_count) if page_count else 0.0
+    if ratio <= _VACUUM_FREELIST_RATIO:
+        return {"optimized": True, "vacuumed": False, "freelist_ratio": ratio}
+    last = _last_maintenance_ts("vacuum")
+    if last is not None and (datetime.now(timezone.utc) - last) < timedelta(
+        days=_VACUUM_MIN_INTERVAL_DAYS
+    ):
+        return {"optimized": True, "vacuumed": False, "freelist_ratio": ratio}
+    # ponytail: VACUUM holds _lock (a plain threading.Lock, no timeout) for its
+    # full runtime, so every other writer queues behind it -- acceptable because
+    # the guard above makes this rare (freelist ratio + 7d interval), never per
+    # request. Revisit with per-table or asyncio-native locking if VACUUM ever
+    # needs to run more often than the guard allows.
+    with _lock, _connect() as conn:
+        conn.execute("VACUUM")
+    _log_maintenance("vacuum", f"freelist_ratio={ratio:.3f}")
+    return {"optimized": True, "vacuumed": True, "freelist_ratio": ratio}
 
 
 def store_heartbeat(
@@ -1672,6 +2019,8 @@ _DEVICE_TABLES: tuple[str, ...] = (
     "print_jobs",
     "printer_ip_map",
     "devices",
+    "heartbeat_rollup_daily",
+    "event_rollup_daily",
 )
 
 _SECONDS_PER_DAY = 86_400
@@ -3095,7 +3444,16 @@ def get_source_trusts(device_id: str) -> dict[str, dict]:
     }
 
 
-_METRIC_TABLES = ("devices", "heartbeats", "historical", "events", "scores")
+_METRIC_TABLES = (
+    "devices",
+    "heartbeats",
+    "historical",
+    "events",
+    "scores",
+    "disk_readings",
+    "heartbeat_rollup_daily",
+    "event_rollup_daily",
+)
 # Table names are module constants (never user-supplied) — SQL injection not possible.
 _GATE_FAIL_STATES = frozenset({"unavailable", "stale", "suspect"})
 _GATE_PASS_STATES = frozenset({"ok", "degraded"})
@@ -3150,6 +3508,17 @@ def get_pipeline_metrics() -> dict[str, Any]:
                 f"SELECT COUNT(*) FROM {tbl}"  # nosec B608 — constant table name
             ).fetchone()[0]
 
+        # ssd3 Ф5: DB file size via page accounting (no filesystem stat needed)
+        # + last rollup/maintenance markers for the /pipeline "Хранилище" block.
+        db_size_bytes = (
+            conn.execute("PRAGMA page_count").fetchone()[0]
+            * conn.execute("PRAGMA page_size").fetchone()[0]
+        )
+        last_rollup_day = conn.execute("SELECT MAX(day) FROM heartbeat_rollup_daily").fetchone()[0]
+        maint_row = conn.execute(
+            "SELECT ts, action FROM maintenance_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
     src_by_state: dict[str, int] = {r[0]: r[1] for r in src_rows}
     gate_pass = sum(src_by_state.get(s, 0) for s in _GATE_PASS_STATES)
     gate_fail = sum(src_by_state.get(s, 0) for s in _GATE_FAIL_STATES)
@@ -3179,6 +3548,12 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "newest_ts": newest_score_ts,
         },
         "table_rows": table_rows,
+        "storage": {
+            "db_size_bytes": db_size_bytes,
+            "last_rollup_day": last_rollup_day,
+            "last_maintenance_ts": maint_row["ts"] if maint_row else None,
+            "last_maintenance_action": maint_row["action"] if maint_row else None,
+        },
     }
 
 

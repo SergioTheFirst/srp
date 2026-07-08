@@ -51,6 +51,10 @@ _TREND_HISTORY_LIMIT = 200
 # raw events, not just a slope's worth of points) but still capped per device.
 _ERRCHAIN_EVENT_LIMIT = 1000
 
+# ssd3 Ф5 (T5.4): recurrent_weeks widens from the 30d raw window to 90d once
+# daily rollups exist -- more lookback than raw event retention alone keeps.
+_ROLLUP_LOOKBACK_DAYS = 90
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -521,7 +525,10 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # ssd3 Ф3: errchain must run before compute_storage_risk -- the engine's
     # chain-stage/burstiness/early-event rules (wired in Ф2) read it via chain=.
     chain_events = db.get_recent_events(device_id, limit=_ERRCHAIN_EVENT_LIMIT)
-    chain = analyze_events(chain_events, now=datetime.now(timezone.utc))
+    rollup_counts = db.get_event_rollups(device_id, _ROLLUP_LOOKBACK_DAYS)
+    chain = analyze_events(
+        chain_events, now=datetime.now(timezone.utc), rollup_counts=rollup_counts
+    )
     storage_risk = compute_storage_risk(
         hist, hb, device_trust=device_trust, disk_series=disk_series, chain=chain, trends=trends
     )

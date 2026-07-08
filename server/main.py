@@ -74,6 +74,26 @@ def _run_retention_sweep(cfg: ServerConfig) -> None:
         )
 
 
+def _run_maintenance_sweep(cfg: ServerConfig) -> None:
+    """Roll up, age-prune, and vacuum the DB (ssd3 Ф5, T5.3).
+
+    One guarded pass, steps in a fixed order: a failed rollup must skip prune
+    (never delete raw rows a day never got folded into a rollup row) -- so
+    this is a single try/except around the whole sequence, not one per step,
+    the same self-guard shape as _run_retention_sweep beside it.
+    """
+    try:
+        db.run_daily_rollup()
+        db.prune_aged(
+            heartbeat_raw_days=cfg.heartbeat_raw_days,
+            events_raw_days=cfg.events_raw_days,
+            rollup_days=cfg.rollup_days,
+        )
+        db.run_maintenance()
+    except Exception:  # never let a transient maintenance error crash the caller
+        _log.exception("maintenance sweep failed")
+
+
 def _run_disk_readings_backfill() -> None:
     """One-time seed of disk_readings from existing historical rows (ssd3 Ф2).
 
@@ -90,11 +110,15 @@ def _run_disk_readings_backfill() -> None:
 
 
 async def _retention_loop(cfg: ServerConfig) -> None:
-    """Re-run the retention sweep every purge_interval_hours until cancelled."""
+    """Re-run the retention + maintenance sweeps every purge_interval_hours
+    until cancelled. Maintenance runs via to_thread -- VACUUM can take a
+    while and must not block the event loop (netdisco loops use the same
+    to_thread-the-whole-cycle pattern)."""
     interval_sec = cfg.purge_interval_hours * 3600
     while True:
         await asyncio.sleep(interval_sec)
         _run_retention_sweep(cfg)  # self-guards transient errors (see above)
+        await asyncio.to_thread(_run_maintenance_sweep, cfg)
 
 
 _plog = logging.getLogger("srp.printers")
@@ -326,12 +350,18 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             retain_printer_readings=cfg.retain_printer_readings,
             retain_net_readings=cfg.retain_net_readings,
             retain_net_snapshots=cfg.retain_net_snapshots,
+            retain_disk_readings=cfg.retain_disk_readings,
         )
         org_directory.init_directory(cfg.resolved_org_directory_path())
         _run_disk_readings_backfill()  # seed disk_readings before any scoring reads it
         _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
+        await asyncio.to_thread(_run_maintenance_sweep, cfg)  # ssd3 Ф5: rollup+prune+vacuum
         tasks: list[asyncio.Task[None]] = []
-        if cfg.device_retention_days > 0 and cfg.purge_interval_hours > 0:
+        # NB: gated on purge_interval_hours alone (not device_retention_days too) --
+        # _run_retention_sweep already no-ops when device_retention_days<=0, but the
+        # same loop also carries Ф5 maintenance, which must keep running even if an
+        # operator disables ghost auto-purge specifically.
+        if cfg.purge_interval_hours > 0:
             tasks.append(asyncio.create_task(_retention_loop(cfg)))
         if cfg.printer_poll_enabled:
             tasks.append(asyncio.create_task(_printer_poll_loop(cfg)))

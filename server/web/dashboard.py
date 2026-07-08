@@ -415,6 +415,8 @@ def device(request: Request, device_id: str):
             "nd": nd,
             "card": card,
             "available_version": _fleet_available_version(request),
+            # ssd3 Ф5: 90d daily rollup for the disk-latency chart under "Прогноз".
+            "heartbeat_rollups": db.get_heartbeat_rollups(device_id, 90),
         },
     )
 
