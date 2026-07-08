@@ -49,7 +49,9 @@ class ErrChain:
 
     stage: int  # 0 none; 1 retries only; 2 damage present; 3 damage->crash within 7d
     burstiness: Optional[float]  # stdev/mean of storage-error gaps; None if fewer than 4 events
-    recurrent_weeks: int  # distinct ISO weeks with >=1 storage error in the 30d window
+    recurrent_weeks: (
+        int  # distinct ISO weeks with >=1 storage error (30d raw, 90d if rollups given)
+    )
     counts: dict[str, int]  # {"early", "damage", "crash", "app_hang"}; app_hang is bayes-only
     factors: list[dict]  # Russian-language evidence labels (Ф6/Ф7 dashboard)
 
@@ -64,7 +66,39 @@ def _parse_received_at(value: object) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def analyze_events(events: list[dict], *, now: datetime) -> ErrChain:
+def _iso_weeks_from_rollups(rollup_counts: list[dict]) -> set[tuple[int, int]]:
+    """ISO (year, week) pairs with >=1 storage early/damage event, read from
+    event_rollup_daily rows (event_key='source:event_id') -- lets recurrence
+    look back across a 90d rollup window instead of just the 30d raw window
+    raw events alone would allow (ssd3 Ф5, T5.4).
+    """
+    weeks: set[tuple[int, int]] = set()
+    for row in rollup_counts:
+        key = row.get("event_key")
+        day = row.get("day")
+        if not key or not day or not row.get("n"):
+            continue
+        source, _, eid_s = key.partition(":")
+        if source not in _STORAGE_SOURCES:
+            continue
+        try:
+            eid = int(eid_s)
+        except ValueError:
+            continue
+        if eid not in STORAGE_EARLY and eid not in STORAGE_DAMAGE:
+            continue
+        try:
+            d = datetime.fromisoformat(day).date()
+        except ValueError:
+            continue
+        iso = d.isocalendar()
+        weeks.add((iso[0], iso[1]))
+    return weeks
+
+
+def analyze_events(
+    events: list[dict], *, now: datetime, rollup_counts: Optional[list[dict]] = None
+) -> ErrChain:
     window_start = now - timedelta(days=_WINDOW_DAYS)
     early: list[datetime] = []
     damage: list[datetime] = []
@@ -121,7 +155,10 @@ def analyze_events(events: list[dict], *, now: datetime) -> ErrChain:
             {"label": f"ошибки диска идут кластерами (не равномерно, B={burstiness:.1f})"}
         )
 
-    recurrent_weeks = len({(t.isocalendar()[0], t.isocalendar()[1]) for t in storage_ts})
+    weeks = {(t.isocalendar()[0], t.isocalendar()[1]) for t in storage_ts}
+    if rollup_counts:
+        weeks |= _iso_weeks_from_rollups(rollup_counts)
+    recurrent_weeks = len(weeks)
     if recurrent_weeks >= 2:
         factors.append({"label": f"ошибки диска повторяются {recurrent_weeks} разных недель"})
 

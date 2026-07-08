@@ -32,6 +32,14 @@ class ServerConfig:
     # of silence (judged on the server-stamped last_seen). 0 disables auto-purge.
     device_retention_days: int = 30
     purge_interval_hours: int = 24  # cadence of the background retention sweep
+    # ssd3 Ф5: rollup/retention (rollup_heartbeats_daily/rollup_events_daily
+    # fold raw rows into heartbeat_rollup_daily/event_rollup_daily; prune_aged
+    # bounds raw-row age on top of the existing per-device row caps). Reuses
+    # purge_interval_hours as its cadence -- no separate loop/interval.
+    heartbeat_raw_days: int = 30
+    events_raw_days: int = 90
+    rollup_days: int = 730
+    retain_disk_readings: int = 2000
     # B105: not a secret literal -- empty = ingest auth OFF; real token set via config.json/env.
     ingest_token: str = ""  # nosec B105
     # Org/department directory (tray spec §7); relative -> resolved against root.

@@ -77,6 +77,7 @@
 {% set src = m.source_health %}
 {% set scores = m.scores %}
 {% set rows = m.table_rows %}
+{% set storage = m.storage %}
 
 <p class="refresh-note mono">
   снимок {{ m.ts[:19] }}Z · авто-обновление 15с
@@ -181,6 +182,32 @@
         </span>
       </div>
       {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Storage housekeeping (ssd3 Ф5: rollup + age-prune + vacuum) ──────────── #}
+<div class="section-label">Хранилище</div>
+<div class="metrics-grid">
+  <div class="metric-card na">
+    <div class="mc-label">Обслуживание БД</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">размер файла</span>
+        <span class="mc-val accent">{{ storage.db_size_bytes | filesizeformat }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">последний rollup-день</span>
+        <span class="mc-val na">{{ storage.last_rollup_day or "—" }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">последнее обслуживание</span>
+        <span class="mc-val na" style="font-size:13px">
+          {%- if storage.last_maintenance_action %}
+            {{ storage.last_maintenance_action }} · {{ storage.last_maintenance_ts[:19] }}Z
+          {%- else %}—{% endif -%}
+        </span>
+      </div>
     </div>
   </div>
 </div>

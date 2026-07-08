@@ -5,6 +5,10 @@
   "retain_heartbeats": 500,
   "retain_events": 5000,
   "stale_after_sec": 600,
+  "heartbeat_raw_days": 30,
+  "events_raw_days": 90,
+  "rollup_days": 730,
+  "retain_disk_readings": 2000,
   "printer_poll_enabled": true,
   "printers": {
     "poll_interval_sec": 900,
