@@ -74,6 +74,21 @@ def _run_retention_sweep(cfg: ServerConfig) -> None:
         )
 
 
+def _run_disk_readings_backfill() -> None:
+    """One-time seed of disk_readings from existing historical rows (ssd3 Ф2).
+
+    Idempotent (db.backfill_disk_readings no-ops once the table is non-empty)
+    and never fatal: a transient DB error here must not crash startup.
+    """
+    try:
+        inserted = db.backfill_disk_readings()
+    except Exception:  # never let a transient backfill error crash startup
+        _log.exception("disk_readings backfill failed")
+        return
+    if inserted:
+        _log.info("disk_readings backfill inserted %d row(s)", inserted)
+
+
 async def _retention_loop(cfg: ServerConfig) -> None:
     """Re-run the retention sweep every purge_interval_hours until cancelled."""
     interval_sec = cfg.purge_interval_hours * 3600
@@ -313,6 +328,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             retain_net_snapshots=cfg.retain_net_snapshots,
         )
         org_directory.init_directory(cfg.resolved_org_directory_path())
+        _run_disk_readings_backfill()  # seed disk_readings before any scoring reads it
         _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
         tasks: list[asyncio.Task[None]] = []
         if cfg.device_retention_days > 0 and cfg.purge_interval_hours > 0:

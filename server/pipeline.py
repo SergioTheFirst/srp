@@ -18,7 +18,7 @@ from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
 from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
-from server.analytics.storage import compute_storage_risk
+from server.analytics.storage import compute_storage_risk, worst_disk_key
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
     compute_day1_score100,
@@ -297,6 +297,10 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             clock_drift_sec=drift,
         )
         db.store_historical(did, ts, env.payload, received_at=received_at, clock_drift_sec=drift)
+        # ssd3 Ф2: one series per PHYSICAL DISK (keyed by serial_hash), so
+        # recurrence/acceleration evidence survives an OS reinstall the same
+        # way historical's device-envelope series does not.
+        db.store_disk_readings(did, env.payload.get("storage", []), ts, received_at)
         # printview: persist spooler {queue-name -> printer-IP} hints so print
         # views can resolve a print job's printer to its IP (server-side, no agent
         # or contract change). env.payload is the RAW dict (the validated parse is
@@ -494,12 +498,23 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # untrusted identity withholds; insufficient history -> UNKNOWN (no fake ETA).
     hist_series = db.get_historical_series(device_id, limit=_TREND_HISTORY_LIMIT)
     hb_series = db.get_recent_heartbeats(device_id, limit=_TREND_HISTORY_LIMIT)
-    trends = compute_trends(hist_series, hb_series)
+    # ssd3 Ф2: pick the worst disk from D-points of its LATEST reading alone
+    # (no series yet -- breaks the "trends need the engine, the engine needs
+    # the worst disk" cycle), THEN fetch its own series, THEN compute trends
+    # over it, THEN hand both to the engine. Order is fixed (§1.6/T2.2).
+    worst_key = worst_disk_key(hist)
+    disk_series = (
+        db.get_disk_series(device_id, worst_key, limit=_TREND_HISTORY_LIMIT) if worst_key else None
+    )
+    trends = compute_trends(hist_series, hb_series, disk_series=disk_series)
     trajectory = trajectory_risk_score(trends, device_trust=device_trust)
 
     # W4.2: domain engines — computed before the Bayesian prioritizer so their
     # outputs can serve as primary inputs (D5 thin prioritizer design, W4.3).
-    storage_risk = compute_storage_risk(hist, hb, device_trust=device_trust)
+    # chain=None until Ф3 (errchain) wires a real ErrChain in here.
+    storage_risk = compute_storage_risk(
+        hist, hb, device_trust=device_trust, disk_series=disk_series, chain=None, trends=trends
+    )
     battery_risk = compute_battery_risk(hist, device_trust=device_trust)
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
     disk_fill_risk = compute_disk_fill_risk(hb_series, events, device_trust=device_trust)
@@ -550,6 +565,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
     risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
     risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
+    # ssd3 Ф2: promote the coordinate tags (D/R) out of source_lineage to a
+    # top-level sibling key -- additive, old readers of storage_risk never
+    # look for "coords" and are unaffected.
+    risk_block["score100"]["storage_risk"]["coords"] = storage_risk.source_lineage.get(
+        "coords", {"damage": 0.0, "resilience_loss": 0.0, "flags": []}
+    )
     risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
     risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
