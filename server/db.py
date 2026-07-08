@@ -12,6 +12,7 @@ module constants, never user input.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import sqlite3
@@ -31,6 +32,9 @@ _retain_scores = 5000  # computed-score rows kept per device (W0.1; downsample T
 _retain_prn = 2000  # printer readings kept per printer (phase 4; downsample TBD)
 _retain_net = 2000  # netdisco device readings kept per device (phase 2)
 _retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
+_retain_disk = (
+    2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2; Ф5 makes it configurable)
+)
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 _lock = threading.Lock()
 
@@ -127,6 +131,16 @@ CREATE TABLE IF NOT EXISTS historical (
   clock_drift_sec REAL
 );
 CREATE INDEX IF NOT EXISTS idx_hist_device ON historical(device_id, id);
+CREATE TABLE IF NOT EXISTS disk_readings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT NOT NULL,
+  disk_key     TEXT NOT NULL,
+  ts           TEXT,
+  received_at  TEXT NOT NULL,
+  media_type   TEXT,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diskread ON disk_readings(device_id, disk_key, id);
 CREATE TABLE IF NOT EXISTS heartbeats (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id    TEXT,
@@ -679,6 +693,182 @@ def store_historical(
                  SELECT id FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
             (device_id, device_id, _retain_hist),
         )
+
+
+def _disk_key(disk: dict[str, Any], index: int) -> str:
+    """serial_hash when the agent reports one (ssd3 Ф1); otherwise a fallback
+    key from what an older/non-Ф1 agent DOES send. StorageReliability carries
+    no size field to key on (unlike the plan's original wording) -- disk
+    name + media type + position is the closest stable substitute.
+
+    Same-device collision risk: two disks of the same model at the same
+    position (e.g. a same-model swap) splice onto one series -- degrades to
+    a wrong trend inference, never a cross-device leak (worst_disk_key skips
+    fallback-keyed disks entirely, so this can't reach recurrence scoring).
+    """
+    serial_hash = disk.get("serial_hash")
+    if serial_hash:
+        return str(serial_hash)
+    raw = f"{disk.get('disk') or ''}|{disk.get('media_type') or ''}|{index}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+# security-review: _retain_disk only bounds ROWS within one (device, disk_key)
+# pair, never the number of DISTINCT disk_keys a device can accumulate. Since
+# disk_key falls back to a hash of agent-supplied fields when serial_hash is
+# absent, a poster holding the shared ingest token could otherwise cycle a
+# fresh key every envelope and grow the table without limit (each new key
+# never reaches the retention cap, so the prune-DELETE never touches it). A
+# real machine settles on a handful of physical disks after its first few
+# envelopes, so this ceiling is generous and inert for legitimate traffic.
+_MAX_DISK_KEYS_PER_DEVICE = 32
+
+
+def store_disk_readings(
+    device_id: str,
+    storage: list[dict[str, Any]],
+    ts: Optional[str],
+    received_at: str,
+) -> None:
+    """Append one SMART reading per physical disk, keyed by DISK -- not by
+    envelope -- so the series survives an OS reinstall (serial_hash is a
+    property of the drive, not the install).
+    """
+    if not device_id or not isinstance(storage, list) or not storage:
+        return
+    rows = []
+    keys_in_call: set[str] = set()
+    for i, disk in enumerate(storage):
+        if not isinstance(disk, dict):
+            continue
+        key = _disk_key(disk, i)
+        keys_in_call.add(key)
+        rows.append((device_id, key, ts, received_at, disk.get("media_type"), json.dumps(disk)))
+    if not rows:
+        return
+    with _lock, _connect() as conn:
+        existing_keys = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT disk_key FROM disk_readings WHERE device_id=?", (device_id,)
+            )
+        }
+        new_keys = keys_in_call - existing_keys
+        allowed_new = max(0, _MAX_DISK_KEYS_PER_DEVICE - len(existing_keys))
+        blocked_keys = set(sorted(new_keys)[allowed_new:])
+        filtered_rows = [r for r in rows if r[1] not in blocked_keys]
+        if not filtered_rows:
+            return
+        conn.executemany(
+            "INSERT INTO disk_readings (device_id, disk_key, ts, received_at, media_type, payload) "
+            "VALUES (?,?,?,?,?,?)",
+            filtered_rows,
+        )
+        for key in {r[1] for r in filtered_rows}:
+            conn.execute(
+                """DELETE FROM disk_readings WHERE device_id=? AND disk_key=? AND id NOT IN (
+                     SELECT id FROM disk_readings
+                     WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?)""",
+                (device_id, key, device_id, key, _retain_disk),
+            )
+
+
+def get_disk_series(device_id: str, disk_key: str, limit: int = 200) -> list[dict[str, Any]]:
+    """One physical disk's SMART readings, newest-first (append-only time series)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, media_type, payload
+               FROM disk_readings WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?""",
+            (device_id, disk_key, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "media_type": r["media_type"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
+
+
+def list_device_disks(device_id: str) -> list[dict[str, Any]]:
+    """Every distinct physical disk this device has ever reported, with the
+    identity fields of its most recent reading."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT disk_key, media_type, payload, received_at
+               FROM disk_readings
+               WHERE device_id=? AND id IN (
+                 SELECT MAX(id) FROM disk_readings WHERE device_id=? GROUP BY disk_key)
+               ORDER BY received_at DESC""",
+            (device_id, device_id),
+        ).fetchall()
+    result = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"])
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        result.append(
+            {
+                "disk_key": r["disk_key"],
+                "media_type": r["media_type"],
+                "disk": payload.get("disk"),
+                "last_seen": r["received_at"],
+            }
+        )
+    return result
+
+
+def backfill_disk_readings() -> int:
+    """One-time seed: if disk_readings is empty, replay every device's stored
+    historical rows into it so recurrence evidence (Ф2) is available from day
+    one instead of waiting for new envelopes to accumulate. Idempotent -- a
+    non-empty table is left untouched (never re-runs, never duplicates).
+
+    Runs synchronously in the startup lifespan (blocks all request serving,
+    like the retention sweep beside it) -- O(total historical rows), fine at
+    current fleet size; chunk it if a large backlog ever makes it noticeable.
+    """
+    with _lock, _connect() as conn:
+        (count,) = conn.execute("SELECT COUNT(*) FROM disk_readings").fetchone()
+        if count:
+            return 0
+        device_ids = [r[0] for r in conn.execute("SELECT DISTINCT device_id FROM historical")]
+        inserted = 0
+        for device_id in device_ids:
+            hist_rows = conn.execute(
+                "SELECT ts, received_at, payload FROM historical WHERE device_id=? ORDER BY id ASC",
+                (device_id,),
+            ).fetchall()
+            for hr in hist_rows:
+                try:
+                    payload = json.loads(hr["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                storage = payload.get("storage") if isinstance(payload, dict) else None
+                if not isinstance(storage, list):
+                    continue
+                for i, disk in enumerate(storage):
+                    if not isinstance(disk, dict):
+                        continue
+                    key = _disk_key(disk, i)
+                    conn.execute(
+                        "INSERT INTO disk_readings "
+                        "(device_id, disk_key, ts, received_at, media_type, payload) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (
+                            device_id,
+                            key,
+                            hr["ts"],
+                            hr["received_at"],
+                            disk.get("media_type"),
+                            json.dumps(disk),
+                        ),
+                    )
+                    inserted += 1
+        return inserted
 
 
 def store_heartbeat(
@@ -1471,6 +1661,7 @@ def get_net_changes(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
 _DEVICE_TABLES: tuple[str, ...] = (
     "inventory",
     "historical",
+    "disk_readings",
     "heartbeats",
     "events",
     "scores",

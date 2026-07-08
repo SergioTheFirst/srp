@@ -111,8 +111,10 @@ class InventoryPayload(_Base):
 # Historical  (day-1 scan: the machine's own past = a free dataset)
 # --------------------------------------------------------------------------- #
 class StorageReliability(_Base):
-    disk: Optional[str] = None
-    media_type: Optional[str] = None
+    # max_length backstops a direct (token-authed) poster (CertInfo precedent above);
+    # generous so a real machine's disk-model string is never rejected.
+    disk: Optional[str] = Field(default=None, max_length=256)
+    media_type: Optional[str] = Field(default=None, max_length=64)
     wear_pct: Optional[float] = None  # SSD wear indicator, 0..100 worse
     power_on_hours: Optional[int] = None
     reallocated_sectors: Optional[int] = None  # HDD pending death signal
@@ -120,10 +122,12 @@ class StorageReliability(_Base):
     write_errors_total: Optional[int] = None
     temperature_c: Optional[int] = None  # best-effort, often absent
     # ssd3 Ф1: deep SMART (Tier A ATA via CIM + Tier B NVMe via IOCTL health log).
-    serial_hash: Optional[str] = None  # same hash_serial as DiskInfo -- the disk key
+    serial_hash: Optional[str] = Field(
+        default=None, max_length=128
+    )  # same as DiskInfo -- the disk key
     # string, not int: Get-PhysicalDisk.BusType is already decoded to "NVMe"/"SATA"/...
     # (matches DiskInfo.bus_type below -- live-verified [int] cast throws on real hardware)
-    bus_type: Optional[str] = None
+    bus_type: Optional[str] = Field(default=None, max_length=64)
     read_errors_uncorrected: Optional[int] = None
     write_errors_uncorrected: Optional[int] = None
     start_stop_cycles: Optional[int] = None
@@ -173,6 +177,7 @@ NET_QUALITY_MAX = 16
 NET_ROUTES_MAX = 64  # T1: internal (non-default) routing-table entries
 NET_LAN_HINTS_MAX = 128  # P1: relayed raw mDNS/SSDP/WSD captures (see NetLanHint)
 PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers phase 3)
+STORAGE_DISKS_MAX = 64  # ssd3 Ф2: caps store_disk_readings' per-envelope DB write fan-out too
 
 
 class NetAdapter(_Base):
@@ -275,7 +280,7 @@ class HistoricalPayload(_Base):
     app_crashes_30d: Optional[int] = None  # Application Error 1000
     whea_errors_30d: Optional[int] = None  # WHEA-Logger (corrected HW err)
     avg_boot_ms: Optional[int] = None  # Diagnostics-Performance 100
-    storage: list[StorageReliability] = Field(default_factory=list)
+    storage: list[StorageReliability] = Field(default_factory=list, max_length=STORAGE_DISKS_MAX)
     battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)

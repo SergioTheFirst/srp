@@ -150,6 +150,11 @@ class TrendResult:
     target_date: Optional[str]  # ISO date of the projected crossing, if any
     direction: str  # "worsening" | "improving" | "flat" | "insufficient"
     reason: str = ""
+    # ssd3 Ф2 (Resilience dynamics, K4): slope over the second half of the
+    # window + whether it has (at least) doubled -- both None below
+    # _HIGH_CONF_POINTS, so a thin history never fabricates "accelerating".
+    slope_recent: Optional[float] = None
+    accelerating: Optional[bool] = None
 
 
 def trend_to_dict(t: TrendResult) -> dict[str, Any]:
@@ -162,6 +167,8 @@ def trend_to_dict(t: TrendResult) -> dict[str, Any]:
         "target_date": t.target_date,
         "direction": t.direction,
         "reason": t.reason,
+        "slope_recent": t.slope_recent,
+        "accelerating": t.accelerating,
     }
 
 
@@ -215,9 +222,32 @@ def build_trend(
         )
 
     toward_failure = slope * worsening_sign > 0
+
+    # Ф2/K4: acceleration compares the second-half-of-window slope against the
+    # full-window slope, both signed by worsening_sign so it generalizes to
+    # falling-is-bad metrics (e.g. nvme_spare) as well as rising-is-bad ones.
+    slope_recent: Optional[float] = None
+    accelerating: Optional[bool] = None
+    if n >= _HIGH_CONF_POINTS:
+        slope_recent = theil_sen_slope(points[n // 2 :])
+        if slope_recent is not None:
+            accelerating = toward_failure and (slope_recent * worsening_sign) >= 2 * (
+                slope * worsening_sign
+            )
+
     if not toward_failure:
         direction = "improving" if slope * worsening_sign < 0 else "flat"
-        return TrendResult(metric, n, current, slope, None, None, direction)
+        return TrendResult(
+            metric,
+            n,
+            current,
+            slope,
+            None,
+            None,
+            direction,
+            slope_recent=slope_recent,
+            accelerating=accelerating,
+        )
 
     eta: Optional[float] = None
     if threshold is not None:
@@ -231,19 +261,56 @@ def build_trend(
     if eta is not None:
         base = now or datetime.now(timezone.utc)
         target_date = (base + timedelta(days=eta)).date().isoformat()
-    return TrendResult(metric, n, current, slope, eta, target_date, "worsening")
+    return TrendResult(
+        metric,
+        n,
+        current,
+        slope,
+        eta,
+        target_date,
+        "worsening",
+        slope_recent=slope_recent,
+        accelerating=accelerating,
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Metric extractors (over the spread historical / heartbeat series rows)
 # --------------------------------------------------------------------------- #
+def _disk_wear_level(disk: dict[str, Any]) -> Optional[float]:
+    """Ф2: NVMe's own percentage_used is at least as precise as generic wear_pct
+    when both are reported; take whichever is higher (None-safe max)."""
+    wear = disk.get("wear_pct")
+    used = disk.get("nvme_percentage_used")
+    vals = [float(v) for v in (wear, used) if v is not None]
+    return max(vals) if vals else None
+
+
 def _max_storage_wear(row: dict[str, Any]) -> Optional[float]:
     worst: Optional[float] = None
     for disk in row.get("storage") or []:
-        w = disk.get("wear_pct") if isinstance(disk, dict) else None
+        w = _disk_wear_level(disk) if isinstance(disk, dict) else None
         if w is not None:
-            worst = float(w) if worst is None else max(worst, float(w))
+            worst = w if worst is None else max(worst, w)
     return worst
+
+
+def _disk_smart_attr(attr_id: str) -> Callable[[dict[str, Any]], Optional[float]]:
+    """Extractor over a single disk's own append-only series (disk_readings)."""
+
+    def _extract(row: dict[str, Any]) -> Optional[float]:
+        attrs = row.get("smart_attrs")
+        v = attrs.get(attr_id) if isinstance(attrs, dict) else None
+        if v is None and attr_id == "5":
+            v = row.get("reallocated_sectors")  # same physical counter, legacy field
+        return float(v) if v is not None else None
+
+    return _extract
+
+
+def _disk_nvme_spare_pct(row: dict[str, Any]) -> Optional[float]:
+    v = row.get("nvme_spare_pct")
+    return float(v) if v is not None else None
 
 
 def _battery_wear(row: dict[str, Any]) -> Optional[float]:
@@ -296,10 +363,18 @@ def compute_trends(
     historical_series: list[dict[str, Any]],
     heartbeat_series: list[dict[str, Any]],
     *,
+    disk_series: Optional[list[dict[str, Any]]] = None,
     now: Optional[datetime] = None,
 ) -> dict[str, TrendResult]:
-    """All deterministic depletion/degradation trends for one device."""
-    return {
+    """All deterministic depletion/degradation trends for one device.
+
+    ``disk_series`` (Ф2, ssd3): one physical disk's own append-only readings
+    (newest-first, from ``db.get_disk_series``) -- the worst-disk selected by
+    ``storage.worst_disk_key``. Absent for pre-Ф2 callers, so the four
+    disk-level keys below are simply missing from the result (never
+    fabricated); ``storage.compute_storage_risk`` handles that via ``.get()``.
+    """
+    trends: dict[str, TrendResult] = {
         "storage_wear": build_trend(
             historical_series,
             "storage_wear",
@@ -350,11 +425,50 @@ def compute_trends(
             now=now,
         ),
     }
+    if disk_series:
+        # Direction-only (K4: dynamics, not levels) -- no failure boundary for
+        # attribute counters, so no ETA/depletion-domain membership.
+        trends["smart_pending"] = build_trend(
+            disk_series, "smart_pending", _disk_smart_attr("197"), worsening_sign=1, now=now
+        )
+        trends["smart_media_errors"] = build_trend(
+            disk_series,
+            "smart_media_errors",
+            lambda r: (
+                float(r["nvme_media_errors"]) if r.get("nvme_media_errors") is not None else None
+            ),
+            worsening_sign=1,
+            now=now,
+        )
+        trends["smart_realloc"] = build_trend(
+            disk_series, "smart_realloc", _disk_smart_attr("5"), worsening_sign=1, now=now
+        )
+        # K7: spare depletion has a real floor (its own threshold) -> genuine ETA
+        # to compensation collapse, so it belongs in the depletion domains too.
+        latest_threshold = next(
+            (
+                float(r["nvme_spare_threshold_pct"])
+                for r in disk_series
+                if r.get("nvme_spare_threshold_pct") is not None
+            ),
+            None,
+        )
+        trends["nvme_spare"] = build_trend(
+            disk_series,
+            "nvme_spare",
+            _disk_nvme_spare_pct,
+            worsening_sign=-1,
+            threshold=latest_threshold,
+            now=now,
+        )
+    return trends
 
 
 # Depletion domains drive trajectory_risk (they have a real failure boundary +
 # ETA); boot/throttle are surfaced as direction only and do not invent risk.
-_DEPLETION_DOMAINS = ("storage_wear", "battery_wear", "disk_fill")
+# Ф2: nvme_spare joins them -- its threshold is a genuine compensation-collapse
+# boundary (K7), unlike the direction-only attribute counters above.
+_DEPLETION_DOMAINS = ("storage_wear", "battery_wear", "disk_fill", "nvme_spare")
 
 
 def trajectory_risk_score(
