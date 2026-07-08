@@ -3,7 +3,7 @@
   "port": 8000,
   "db_path": "srp.db",
   "retain_heartbeats": 500,
-  "retain_events": 1000,
+  "retain_events": 5000,
   "stale_after_sec": 600,
   "printer_poll_enabled": true,
   "printers": {

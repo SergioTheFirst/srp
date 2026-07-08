@@ -7,6 +7,7 @@ from the *latest* inventory + historical + heartbeat the server holds.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -15,6 +16,7 @@ from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, pa
 from server import db
 from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
+from server.analytics.errchain import analyze_events
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
 from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
@@ -43,6 +45,10 @@ from server.trust import (
 # W4.1: how much append-only history to feed the trend engine. Generous enough
 # for a real slope, capped so one noisy device cannot make a query unbounded.
 _TREND_HISTORY_LIMIT = 200
+
+# ssd3 Ф3 (T3.3): errchain needs a wider window than the trend engine (30d of
+# raw events, not just a slope's worth of points) but still capped per device.
+_ERRCHAIN_EVENT_LIMIT = 1000
 
 
 def _now_iso() -> str:
@@ -511,9 +517,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     # W4.2: domain engines — computed before the Bayesian prioritizer so their
     # outputs can serve as primary inputs (D5 thin prioritizer design, W4.3).
-    # chain=None until Ф3 (errchain) wires a real ErrChain in here.
+    # ssd3 Ф3: errchain must run before compute_storage_risk -- the engine's
+    # chain-stage/burstiness/early-event rules (wired in Ф2) read it via chain=.
+    chain_events = db.get_recent_events(device_id, limit=_ERRCHAIN_EVENT_LIMIT)
+    chain = analyze_events(chain_events, now=datetime.now(timezone.utc))
     storage_risk = compute_storage_risk(
-        hist, hb, device_trust=device_trust, disk_series=disk_series, chain=None, trends=trends
+        hist, hb, device_trust=device_trust, disk_series=disk_series, chain=chain, trends=trends
     )
     battery_risk = compute_battery_risk(hist, device_trust=device_trust)
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
@@ -541,13 +550,20 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         "os_degradation_risk": os_degradation_risk.value,
         "disk_fill_risk": disk_fill_risk.value,
     }
-    risk = compute_risk(inv, hist, hb, domain_values=domain_values)
+    risk = compute_risk(
+        inv,
+        hist,
+        hb,
+        domain_values=domain_values,
+        app_hang_count_30d=chain.counts.get("app_hang", 0),
+    )
 
     risk_block: dict[str, Any] = {
         "classes": risk["classes"],
         "top": risk["top"],
         "overall": risk["overall"],
         "day1_factors": day1["factors"],
+        "errchain": asdict(chain),
     }
 
     if trust:

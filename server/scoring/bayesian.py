@@ -277,6 +277,7 @@ def _stability(
     inv: Optional[dict],
     hist: Optional[dict],
     domain_values: Optional[dict[str, Optional[float]]] = None,
+    app_hang_count_30d: Optional[int] = None,
 ) -> dict[str, Any]:
     f: list[Factor] = []
     rsi = _num(hist, "reliability_stability_index")
@@ -316,6 +317,21 @@ def _stability(
             }
         )
 
+    # ssd3 Ф3 (T3.3): "Application Hang" (1002) is deliberately excluded from
+    # errchain's storage causal chain (server/analytics/errchain.py) -- it is
+    # a generic instability symptom, scored here instead, alongside the BSOD
+    # /driver-error counts above. Same scale-to-weight shape as _domain_lo;
+    # capped low (0.6, reached at 10+ hangs/30d) since one or two hangs a
+    # month is unremarkable noise, not a stability signal.
+    if app_hang_count_30d:
+        hang_lo = min(app_hang_count_30d / 10.0, 1.0) * 0.6
+        f.append(
+            {
+                "label": f"{int(app_hang_count_30d)}x зависание приложения (30д)",
+                "weight": round(hang_lo, 2),
+            }
+        )
+
     return _finish("stability", _BASE_PRIOR["stability"], f)
 
 
@@ -325,6 +341,7 @@ def compute_risk(
     heartbeat: Optional[dict],
     *,
     domain_values: Optional[dict[str, Optional[float]]] = None,
+    app_hang_count_30d: Optional[int] = None,
 ) -> dict[str, Any]:
     """Return per-class posteriors with explanations, sorted by probability.
 
@@ -341,7 +358,7 @@ def compute_risk(
         _storage(inventory, historical, heartbeat, age, domain_values),
         _power_thermal(historical, heartbeat, domain_values),
         _memory(historical, heartbeat),
-        _stability(inventory, historical, domain_values),
+        _stability(inventory, historical, domain_values, app_hang_count_30d),
     ]
     battery = _battery(historical, age, domain_values)
     if battery is not None:

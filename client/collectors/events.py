@@ -8,6 +8,14 @@ and NTFS errors, app crashes, and Windows Update install/download failures (the
 downstream symptom of a disk-fill / servicing collapse, W4.2) -- to keep the
 payload small and the signal high.
 
+ssd3 Ф3 (T3.1) adds four more entries: storage port-driver retries the plain
+``disk`` provider doesn't see (``storahci``/``stornvme`` id 129 -- AHCI/NVMe
+stack resets, not the disk class driver), disk id 157 (surprise removal --
+collected for raw visibility, not yet wired into any coordinate), and
+Application Hang (1002), which feeds the Bayesian stability class directly
+(server/analytics/errchain.py deliberately excludes it from the storage
+causal chain).
+
 Locale note: ``LevelDisplayName`` is localized (a Russian box returns
 "Ошибка", not "Error"), so we map the *numeric* ``$e.Level`` to a stable English
 string in PowerShell. Likewise ``Id`` arrays in ``-FilterHashtable`` let one
@@ -56,9 +64,13 @@ $queries = @(
   @{LogName='System'; ProviderName='Microsoft-Windows-WER-SystemErrorReporting'; Id=1001; StartTime=$start},
   @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=$start},
   @{LogName='System'; ProviderName='disk'; Id=7,11,51,52,153; StartTime=$start},
+  @{LogName='System'; ProviderName='disk'; Id=157; StartTime=$start},
+  @{LogName='System'; ProviderName='storahci'; Id=129; StartTime=$start},
+  @{LogName='System'; ProviderName='stornvme'; Id=129; StartTime=$start},
   @{LogName='System'; ProviderName='Ntfs'; Id=55; StartTime=$start},
   @{LogName='System'; ProviderName='Microsoft-Windows-WindowsUpdateClient'; Id=20,25,31; StartTime=$start},
-  @{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$start}
+  @{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$start},
+  @{LogName='Application'; ProviderName='Application Hang'; Id=1002; StartTime=$start}
 )
 
 $all = @()
