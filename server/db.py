@@ -915,6 +915,26 @@ def _pctl(values: list[float], p_num: int) -> Optional[float]:
     return ordered[max(0, min(n - 1, idx))]
 
 
+def _finite_float(value: object) -> Optional[float]:
+    """Safe numeric coercion for agent-supplied telemetry values.
+
+    security-review (Ф5): HeartbeatPayload's numeric fields have no upper
+    bound in the wire contract, so a crafted envelope can carry a Python int
+    too large for float() (raises OverflowError) or a float that survives
+    pydantic (allow_inf_nan defaults True) as inf/nan -- either would abort
+    the whole day's rollup_heartbeats_daily call (all devices batched in one
+    call) and, for inf/nan, serialize to invalid JSON via device.html's
+    |tojson chart island. Reject both here, once, at the source.
+    """
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        f = float(value)
+    except OverflowError:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
 def _rollup_disk_ms(
     payloads: list[dict[str, Any]], p95_key: str, legacy_sec_key: str
 ) -> list[float]:
@@ -924,18 +944,18 @@ def _rollup_disk_ms(
     """
     out: list[float] = []
     for p in payloads:
-        v = p.get(p95_key)
-        if not isinstance(v, (int, float)):
-            sec = p.get(legacy_sec_key)
-            v = sec * 1000 if isinstance(sec, (int, float)) else None
-        if v is not None:
-            out.append(float(v))
+        f = _finite_float(p.get(p95_key))
+        if f is None:
+            sec = _finite_float(p.get(legacy_sec_key))
+            f = _finite_float(sec * 1000) if sec is not None else None
+        if f is not None:
+            out.append(f)
     return out
 
 
 def _rollup_heartbeat_agg(payloads: list[dict[str, Any]]) -> tuple[Any, ...]:
     def nums(key: str) -> list[float]:
-        return [float(p[key]) for p in payloads if isinstance(p.get(key), (int, float))]
+        return [f for p in payloads if (f := _finite_float(p.get(key))) is not None]
 
     cpu = nums("cpu_pct")
     mem = nums("mem_avail_mb")
@@ -983,6 +1003,31 @@ def rollup_heartbeats_daily(day: str) -> int:
     return len(by_device)
 
 
+# security-review (Ф5): event_rollup_daily's PK includes event_key ("source:id"),
+# and EventItem.source has no max_length in the wire contract -- an ingest-token
+# holder could otherwise grow this table's cardinality without bound (cycling
+# fake source/event_id values) the same way disk_readings could pre-Ф2-review
+# (see _MAX_DISK_KEYS_PER_DEVICE). Clamp the source length and keep only the
+# highest-count keys per (device, day); rare/noise keys are exactly what should
+# lose the seat under pressure, so this doubles as a sane eviction policy.
+_EVENT_SOURCE_MAX_LEN = 64
+_MAX_EVENT_KEYS_PER_DEVICE_DAY = 64
+
+
+def _cap_event_keys_per_device(
+    counts: dict[tuple[str, str], int],
+) -> dict[tuple[str, str], int]:
+    by_device: dict[str, list[tuple[str, int]]] = {}
+    for (device_id, event_key), n in counts.items():
+        by_device.setdefault(device_id, []).append((event_key, n))
+    kept: dict[tuple[str, str], int] = {}
+    for device_id, pairs in by_device.items():
+        pairs.sort(key=lambda p: p[1], reverse=True)
+        for event_key, n in pairs[:_MAX_EVENT_KEYS_PER_DEVICE_DAY]:
+            kept[(device_id, event_key)] = n
+    return kept
+
+
 def rollup_events_daily(day: str) -> int:
     """Idempotent per-device event-count fold of one UTC day, keyed by
     'source:event_id'. Returns the number of (device, event_key) rows written."""
@@ -995,8 +1040,10 @@ def rollup_events_daily(day: str) -> int:
     for r in rows:
         if r["event_id"] is None:
             continue
-        key = (r["device_id"], f"{r['source'] or ''}:{r['event_id']}")
+        source = (r["source"] or "")[:_EVENT_SOURCE_MAX_LEN]
+        key = (r["device_id"], f"{source}:{r['event_id']}")
         counts[key] = counts.get(key, 0) + 1
+    counts = _cap_event_keys_per_device(counts)
     if not counts:
         return 0
     with _lock, _connect() as conn:
@@ -1160,6 +1207,11 @@ def run_maintenance() -> dict[str, Any]:
         days=_VACUUM_MIN_INTERVAL_DAYS
     ):
         return {"optimized": True, "vacuumed": False, "freelist_ratio": ratio}
+    # ponytail: VACUUM holds _lock (a plain threading.Lock, no timeout) for its
+    # full runtime, so every other writer queues behind it -- acceptable because
+    # the guard above makes this rare (freelist ratio + 7d interval), never per
+    # request. Revisit with per-table or asyncio-native locking if VACUUM ever
+    # needs to run more often than the guard allows.
     with _lock, _connect() as conn:
         conn.execute("VACUUM")
     _log_maintenance("vacuum", f"freelist_ratio={ratio:.3f}")

@@ -114,6 +114,85 @@ def test_no_rows_for_day_is_a_noop(db_init):
 
 
 # --------------------------------------------------------------------------- #
+# security-review: a hostile/malformed numeric value must be dropped, never
+# abort the whole day's rollup (rollup_heartbeats_daily batches every device
+# for one day in a single call -- one bad row must not cost every device its
+# rollup, and thence the downstream age-based prune that depends on it).
+# --------------------------------------------------------------------------- #
+
+
+def test_oversized_int_is_skipped_not_fatal(db_init):
+    db = db_init
+    # An int this large raises OverflowError from float() -- HeartbeatPayload's
+    # numeric fields have no upper bound in the wire contract.
+    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", handle_count_total=10**400)
+    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", handle_count_total=500)
+    n = db.rollup_heartbeats_daily("2026-07-08")  # must not raise
+    assert n == 1
+    row = db.get_heartbeat_rollups("dev-1", 7)[0]
+    assert row["handles_max"] == 500  # huge value dropped, valid one survived
+
+
+def test_non_finite_float_is_skipped(db_init):
+    db = db_init
+    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", cpu_pct=float("inf"))
+    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", cpu_pct=42.0)
+    db.rollup_heartbeats_daily("2026-07-08")
+    row = db.get_heartbeat_rollups("dev-1", 7)[0]
+    assert row["cpu_p95"] == 42.0  # inf excluded, not propagated into the rollup
+
+
+def test_one_poisoned_device_does_not_abort_others_in_the_same_call(db_init):
+    db = db_init
+    _seed_heartbeat(db, "dev-bad", "2026-07-08T00:00:00+00:00", handle_count_total=10**400)
+    _seed_heartbeat(db, "dev-good", "2026-07-08T00:00:00+00:00", cpu_pct=10.0)
+    n = db.rollup_heartbeats_daily("2026-07-08")
+    assert n == 2  # both devices rolled up
+    assert db.get_heartbeat_rollups("dev-good", 7)[0]["cpu_p50"] == 10.0
+
+
+# --------------------------------------------------------------------------- #
+# security-review: event_rollup_daily's PK includes event_key ("source:id"),
+# and source has no max_length in the wire contract -- bound both its length
+# and the number of distinct keys a device can open per day (mirrors Ф2's
+# _MAX_DISK_KEYS_PER_DEVICE for disk_readings).
+# --------------------------------------------------------------------------- #
+
+
+def test_event_key_source_is_length_clamped(db_init):
+    db = db_init
+    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "x" * 500, 153)
+    db.rollup_events_daily("2026-07-08")
+    rows = db.get_event_rollups("dev-1", 7)
+    assert len(rows) == 1
+    assert len(rows[0]["event_key"]) <= db._EVENT_SOURCE_MAX_LEN + len(":153")
+
+
+def test_event_keys_per_device_day_are_capped_keeping_highest_count(db_init, monkeypatch):
+    db = db_init
+    monkeypatch.setattr(db, "_MAX_EVENT_KEYS_PER_DEVICE_DAY", 2)
+    for i in range(5):  # 5 distinct low-count keys
+        _seed_event(db, "dev-1", f"2026-07-08T00:0{i}:00+00:00", f"fake{i}", 153)
+    for _ in range(3):  # one clearly-loudest key
+        _seed_event(db, "dev-1", "2026-07-08T01:00:00+00:00", "loud", 153)
+    n = db.rollup_events_daily("2026-07-08")
+    assert n == 2  # capped from 6 distinct keys down to 2
+    rows = {r["event_key"]: r["n"] for r in db.get_event_rollups("dev-1", 7)}
+    assert rows.get("loud:153") == 3  # the highest-count key always survives the cap
+
+
+def test_event_key_cap_is_independent_per_device(db_init, monkeypatch):
+    db = db_init
+    monkeypatch.setattr(db, "_MAX_EVENT_KEYS_PER_DEVICE_DAY", 1)
+    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "disk", 153)
+    _seed_event(db, "dev-1", "2026-07-08T00:01:00+00:00", "Ntfs", 55)
+    _seed_event(db, "dev-2", "2026-07-08T00:00:00+00:00", "disk", 153)
+    db.rollup_events_daily("2026-07-08")
+    assert len(db.get_event_rollups("dev-1", 7)) == 1  # capped to 1
+    assert len(db.get_event_rollups("dev-2", 7)) == 1  # dev-2's own cap, unaffected
+
+
+# --------------------------------------------------------------------------- #
 # UTC calendar-day boundary (never the agent's clock -- received_at only)
 # --------------------------------------------------------------------------- #
 
