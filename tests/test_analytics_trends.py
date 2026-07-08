@@ -299,3 +299,68 @@ def test_gateway_latency_trend_direction_only():
     isolated = compute_trends(series, [])
     assert isolated["gateway_latency"].direction == "worsening"
     assert trajectory_risk_score(isolated).value is None
+
+
+def test_disk_tail_ratio_extractor_needs_4_samples_and_nonzero_p50():
+    from server.analytics.trends import _disk_tail_ratio
+
+    assert (
+        _disk_tail_ratio({"disk_lat_samples": 3, "disk_read_ms_p50": 1.0, "disk_read_ms_p95": 5.0})
+        is None
+    )
+    assert (
+        _disk_tail_ratio(
+            {"disk_lat_samples": None, "disk_read_ms_p50": 1.0, "disk_read_ms_p95": 5.0}
+        )
+        is None
+    )
+    assert (
+        _disk_tail_ratio({"disk_lat_samples": 5, "disk_read_ms_p50": 0, "disk_read_ms_p95": 5.0})
+        is None
+    )
+    assert (
+        _disk_tail_ratio({"disk_lat_samples": 5, "disk_read_ms_p50": None, "disk_read_ms_p95": 5.0})
+        is None
+    )
+    assert (
+        _disk_tail_ratio({"disk_lat_samples": 5, "disk_read_ms_p50": 2.0, "disk_read_ms_p95": 8.0})
+        == 4.0
+    )
+
+
+def test_disk_tail_ratio_trend_worsening_stays_out_of_trajectory_risk():
+    """Growing tail at a calm mean is direction-only R-evidence (Ф4 for Ф6) --
+    it must never join the depletion domains / drive trajectory_risk here."""
+
+    def hb(day, ratio):
+        return {
+            "received_at": f"2026-06-{day:02d}T00:00:00+00:00",
+            "disk_lat_samples": 8,
+            "disk_read_ms_p50": 1.0,
+            "disk_read_ms_p95": ratio,  # p50=1.0 -> ratio equals p95 directly
+        }
+
+    hb_series = [hb(9, 8.0), hb(7, 6.0), hb(5, 4.0), hb(3, 2.5), hb(1, 2.0)]
+    trends = compute_trends([], hb_series)
+    t = trends["disk_tail_ratio"]
+    assert t.direction == "worsening"
+    assert t.eta_days is None  # direction-only: no failure boundary
+    # No depletion-domain telemetry at all (no storage/battery/disk_fill data
+    # in this fixture) -- trajectory_risk stays honestly UNKNOWN, not fabricated.
+    assert trajectory_risk_score(trends).value is None
+
+
+def test_disk_tail_ratio_noisy_single_reading_excluded():
+    """<4 valid PS-side samples this heartbeat -> excluded from the series."""
+
+    def hb(day, samples, ratio):
+        return {
+            "received_at": f"2026-06-{day:02d}T00:00:00+00:00",
+            "disk_lat_samples": samples,
+            "disk_read_ms_p50": 1.0,
+            "disk_read_ms_p95": ratio,
+        }
+
+    series = [hb(5, 2, 9.0), hb(3, 8, 3.0), hb(1, 8, 2.0)]  # first row noisy -> dropped
+    t = compute_trends([], series)["disk_tail_ratio"]
+    assert t.n_points == 2

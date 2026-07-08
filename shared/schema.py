@@ -319,6 +319,14 @@ class HeartbeatPayload(_Base):
     nic_errors: Optional[int] = None
     user_present: Optional[bool] = None
     uptime_hours: Optional[float] = None
+    # ssd3 Ф4: tail-latency micro-series (K4 -- Resilience dynamics, not a level).
+    # disk_read_sec/disk_write_sec above are untouched (K2/compat).
+    disk_read_ms_p50: Optional[float] = None
+    disk_read_ms_p95: Optional[float] = None
+    disk_write_ms_p50: Optional[float] = None
+    disk_write_ms_p95: Optional[float] = None
+    disk_lat_max_ms: Optional[float] = None
+    disk_lat_samples: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- #
