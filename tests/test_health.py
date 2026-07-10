@@ -7,12 +7,15 @@ imports the producer dataclasses -- it consumes their serialised form.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+import pytest
 from server.analytics.health import (
     _ACTIONS,
+    _BLIND_ACTION,
     HealthVerdict,
     compute_health,
     health_staleness,
@@ -381,6 +384,21 @@ def test_systemic_three_watch_axes() -> None:
     v = _call(axes, trends=_mature_key_trend())
     assert v.dominant == "systemic"
     assert v.state in ("h2", "h3", "h4")  # floored at h2
+    assert v.band in ("watch", "bad")  # reconciliation must clamp systemic-floored state too
+
+
+def test_systemic_never_overrides_blind_zone() -> None:
+    # >=3 watch/bad axes would normally floor state at h2, but K5 (blind device
+    # can never read as healthier than "unknown") outranks the systemic floor.
+    axes = {
+        "battery_risk": _axis(20),
+        "os_degradation_risk": _axis(20),
+        "disk_fill_risk": _axis(20),
+    }
+    v = _call(axes, trends={}, errchain=None)
+    assert v.observability.value is not None and v.observability.value < 40
+    assert v.state == "unknown"  # not floored to h2
+    assert v.action == _BLIND_ACTION
 
 
 def test_horizon_state_beats_eta() -> None:
@@ -524,11 +542,31 @@ def test_returns_frozen_healthverdict() -> None:
     axes = {"storage_risk": _axis(0.0, coords=_st_coords())}
     v = _call(axes, trends=_mature_key_trend())
     assert isinstance(v, HealthVerdict)
-    try:
+    with pytest.raises(dataclasses.FrozenInstanceError):
         v.state = "h4"  # type: ignore[misc]
-        raise AssertionError("HealthVerdict must be frozen")
-    except Exception:  # FrozenInstanceError
-        pass
+
+
+def test_ratchet_immature_flat_trend_is_not_evidence() -> None:
+    # a fresh-but-incidentally-flat trend (n_points < _MATURE_POINTS) must NOT
+    # count as flat-counter evidence -- that would defeat the hysteresis gate.
+    axes = {"storage_risk": _axis(20, coords=_st_coords(damage=20))}  # computes h1
+    immature_flat = {"smart_pending": _trend(direction="stable", n_points=3, slope_per_day=0.0)}
+    v = _call(axes, trends=immature_flat, prev={"state": "h3"})
+    assert v.state == "h3"  # no legitimate evidence -> hold, not one step up
+
+
+def test_blind_zone_empties_state_evidence_but_keeps_factors() -> None:
+    # D/R evidence still reaches `factors` unconditionally; only `state_evidence`
+    # (evidence for the firing *criterion*) is emptied, because in the blind
+    # branch the firing criterion is O<40 itself, not a D/R criterion.
+    axes = {
+        "battery_risk": _axis(70, factors=[{"label": "износ батареи критический", "delta": 70}]),
+    }
+    v = _call(axes, trends={}, errchain=None)
+    assert v.observability.value is not None and v.observability.value < 40
+    assert v.state == "unknown"
+    assert v.state_evidence == []
+    assert any(f.get("label") == "износ батареи критический" for f in v.factors)
 
 
 # --------------------------------------------------------------------------- #

@@ -24,9 +24,10 @@ Two interface points the plan leaves for the wiring task (documented for review)
   are fully active regardless.
 * The tail-ratio surcharge fires on a worsening ``disk_tail_ratio`` trend. Its
   "mean is calm" sub-condition needs a mean ``disk_read_sec`` that is not among
-  this function's inputs (no heartbeat is passed here); it defaults to calm,
-  which is safe -- a high mean would already have raised storage's own latency
-  rules upstream.
+  this function's inputs (no heartbeat is passed here), so the surcharge is
+  applied unconditionally as a conservative fail-safe -- it errs toward
+  flagging more, never toward hiding a real signal (see the comment at the
+  surcharge site in ``_storage_resilience``).
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ from server.scoring.score100 import band_for_health_score, band_for_risk_score
 # --------------------------------------------------------------------------- #
 _MATURE_POINTS = 6
 _COHORT_MIN = 5
-_LATENCY_HIGH_SEC = 0.05  # mirrors storage._LATENCY_HIGH_SEC (calm-mean threshold)
 _SPARE_SURCHARGE = 25.0
 _TAIL_SURCHARGE = 20.0
 _FLAT_SLOPE = 0.01
@@ -320,7 +320,12 @@ def _storage_resilience(st: dict, trends: dict) -> tuple[float, str, list, list]
         loss += _SPARE_SURCHARGE
         flags.append("spare_depleting")
     if (trends.get("disk_tail_ratio") or {}).get("direction") == "worsening":
-        loss += _TAIL_SURCHARGE  # mean-calm defaulted (see module docstring)
+        # ssd3.md's "AND mean is calm" half needs a heartbeat disk_read_sec signal
+        # that compute_health's 6-parameter interface does not receive. Applied
+        # unconditionally as a conservative fail-safe: this errs toward flagging
+        # more, never toward hiding a real signal. Revisit if/when the wiring
+        # task decides to pass a latency signal through.
+        loss += _TAIL_SURCHARGE
         flags.append("tail_ratio_worsening")
     return min(loss, 100.0), st.get("confidence", "unknown"), st.get("factors") or [], flags
 
@@ -391,7 +396,8 @@ def _counters_flat(trends: dict) -> bool:
     if not present:
         return False
     return all(
-        (t or {}).get("direction") != "worsening"
+        (t or {}).get("n_points", 0) >= _MATURE_POINTS
+        and (t or {}).get("direction") != "worsening"
         and abs((t or {}).get("slope_per_day") or 0.0) < _FLAT_SLOPE
         for t in present
     )
