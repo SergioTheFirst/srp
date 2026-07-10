@@ -659,9 +659,17 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         cohort=cohort_stats,
         prev_health=prev_health,
     )
+    # worst_disk: same source health.py's own compute_health reads for cur_disk
+    # (score100_axes["storage_risk"]["source_lineage"]["worst_disk"]) -- not the
+    # simpler worst_disk_key(hist) pre-pass above, which can disagree with the
+    # storage engine's own (more authoritative) pick. Persisting it here is what
+    # lets the ratchet's disk-replacement branch compare prev vs. current on the
+    # next recompute (health.py module docstring; previously always None/dormant).
+    worst_disk = risk_block["score100"]["storage_risk"].get("source_lineage", {}).get("worst_disk")
     risk_block["health"] = {
         **asdict(verdict),
         "delta_7d": _health_delta_7d(device_id, verdict.index),
+        "worst_disk": worst_disk,
     }
 
     scores = {

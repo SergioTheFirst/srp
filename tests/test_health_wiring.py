@@ -132,6 +132,31 @@ def test_ratchet_persists_across_recompute(client) -> None:
     assert _RANK[fresh] < _RANK[after]  # ratchet demonstrably held it above naive
 
 
+def test_ratchet_disk_replacement_permits_full_reset(client) -> None:
+    """Wiring-level counterpart to Task 1's test_ratchet_disk_replacement_permits_reset
+    (which could only fixture-inject prev_health["worst_disk"] directly). Proves the
+    real round-trip: pipeline persists worst_disk (final-review fix) so a genuinely
+    different disk between two recomputes lets the ratchet's disk-swap branch fire for
+    real, resetting past the one-step cap -- not just holding or advancing one rung."""
+    _ingest(client, HEALTHY_DEVICE)
+    natural = _latest_health(HEALTHY_DEVICE)
+    assert natural["state"] == "h0"
+    assert natural["worst_disk"] == "Samsung SSD 980"  # this fixture's disk model
+    # Seed a synthetic prev row: worse state (h3) with a DIFFERENT worst_disk, as if
+    # the physical drive was swapped since. No positive ratchet evidence exists at
+    # this history depth (no reboot_restores flag, no mature flat-counter trends), so
+    # WITHOUT the disk-swap branch this would hold at h3 or advance one step to h2.
+    db.store_scores(
+        HEALTHY_DEVICE,
+        _iso(_now()),
+        {"risk": {"health": {"state": "h3", "worst_disk": "OLD-FAILED-DRIVE"}}},
+    )
+    pipeline.recompute_scores(HEALTHY_DEVICE)
+    after = _latest_health(HEALTHY_DEVICE)
+    assert after["state"] == "h0"  # full reset to the naive state, not held/capped
+    assert _RANK[after["state"]] < _RANK["h2"]  # strictly more than one step from h3
+
+
 # --------------------------------------------------------------------------- #
 # Part B — db.get_fleet_health / get_fleet_health_deltas
 # --------------------------------------------------------------------------- #

@@ -353,6 +353,22 @@ def test_reconcile_h4_band_is_bad() -> None:
     assert _call(axes, trends=_mature_key_trend()).band == "bad"
 
 
+def test_reconcile_band_uses_risk_score_of_100_minus_index() -> None:
+    # Regression pin (final whole-branch review): band must be
+    # band_for_risk_score(100 - index) per ssd3.md Sec 1.3, NOT
+    # band_for_health_score(index) -- the two disagree exactly in this zone.
+    # D=20, Rloss=0 -> index=83: band_for_health_score(83) would say "good"
+    # (too optimistic -- this is h1, real damage present, not yet masked by a
+    # compensation flag); band_for_risk_score(100-83=17) correctly says "watch".
+    axes = {"storage_risk": _axis(20, coords=_st_coords(damage=20, rloss=0))}
+    v = _call(axes, trends=_mature_key_trend())
+    assert v.damage.value == 20
+    assert v.resilience.value == 100
+    assert v.index == 83
+    assert v.state == "h1"
+    assert v.band == "watch"
+
+
 def test_reconcile_h2_band_no_better_than_watch() -> None:
     # small damage but a compensation flag -> h2; index would be "good" without clamp
     axes = {

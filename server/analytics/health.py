@@ -19,9 +19,10 @@ Two interface points the plan leaves for the wiring task (documented for review)
 * The ratchet's "worst-disk replaced" evidence compares the current worst disk
   (``score100_axes["storage_risk"]["source_lineage"]["worst_disk"]``) against
   ``prev_health["worst_disk"]``. ``HealthVerdict`` as specified carries no disk
-  field, so this branch is dormant until the wiring task persists ``worst_disk``
-  alongside the health blob; the ``reboot_restores`` and flat-counter branches
-  are fully active regardless.
+  field, so the wiring layer (``server/pipeline.py``) persists ``worst_disk`` as
+  an extra key alongside ``asdict(verdict)`` in the stored health blob -- this
+  branch, the ``reboot_restores`` branch, and the flat-counter branch are all
+  active.
 * The tail-ratio surcharge fires on a worsening ``disk_tail_ratio`` trend. Its
   "mean is calm" sub-condition needs a mean ``disk_read_sec`` that is not among
   this function's inputs (no heartbeat is passed here), so the surcharge is
@@ -36,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from server.scoring.score100 import band_for_health_score, band_for_risk_score
+from server.scoring.score100 import band_for_risk_score
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -440,7 +441,7 @@ def _index(d_val: Optional[float], rloss: Optional[float], o_val: float) -> Opti
 def _reconcile(state: str, index: Optional[float], o_val: float) -> tuple[str, list]:
     if o_val < 40:
         return "unknown", []
-    band = band_for_health_score(index) if index is not None else "unknown"
+    band = band_for_risk_score(100 - index) if index is not None else "unknown"
     factors: list[dict] = []
     if state == "h4":
         band = "bad"
