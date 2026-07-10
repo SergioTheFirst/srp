@@ -8,7 +8,7 @@ from the *latest* inventory + historical + heartbeat the server holds.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
@@ -18,6 +18,7 @@ from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.errchain import analyze_events
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
+from server.analytics.health import compute_health
 from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
 from server.analytics.software_aging import compute_software_aging_risk
@@ -68,6 +69,36 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     except ValueError:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# ssd3 Ф6 (T6.2): delta_7d = current health index minus the index of the first
+# stored row older than 7 days. Reuses _TREND_HISTORY_LIMIT (200) for the fetch.
+# Cadence check (ingest_envelope, ~L459): inventory/historical/heartbeat each
+# trigger their own recompute_scores call, and client/config.py sends all three
+# on the same 14400s (4h) cycle -- so ~3 new score rows land per 4h, not 1
+# (events/print_jobs/liveness/update_status never rescore). That is ~18
+# rows/day, so 200 rows reaches back ~11 days: comfortably past the 7-day mark
+# (scores retention is 5000, so row depth is never the limiting cap here).
+_HEALTH_DELTA_DAYS = 7
+
+
+def _health_delta_7d(device_id: str, index: Optional[float]) -> Optional[float]:
+    """Health-index change vs the first stored score row older than 7 days.
+
+    ``None`` until such a row exists ("первые 7 дней норма") or when either index
+    is unknown. The series is newest-first; the first row past the 7-day boundary
+    is the comparison point (T6.2).
+    """
+    if index is None:
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_HEALTH_DELTA_DAYS)
+    for row in db.get_score_series(device_id, limit=_TREND_HISTORY_LIMIT):
+        ts = _parse_iso(row.get("ts"))
+        if ts is None or ts >= cutoff:
+            continue
+        older = ((row.get("risk") or {}).get("health") or {}).get("index")
+        return None if older is None else round(index - older, 1)
+    return None
 
 
 def _clock_drift_sec(received_at_iso: str, reported_ts_iso: Optional[str]) -> Optional[float]:
@@ -612,6 +643,34 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         software_aging_risk.source_lineage.get("coords", {"flags": []})
     )
     risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
+
+    # ssd3 Ф6 (T6.2): assemble the coordinate verdict from the axes above and
+    # persist it inside the risk blob (no schema/table change). prev_health = the
+    # health block of the last stored row (ratchet input; None on first recompute).
+    # cohort_stats (fetched above for the fleet-anomaly axis) now also carries
+    # boot_p90_ms, the field health.py's cohort context-factor reads.
+    prev_rows = db.get_score_series(device_id, limit=1)
+    prev_health = prev_rows[0]["risk"].get("health") if prev_rows else None
+    verdict = compute_health(
+        score100_axes=risk_block["score100"],
+        bayes=risk,
+        trends=risk_block["trajectory"],
+        errchain=risk_block["errchain"],
+        cohort=cohort_stats,
+        prev_health=prev_health,
+    )
+    # worst_disk: same source health.py's own compute_health reads for cur_disk
+    # (score100_axes["storage_risk"]["source_lineage"]["worst_disk"]) -- not the
+    # simpler worst_disk_key(hist) pre-pass above, which can disagree with the
+    # storage engine's own (more authoritative) pick. Persisting it here is what
+    # lets the ratchet's disk-replacement branch compare prev vs. current on the
+    # next recompute (health.py module docstring; previously always None/dormant).
+    worst_disk = risk_block["score100"]["storage_risk"].get("source_lineage", {}).get("worst_disk")
+    risk_block["health"] = {
+        **asdict(verdict),
+        "delta_7d": _health_delta_7d(device_id, verdict.index),
+        "worst_disk": worst_disk,
+    }
 
     scores = {
         "performance": legacy_value(score100["performance"]),

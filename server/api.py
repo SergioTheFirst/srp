@@ -6,6 +6,7 @@ import csv
 import hmac
 import io
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,7 @@ from shared.schema import Envelope, utcnow_iso
 
 from server import db, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
+from server.analytics.health import health_staleness
 from server.ingest_guards import check_idempotency, check_rate_limit
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
@@ -298,6 +300,47 @@ def device_print(device_id: str, days: int = 30) -> dict:
     if db.get_device(device_id) is None:
         raise HTTPException(status_code=404, detail="device not found")
     return db.get_device_print(device_id, days=_clamp_days(days))
+
+
+_STALE_UNKNOWN_MSG = "проверка недостоверна: данные старше 10 дней"  # must match
+# health.health_staleness()'s exact >10-day return value verbatim (its own
+# docstring: "a distinguishable value the caller branches on to treat the whole
+# verdict as UNKNOWN"). health.py is locked/reviewed (Task 1 of this phase) --
+# if that literal ever changes there, it must change here too.
+
+
+def _with_health_staleness(health: dict, score_ts: Optional[str]) -> dict:
+    """Read-side staleness overlay (T6.1 step 8: "блоб не переписывается") --
+    always returns a new dict, the stored blob is never mutated."""
+    out = dict(health)
+    if not score_ts:
+        return out
+    msg = health_staleness(score_ts, datetime.now(timezone.utc))
+    if msg is None:
+        return out
+    if msg == _STALE_UNKNOWN_MSG:
+        out["state"] = "unknown"
+        out["band"] = "unknown"
+        out["confidence"] = "unknown"
+        out["blind_spots"] = [*(out.get("blind_spots") or []), msg]
+    else:
+        out["confidence"] = "low"
+        out["missing_evidence"] = [*(out.get("missing_evidence") or []), msg]
+    return out
+
+
+@router.get("/devices/{device_id}/health")
+def device_health(device_id: str) -> dict:
+    """ssd3 Ф6 (T6.2): the last stored health verdict (diagnostics' read-only,
+    no-recompute pattern) with the read-side staleness overlay applied."""
+    device = db.get_device(device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    scores = device.get("scores") or {}
+    health = (scores.get("risk") or {}).get("health")
+    if health is None:
+        return {"available": False}
+    return _with_health_staleness(health, scores.get("ts"))
 
 
 def _decode_departments(raw: list[dict]) -> list[dict]:

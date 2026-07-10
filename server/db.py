@@ -3242,6 +3242,42 @@ def count_events_since(device_id: str, event_ids: list[int], since_iso: str) -> 
 # --------------------------------------------------------------------------- #
 # W4.2 fleet-anomaly helpers
 # --------------------------------------------------------------------------- #
+_COHORT_BOOT_CAP = 200  # ssd3 Ф6: devices sampled for the cohort boot-time p90
+
+
+def _cohort_boot_p90(conn: sqlite3.Connection, model: str) -> Optional[float]:
+    """90th-percentile ``avg_boot_ms`` across the model cohort (latest reading per
+    device, capped at 200). ``None`` when the cohort reports no boot samples.
+
+    The field is named ``boot_p90_ms`` because that is health.py's locked cohort
+    contract (ssd3 Ф6): it powers the "boot slower than 90% of similar devices"
+    context factor, so the value must be the p90 (not the mean the plan's prose
+    loosely calls ``cohort_boot_ms``).
+    """
+    rows = conn.execute(
+        # B608: literals only; model and the cap are the sole bound parameters.
+        """
+        SELECT CAST(json_extract(h.payload, '$.avg_boot_ms') AS REAL) AS boot_ms
+        FROM devices d
+        JOIN (SELECT device_id, MAX(id) AS lid FROM historical GROUP BY device_id) lh
+          ON lh.device_id = d.device_id
+        JOIN historical h ON h.id = lh.lid
+        WHERE d.model = ?
+          AND json_extract(h.payload, '$.avg_boot_ms') IS NOT NULL
+        ORDER BY d.device_id
+        LIMIT ?
+        """,  # nosec B608
+        (model, _COHORT_BOOT_CAP),
+    ).fetchall()
+    values = sorted(float(r["boot_ms"]) for r in rows if r["boot_ms"] is not None)
+    if not values:
+        return None
+    # Nearest-rank p90; integer ceil avoids the float 0.9*n off-by-one (0.9*10 !=
+    # 9.0 in binary float, which would push the rank one value too far).
+    rank = (9 * len(values) + 9) // 10
+    return values[rank - 1]
+
+
 def get_fleet_cohort_stats(
     model: Optional[str],
     site_code: Optional[str],
@@ -3253,6 +3289,9 @@ def get_fleet_cohort_stats(
       cohort_bsod_pct      — fraction with bugchecks_30d >= 1
       cohort_kp41_pct      — fraction with kernel_power_41_30d >= 2
       cohort_rsi_low_pct   — fraction with reliability_stability_index < 5.0
+      boot_p90_ms          — ssd3 Ф6: 90th-percentile avg_boot_ms across the cohort
+                              (cap 200 devices); None when no cohort boot samples exist.
+                              Field name matches health.py's locked cohort contract.
       site_size            — devices sharing the same site_code that have historical data
       site_kp41_pct        — fraction at site with kernel_power_41_30d >= 2
 
@@ -3286,8 +3325,10 @@ def get_fleet_cohort_stats(
                 """,  # nosec B608
                 (model,),
             ).fetchone()
+            boot_p90_ms = _cohort_boot_p90(conn, model)
         else:
             cohort_row = None
+            boot_p90_ms = None
 
         # Site stats: devices with the same site_code.
         if site_code:
@@ -3314,6 +3355,7 @@ def get_fleet_cohort_stats(
         "cohort_bsod_pct": float(cohort_row["bsod_pct"] or 0.0) if cohort_row else 0.0,
         "cohort_kp41_pct": float(cohort_row["kp41_pct"] or 0.0) if cohort_row else 0.0,
         "cohort_rsi_low_pct": float(cohort_row["rsi_low_pct"] or 0.0) if cohort_row else 0.0,
+        "boot_p90_ms": boot_p90_ms,
         "site_size": int(site_row["site_size"]) if site_row else 0,
         "site_kp41_pct": float(site_row["kp41_pct"] or 0.0) if site_row else 0.0,
     }
@@ -3328,6 +3370,151 @@ def get_device_model_site(device_id: str) -> tuple[Optional[str], Optional[str]]
     if row is None:
         return None, None
     return row["model"], row["site_code"]
+
+
+# --------------------------------------------------------------------------- #
+# Fleet health (ssd3 Ф6 T6.2): read-side aggregates over the health block each
+# recompute_scores call now stores inside scores.risk.health (server/pipeline.py).
+# --------------------------------------------------------------------------- #
+def get_fleet_health(days: int = 7) -> list[dict]:
+    """Latest stored health verdict per device, fleet-wide, one pass.
+
+    Window-function shape copied from ``get_net_device_status_series`` (rn = 1
+    here: exactly the newest scores row per device). Fields are pulled straight
+    out of the stored ``scores.risk`` JSON via ``json_extract`` rather than
+    parsed in Python -- one query, one pass, per T6.2.
+
+    *days* is accepted for signature symmetry with ``get_fleet_health_deltas``
+    (the plan names it as part of this function's shape) but is not used to
+    filter here: ``delta_7d`` is read verbatim from the stored row (already
+    computed once at write time by pipeline._health_delta_7d), never recomputed
+    on read, so there is no window to bound.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: literals only; no user input in this query.
+            """
+            SELECT device_id, hostname, ts,
+                   json_extract(risk, '$.health.state') AS state,
+                   CAST(json_extract(risk, '$.health.index') AS REAL) AS idx,
+                   json_extract(risk, '$.health.band') AS band,
+                   CAST(json_extract(risk, '$.health.damage.value') AS REAL) AS damage,
+                   CAST(json_extract(risk, '$.health.resilience.value') AS REAL) AS resilience,
+                   CAST(json_extract(risk, '$.health.observability.value') AS REAL) AS obs_pct,
+                   json_extract(risk, '$.health.dominant') AS dominant,
+                   CAST(json_extract(risk, '$.health.delta_7d') AS REAL) AS delta_7d
+            FROM (
+                SELECT s.device_id AS device_id, d.hostname AS hostname,
+                       s.ts AS ts, s.risk AS risk,
+                       ROW_NUMBER() OVER (PARTITION BY s.device_id ORDER BY s.id DESC) AS rn
+                FROM scores s JOIN devices d ON d.device_id = s.device_id
+            ) WHERE rn = 1
+            """,  # nosec B608
+        ).fetchall()
+    return [
+        {
+            "device_id": r["device_id"],
+            "hostname": r["hostname"],
+            "state": r["state"],
+            "index": r["idx"],
+            "band": r["band"],
+            "damage": r["damage"],
+            "resilience": r["resilience"],
+            "observability_pct": r["obs_pct"],
+            "dominant": r["dominant"],
+            "delta_7d": r["delta_7d"],
+            "score_ts": r["ts"],
+        }
+        for r in rows
+    ]
+
+
+_FLEET_ESCALATION_CAP = 200  # ssd3 Ф6 (T6.2): per-device row cap for the escalation
+# lookback window. Real recompute cadence (traced in pipeline.py next to
+# _HEALTH_DELTA_DAYS): inventory/historical/heartbeat each trigger their own
+# recompute_scores call on the same 4h envelope cycle, so ~3 rows land per 4h
+# (~18/day) -- 200 rows reaches back ~11 days, comfortably past the default
+# 7-day comparison point. (Deliberately larger than the 30-60 the plan's prose
+# suggests: that estimate assumes 1 row per 4h envelope, which undercounts by
+# ~3x once you trace how many msg_types actually rescore per cycle.)
+
+
+def get_fleet_health_deltas(days: int = 7) -> list[dict]:
+    """State escalations with hysteresis (ssd3 §1.3 / T6.2).
+
+    A device escalates when its current state is worse (higher h-rank) than its
+    state ~*days* ago, AND that same worsened state is sustained across the two
+    most recent score rows (not a one-off blip -- a state that reverted by the
+    very next row never fires). A band change with the same state never fires:
+    this function compares ``state`` only, band never enters the comparison.
+
+    K5: ``"unknown"`` is not on the h0..h4 ordinal scale (lost visibility, not
+    degradation). Any comparison touching it -- the current state, the ~days-ago
+    state, or either of the two most recent rows -- is excluded. Missing/absent
+    state (pre-Ф6 rows with no health block) is excluded the same way.
+
+    One bounded per-device SQL fetch (window function, mirrors
+    ``get_net_device_status_series``), then the ordinal + hysteresis comparison
+    in Python -- this multi-row rule does not read cleanly as one SQL
+    expression (same split ``get_net_device_status_series`` already uses).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: literals only; the row cap is the sole bound parameter.
+            """
+            SELECT device_id, hostname, ts, state FROM (
+                SELECT s.device_id AS device_id, d.hostname AS hostname,
+                       s.id AS id, s.ts AS ts,
+                       json_extract(s.risk, '$.health.state') AS state,
+                       ROW_NUMBER() OVER (PARTITION BY s.device_id ORDER BY s.id DESC) AS rn
+                FROM scores s JOIN devices d ON d.device_id = s.device_id
+            ) WHERE rn <= ? ORDER BY device_id, id DESC
+            """,  # nosec B608
+            (_FLEET_ESCALATION_CAP,),
+        ).fetchall()
+
+    by_device: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        by_device.setdefault(r["device_id"], []).append(r)
+
+    out: list[dict] = []
+    for device_id, series in by_device.items():
+        escalation = _escalation_for_device(device_id, series, cutoff)
+        if escalation is not None:
+            out.append(escalation)
+    return out
+
+
+# mirrors health.py's _STATE_ORDER (duplicated, not imported: db.py is a lower
+# layer than server.analytics.*, so the storage layer never imports analytics).
+_STATE_RANK = {"h0": 0, "h1": 1, "h2": 2, "h3": 3, "h4": 4}
+
+
+def _escalation_for_device(
+    device_id: str, series: list[sqlite3.Row], cutoff: datetime
+) -> Optional[dict]:
+    """One device's hysteresis check; ``series`` is newest-first, rn<=cap rows."""
+    if len(series) < 2:
+        return None
+    current, prev_row = series[0], series[1]
+    if current["state"] != prev_row["state"]:
+        return None  # blip: the worsened state didn't survive to the next row
+    old_state: Optional[str] = next(
+        (r["state"] for r in series if (t := _parse_iso(r["ts"])) is not None and t < cutoff),
+        None,
+    )
+    cur_rank = _STATE_RANK.get(current["state"])
+    old_rank = _STATE_RANK.get(old_state) if old_state is not None else None
+    if cur_rank is None or old_rank is None or cur_rank <= old_rank:
+        return None
+    return {
+        "device_id": device_id,
+        "hostname": current["hostname"],
+        "state": current["state"],
+        "prev_state": old_state,
+        "score_ts": current["ts"],
+    }
 
 
 # --------------------------------------------------------------------------- #
