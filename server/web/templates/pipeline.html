@@ -212,6 +212,28 @@
   </div>
 </div>
 
+{# ── Парковое подтверждение правил (ssd3 Ф8) ──────────────────────────────── #}
+<div class="section-label">Парковое подтверждение правил</div>
+<table class="db-table" style="max-width:640px">
+  <thead>
+    <tr><th>Правило</th><th>Подтверждено</th><th>Опровергнуто</th><th>Множитель</th></tr>
+  </thead>
+  <tbody>
+  {% for r in m.rule_stats %}
+  <tr>
+    <td>{{ r.label }}</td>
+    <td class="mono"><span class="good">{{ r.confirmed }}</span></td>
+    <td class="mono"><span class="{{ 'bad' if r.refuted else 'na' }}">{{ r.refuted }}</span></td>
+    <td class="mono">
+      <span class="{{ 'good' if r.multiplier > 1.0 else ('warn' if r.multiplier < 1.0 else 'na') }}">
+        ×{{ "%.2f"|format(r.multiplier) }}
+      </span>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
 {# ── DB sizes ────────────────────────────────────────────────────────────── #}
 <div class="section-label">Размер БД</div>
 <table class="db-table">

@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from server.analytics import rulestats
 from server.analytics.oui import normalize_mac
 
 _db_path: Optional[Path] = None
@@ -364,6 +365,19 @@ CREATE TABLE IF NOT EXISTS maintenance_log (
   ts     TEXT NOT NULL,
   action TEXT NOT NULL,
   detail TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_stats (
+  rule_key   TEXT PRIMARY KEY,  -- closed list: pending_high|media_recurrence|early_chain
+  confirmed  INTEGER NOT NULL DEFAULT 0,
+  refuted    INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rule_episodes (
+  rule_key  TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  end_ts    TEXT NOT NULL,
+  outcome   TEXT NOT NULL,
+  PRIMARY KEY (rule_key, device_id, end_ts)
 );
 """
 
@@ -1186,6 +1200,102 @@ def _log_maintenance(action: str, detail: Optional[str]) -> None:
             "INSERT INTO maintenance_log (ts, action, detail) VALUES (?,?,?)",
             (_now_iso(), action, detail),
         )
+
+
+def get_rule_stats() -> dict[str, dict[str, int]]:
+    """All rule_stats rows, keyed by rule_key. Missing rule_keys are simply
+    absent from the returned dict (caller/rulestats.reinforcement treats a
+    missing key the same as {"confirmed": 0, "refuted": 0})."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT rule_key, confirmed, refuted FROM rule_stats").fetchall()
+    return {r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]} for r in rows}
+
+
+def record_rule_outcomes(outcomes: list[tuple[str, str, str, str]]) -> dict[str, dict[str, int]]:
+    """outcomes: (rule_key, outcome, device_id, end_ts) tuples, possibly containing
+    episodes already recorded by a past sweep (scan_device no longer filters these
+    out itself -- see the Ф8 fix-pass note on rule_episodes below). For each,
+    INSERT OR IGNORE into rule_episodes keyed on (rule_key, device_id, end_ts) -- a
+    PK conflict means "already counted", silently skip it. Only rows that were
+    ACTUALLY newly inserted increment the matching rule_stats counter. Returns the
+    actual deltas applied (per rule_key), so the caller's logging reflects what
+    really changed, not what scan_device merely re-observed.
+
+    rule_key is validated against rulestats.RULE_KEYS (a closed 3-value Python
+    literal, never SQL-interpolated from external input) and outcome against
+    {"confirmed", "refuted"} before anything is written -- scan_device can only
+    ever emit these values by construction, so a mismatch here means a bug in
+    scan_device, not bad input to silently tolerate.
+    """
+    for rule_key, outcome, _device_id, _end_ts in outcomes:
+        if rule_key not in rulestats.RULE_KEYS:
+            raise ValueError(f"unknown rule_key: {rule_key!r}")
+        if outcome not in ("confirmed", "refuted"):
+            raise ValueError(f"unrecognized outcome: {outcome!r}")
+    deltas: dict[str, dict[str, int]] = {}
+    now_iso = _now_iso()
+    with _lock, _connect() as conn:
+        for rule_key, outcome, device_id, end_ts in outcomes:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO rule_episodes (rule_key, device_id, end_ts, outcome) "
+                "VALUES (?,?,?,?)",
+                (rule_key, device_id, end_ts, outcome),
+            )
+            if cur.rowcount == 0:
+                continue  # already recorded by a past sweep -- not a new fact
+            bucket = deltas.setdefault(rule_key, {"confirmed": 0, "refuted": 0})
+            bucket[outcome] += 1
+        for rule_key, bucket in deltas.items():
+            conn.execute(
+                """INSERT INTO rule_stats (rule_key, confirmed, refuted, updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(rule_key) DO UPDATE SET
+                     confirmed = confirmed + excluded.confirmed,
+                     refuted = refuted + excluded.refuted,
+                     updated_at = excluded.updated_at""",
+                (rule_key, bucket["confirmed"], bucket["refuted"], now_iso),
+            )
+    return deltas
+
+
+# >= REFUTE_WINDOW (the longer of the two outcome windows) + a safety margin, so a
+# device that recomputes scores every few minutes (fast-cadence config) still gets
+# a query that spans enough WALL-CLOCK time, not just enough rows.
+_SCAN_LOOKBACK = rulestats.REFUTE_WINDOW + timedelta(days=10)
+_SCAN_ROW_CAP = 5000  # defensive cap only -- the `since` filter above does the real work
+_EPISODE_PRUNE_MARGIN = timedelta(days=1)  # small cushion past the scan lookback
+
+
+def run_rulestats_scan() -> dict[str, int]:
+    """One fleet-wide sweep: for every device, re-evaluate its score history over
+    the fixed lookback window, upsert any newly-resolved episodes (rule_episodes
+    absorbs the dedup), prune rule_episodes rows that fell out of that window,
+    log once. No watermark of "time since last sweep" is used anymore -- a sweep
+    timestamp is not a valid proxy for "already emitted" (a not-yet-resolvable
+    episode would be silently orphaned the moment any later sweep ran past its
+    end_ts); dedup now lives in rule_episodes, keyed on the episode itself."""
+    now = datetime.now(timezone.utc)
+    lookback_iso = (now - _SCAN_LOOKBACK).isoformat()
+    with _connect() as conn:
+        device_ids = [r[0] for r in conn.execute("SELECT device_id FROM devices")]
+    outcomes: list[tuple[str, str, str, str]] = []
+    for device_id in device_ids:
+        rows = list(reversed(get_score_series(device_id, limit=_SCAN_ROW_CAP, since=lookback_iso)))
+        for rule_key, outcome, end_ts in rulestats.scan_device(rows, now=now):
+            outcomes.append((rule_key, outcome, device_id, end_ts))
+    deltas = record_rule_outcomes(outcomes) if outcomes else {}
+    with _lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM rule_episodes WHERE end_ts < ?",
+            ((now - _SCAN_LOOKBACK - _EPISODE_PRUNE_MARGIN).isoformat(),),
+        )
+    confirmed_n = sum(b["confirmed"] for b in deltas.values())
+    refuted_n = sum(b["refuted"] for b in deltas.values())
+    _log_maintenance(
+        "rulestats_scan",
+        json.dumps({"devices": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}),
+    )
+    return {"devices_scanned": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}
 
 
 def run_maintenance() -> dict[str, Any]:
@@ -2021,6 +2131,7 @@ _DEVICE_TABLES: tuple[str, ...] = (
     "devices",
     "heartbeat_rollup_daily",
     "event_rollup_daily",
+    "rule_episodes",
 )
 
 _SECONDS_PER_DAY = 86_400
@@ -2554,13 +2665,20 @@ def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
     ]
 
 
-def get_score_series(device_id: str, limit: int = 100) -> list[dict]:
-    """Computed scores for a device, newest-first (append-only time series)."""
+def get_score_series(device_id: str, limit: int = 100, since: Optional[str] = None) -> list[dict]:
+    """Computed scores for a device, newest-first (append-only time series).
+
+    since (ISO ts, optional): when given, only rows with ts >= since are
+    returned -- lets a caller guarantee a *time* span (e.g. Ф8's rule-outcome
+    windows) instead of a row count that may or may not cover enough days at
+    this device's telemetry cadence. None preserves the exact prior behavior
+    (all existing callers pass no `since` and are unaffected byte-for-byte)."""
     with _connect() as conn:
         rows = conn.execute(
             """SELECT ts, performance, reliability, wear, risk_exposure, risk
-               FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?""",
-            (device_id, limit),
+               FROM scores WHERE device_id=? AND (? IS NULL OR ts>=?)
+               ORDER BY id DESC LIMIT ?""",
+            (device_id, since, since, limit),
         ).fetchall()
     return [
         {
@@ -3732,10 +3850,32 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "SELECT ts, action FROM maintenance_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
+        # ssd3 Ф8: fleet rule self-reinforcement counts for the /pipeline table.
+        rule_stats_rows = conn.execute(
+            "SELECT rule_key, confirmed, refuted FROM rule_stats"
+        ).fetchall()
+
     src_by_state: dict[str, int] = {r[0]: r[1] for r in src_rows}
     gate_pass = sum(src_by_state.get(s, 0) for s in _GATE_PASS_STATES)
     gate_fail = sum(src_by_state.get(s, 0) for s in _GATE_FAIL_STATES)
     not_applicable = src_by_state.get("not_applicable", 0)
+
+    # Always all 3 RULE_KEYS, in order, even with zero rows -- a closed, fixed
+    # list; empty history / multiplier=1.0 is the expected starting state.
+    rule_stats_by_key = {
+        r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]}
+        for r in rule_stats_rows
+    }
+    rule_stats_display = [
+        {
+            "rule_key": key,
+            "label": rulestats.RULE_LABELS[key],
+            "confirmed": rule_stats_by_key.get(key, {}).get("confirmed", 0),
+            "refuted": rule_stats_by_key.get(key, {}).get("refuted", 0),
+            "multiplier": rulestats.reinforcement(key, rule_stats_by_key.get(key, {})),
+        }
+        for key in rulestats.RULE_KEYS
+    ]
 
     return {
         "ts": _now_iso(),
@@ -3767,6 +3907,7 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "last_maintenance_ts": maint_row["ts"] if maint_row else None,
             "last_maintenance_action": maint_row["action"] if maint_row else None,
         },
+        "rule_stats": rule_stats_display,
     }
 
 

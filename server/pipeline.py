@@ -560,8 +560,15 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     chain = analyze_events(
         chain_events, now=datetime.now(timezone.utc), rollup_counts=rollup_counts
     )
+    rule_stats = db.get_rule_stats()
     storage_risk = compute_storage_risk(
-        hist, hb, device_trust=device_trust, disk_series=disk_series, chain=chain, trends=trends
+        hist,
+        hb,
+        device_trust=device_trust,
+        disk_series=disk_series,
+        chain=chain,
+        trends=trends,
+        rule_stats=rule_stats,
     )
     battery_risk = compute_battery_risk(hist, device_trust=device_trust)
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
