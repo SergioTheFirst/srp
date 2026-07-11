@@ -372,6 +372,13 @@ CREATE TABLE IF NOT EXISTS rule_stats (
   refuted    INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rule_episodes (
+  rule_key  TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  end_ts    TEXT NOT NULL,
+  outcome   TEXT NOT NULL,
+  PRIMARY KEY (rule_key, device_id, end_ts)
+);
 """
 
 
@@ -1204,12 +1211,15 @@ def get_rule_stats() -> dict[str, dict[str, int]]:
     return {r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]} for r in rows}
 
 
-def record_rule_outcomes(outcomes: list[tuple[str, str]]) -> None:
-    """Upsert (rule_key, 'confirmed'|'refuted') pairs from a scan into rule_stats,
-    incrementing the matching counter. outcomes may repeat the same rule_key
-    multiple times in one call (one fleet sweep can resolve several episodes
-    for the same rule across different devices) -- aggregate in Python before
-    writing, one UPDATE/INSERT per distinct rule_key, not one per outcome.
+def record_rule_outcomes(outcomes: list[tuple[str, str, str, str]]) -> dict[str, dict[str, int]]:
+    """outcomes: (rule_key, outcome, device_id, end_ts) tuples, possibly containing
+    episodes already recorded by a past sweep (scan_device no longer filters these
+    out itself -- see the Ф8 fix-pass note on rule_episodes below). For each,
+    INSERT OR IGNORE into rule_episodes keyed on (rule_key, device_id, end_ts) -- a
+    PK conflict means "already counted", silently skip it. Only rows that were
+    ACTUALLY newly inserted increment the matching rule_stats counter. Returns the
+    actual deltas applied (per rule_key), so the caller's logging reflects what
+    really changed, not what scan_device merely re-observed.
 
     rule_key is validated against rulestats.RULE_KEYS (a closed 3-value Python
     literal, never SQL-interpolated from external input) and outcome against
@@ -1217,28 +1227,35 @@ def record_rule_outcomes(outcomes: list[tuple[str, str]]) -> None:
     ever emit these values by construction, so a mismatch here means a bug in
     scan_device, not bad input to silently tolerate.
     """
-    increments: dict[str, dict[str, int]] = {}
-    for rule_key, outcome in outcomes:
+    for rule_key, outcome, _device_id, _end_ts in outcomes:
         if rule_key not in rulestats.RULE_KEYS:
             raise ValueError(f"unknown rule_key: {rule_key!r}")
         if outcome not in ("confirmed", "refuted"):
             raise ValueError(f"unrecognized outcome: {outcome!r}")
-        bucket = increments.setdefault(rule_key, {"confirmed": 0, "refuted": 0})
-        bucket[outcome] += 1
-    if not increments:
-        return
-    now = _now_iso()
+    deltas: dict[str, dict[str, int]] = {}
+    now_iso = _now_iso()
     with _lock, _connect() as conn:
-        for rule_key, inc in increments.items():
+        for rule_key, outcome, device_id, end_ts in outcomes:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO rule_episodes (rule_key, device_id, end_ts, outcome) "
+                "VALUES (?,?,?,?)",
+                (rule_key, device_id, end_ts, outcome),
+            )
+            if cur.rowcount == 0:
+                continue  # already recorded by a past sweep -- not a new fact
+            bucket = deltas.setdefault(rule_key, {"confirmed": 0, "refuted": 0})
+            bucket[outcome] += 1
+        for rule_key, bucket in deltas.items():
             conn.execute(
-                """INSERT INTO rule_stats(rule_key, confirmed, refuted, updated_at)
+                """INSERT INTO rule_stats (rule_key, confirmed, refuted, updated_at)
                    VALUES (?,?,?,?)
                    ON CONFLICT(rule_key) DO UPDATE SET
-                     confirmed=confirmed+excluded.confirmed,
-                     refuted=refuted+excluded.refuted,
-                     updated_at=excluded.updated_at""",
-                (rule_key, inc["confirmed"], inc["refuted"], now),
+                     confirmed = confirmed + excluded.confirmed,
+                     refuted = refuted + excluded.refuted,
+                     updated_at = excluded.updated_at""",
+                (rule_key, bucket["confirmed"], bucket["refuted"], now_iso),
             )
+    return deltas
 
 
 # >= REFUTE_WINDOW (the longer of the two outcome windows) + a safety margin, so a
@@ -1246,25 +1263,34 @@ def record_rule_outcomes(outcomes: list[tuple[str, str]]) -> None:
 # a query that spans enough WALL-CLOCK time, not just enough rows.
 _SCAN_LOOKBACK = rulestats.REFUTE_WINDOW + timedelta(days=10)
 _SCAN_ROW_CAP = 5000  # defensive cap only -- the `since` filter above does the real work
+_EPISODE_PRUNE_MARGIN = timedelta(days=1)  # small cushion past the scan lookback
 
 
 def run_rulestats_scan() -> dict[str, int]:
-    """One fleet-wide sweep: for every device, scan its score history since the
-    last sweep, accumulate (rule_key, outcome) pairs, upsert once, log once.
-    Returns {"devices_scanned": N, "confirmed": N, "refuted": N} for logging."""
-    since = _last_maintenance_ts("rulestats_scan")
+    """One fleet-wide sweep: for every device, re-evaluate its score history over
+    the fixed lookback window, upsert any newly-resolved episodes (rule_episodes
+    absorbs the dedup), prune rule_episodes rows that fell out of that window,
+    log once. No watermark of "time since last sweep" is used anymore -- a sweep
+    timestamp is not a valid proxy for "already emitted" (a not-yet-resolvable
+    episode would be silently orphaned the moment any later sweep ran past its
+    end_ts); dedup now lives in rule_episodes, keyed on the episode itself."""
     now = datetime.now(timezone.utc)
     lookback_iso = (now - _SCAN_LOOKBACK).isoformat()
     with _connect() as conn:
         device_ids = [r[0] for r in conn.execute("SELECT device_id FROM devices")]
-    outcomes: list[tuple[str, str]] = []
+    outcomes: list[tuple[str, str, str, str]] = []
     for device_id in device_ids:
         rows = list(reversed(get_score_series(device_id, limit=_SCAN_ROW_CAP, since=lookback_iso)))
-        outcomes.extend(rulestats.scan_device(rows, now=now, since=since))
-    if outcomes:
-        record_rule_outcomes(outcomes)
-    confirmed_n = sum(1 for _, o in outcomes if o == "confirmed")
-    refuted_n = len(outcomes) - confirmed_n
+        for rule_key, outcome, end_ts in rulestats.scan_device(rows, now=now):
+            outcomes.append((rule_key, outcome, device_id, end_ts))
+    deltas = record_rule_outcomes(outcomes) if outcomes else {}
+    with _lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM rule_episodes WHERE end_ts < ?",
+            ((now - _SCAN_LOOKBACK - _EPISODE_PRUNE_MARGIN).isoformat(),),
+        )
+    confirmed_n = sum(b["confirmed"] for b in deltas.values())
+    refuted_n = sum(b["refuted"] for b in deltas.values())
     _log_maintenance(
         "rulestats_scan",
         json.dumps({"devices": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}),

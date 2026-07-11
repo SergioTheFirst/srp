@@ -94,9 +94,8 @@ def _scan_rule(
     rule_key: str,
     flag: str,
     now: datetime,
-    since: Optional[datetime],
-) -> list[tuple[str, str]]:
-    outcomes: list[tuple[str, str]] = []
+) -> list[tuple[str, str, str]]:
+    outcomes: list[tuple[str, str, str]] = []
     in_run = False
     run_end: Optional[datetime] = None
     for row in rows:
@@ -108,8 +107,8 @@ def _scan_rule(
             continue
         if in_run and run_end is not None:
             outcome = _resolve_episode(rows, run_end, flag, now)
-            if outcome is not None and (since is None or run_end > since):
-                outcomes.append((rule_key, outcome))
+            if outcome is not None:
+                outcomes.append((rule_key, outcome, run_end.isoformat()))
             in_run = False
             run_end = None
     # A run still flag-present at the last row is a data-horizon artifact, not
@@ -117,23 +116,26 @@ def _scan_rule(
     return outcomes
 
 
-def scan_device(
-    score_rows: list[dict[str, Any]], *, now: datetime, since: Optional[datetime] = None
-) -> list[tuple[str, str]]:
+def scan_device(score_rows: list[dict[str, Any]], *, now: datetime) -> list[tuple[str, str, str]]:
     """Resolve confirmed/refuted rule episodes from one device's OLD->NEW score history.
 
     Pure and stateless: the caller reverses db.get_score_series (newest-first)
-    before calling; since (a maintenance_log watermark) is the entire dedup
-    mechanism -- an episode is emitted only if its end_ts > since.
+    before calling; this function has NO memory of prior calls and does NOT
+    dedup against episodes already recorded on an earlier sweep -- "have we
+    already counted this" is a persistence question, answered by the caller's
+    storage layer (server.db's rule_episodes table), not by a pure re-evaluation
+    of whatever row window it's handed. Returns (rule_key, outcome, end_ts_iso)
+    triples -- end_ts_iso (`end_ts.isoformat()`) is the episode's own dedup key
+    component the caller needs.
     """
     flag_for_rule = {
         "pending_high": "pending_gt10",
         "media_recurrence": "recurrence",
         "early_chain": "early_events",
     }
-    outcomes: list[tuple[str, str]] = []
+    outcomes: list[tuple[str, str, str]] = []
     for rule_key in RULE_KEYS:
-        outcomes.extend(_scan_rule(score_rows, rule_key, flag_for_rule[rule_key], now, since))
+        outcomes.extend(_scan_rule(score_rows, rule_key, flag_for_rule[rule_key], now))
     return outcomes
 
 

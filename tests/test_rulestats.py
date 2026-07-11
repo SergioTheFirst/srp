@@ -1,5 +1,11 @@
-"""ssd3 Ф8 (Task 1): rule_stats table + scan_device()/reinforcement() detection
-and application math, plus the run_rulestats_scan maintenance-sweep wiring.
+"""ssd3 Ф8 (Task 1 + fix pass): rule_stats/rule_episodes tables +
+scan_device()/reinforcement() detection and application math, plus the
+run_rulestats_scan maintenance-sweep wiring.
+
+Fix pass: dedup moved from a sweep-timestamp watermark (scan_device's old
+`since` param) to a storage-level table (rule_episodes) keyed on the episode
+itself -- scan_device is now a pure re-evaluation with no dedup memory at all;
+record_rule_outcomes/run_rulestats_scan own dedup via INSERT OR IGNORE.
 
 scan_device/reinforcement tests are pure-function (no DB). The
 get_score_series(since=...)/run_rulestats_scan/record_rule_outcomes tests go
@@ -45,6 +51,12 @@ def _seed_score(db, device_id, ts, flags=None, band="good", stage=0):
     db.store_scores(device_id, ts, {"risk": _risk(flags=flags, band=band, stage=stage)})
 
 
+def _pairs(outcomes):
+    """Drop end_ts from scan_device's (rule_key, outcome, end_ts) triples, for
+    tests that only care about which (rule_key, outcome) pairs were emitted."""
+    return [(rule_key, outcome) for rule_key, outcome, _end_ts in outcomes]
+
+
 # --------------------------------------------------------------------------- #
 # scan_device -- episode detection + confirm/refute/unresolved resolution
 # --------------------------------------------------------------------------- #
@@ -57,7 +69,22 @@ def test_scan_device_confirmed_episode():
         _row(t0 + timedelta(days=10), flags=[], band="bad"),  # within 45d -> confirms
     ]
     outcomes = rulestats.scan_device(rows, now=t0 + timedelta(days=20))
-    assert ("pending_high", "confirmed") in outcomes
+    assert ("pending_high", "confirmed") in _pairs(outcomes)
+
+
+def test_scan_device_return_tuple_carries_the_episodes_own_end_ts_iso():
+    """Fix pass: scan_device now returns (rule_key, outcome, end_ts_iso) triples --
+    end_ts_iso is the dedup key component the caller (record_rule_outcomes) needs."""
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = [
+        _row(t0, flags=["pending_gt10"]),
+        _row(t0 + timedelta(days=1), flags=["pending_gt10"]),
+        _row(t0 + timedelta(days=2), flags=[]),  # closes the run; end_ts = t0+1d
+        _row(t0 + timedelta(days=10), flags=[], band="bad"),  # confirms
+    ]
+    outcomes = rulestats.scan_device(rows, now=t0 + timedelta(days=20))
+    expected_end_ts = (t0 + timedelta(days=1)).isoformat()
+    assert ("pending_high", "confirmed", expected_end_ts) in outcomes
 
 
 def test_scan_device_refuted_episode():
@@ -67,7 +94,7 @@ def test_scan_device_refuted_episode():
         _row(t0 + timedelta(days=1), flags=[]),  # closes the run; end_ts = t0
     ]
     outcomes = rulestats.scan_device(rows, now=t0 + timedelta(days=61))
-    assert ("media_recurrence", "refuted") in outcomes
+    assert ("media_recurrence", "refuted") in _pairs(outcomes)
 
 
 def test_scan_device_unresolved_episode_emits_nothing():
@@ -95,7 +122,7 @@ def test_scan_device_resolves_on_later_call_with_more_rows():
 
     later_rows = rows + [_row(t0 + timedelta(days=65), flags=[])]
     second = rulestats.scan_device(later_rows, now=t0 + timedelta(days=65))
-    assert ("early_chain", "refuted") in second
+    assert ("early_chain", "refuted") in _pairs(second)
 
 
 def test_scan_device_unparseable_ts_is_treated_as_flag_absent_not_a_crash():
@@ -109,7 +136,7 @@ def test_scan_device_unparseable_ts_is_treated_as_flag_absent_not_a_crash():
     ]
     now = t0 + rulestats.REFUTE_WINDOW  # must not raise
     outcomes = rulestats.scan_device(rows, now=now)
-    assert ("pending_high", "refuted") in outcomes
+    assert ("pending_high", "refuted") in _pairs(outcomes)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,11 +152,11 @@ def test_scan_device_open_episode_at_end_of_rows_is_not_synthesized_closed():
     # far enough past that a synthesized end_ts=t0+1d would already be >=60d old
     now = t0 + timedelta(days=100)
     outcomes = rulestats.scan_device(rows, now=now)
-    assert not any(rule_key == "pending_high" for rule_key, _ in outcomes)
+    assert not any(rule_key == "pending_high" for rule_key, _, _ in outcomes)
 
     closed_rows = rows + [_row(t0 + timedelta(days=2), flags=[])]  # flag finally absent
     outcomes2 = rulestats.scan_device(closed_rows, now=now)
-    assert ("pending_high", "refuted") in outcomes2
+    assert ("pending_high", "refuted") in _pairs(outcomes2)
 
 
 # --------------------------------------------------------------------------- #
@@ -144,7 +171,7 @@ def test_scan_device_refute_boundary_is_inclusive_at_exactly_refute_window():
     ]
     now = t0 + rulestats.REFUTE_WINDOW  # now - end_ts == REFUTE_WINDOW exactly
     outcomes = rulestats.scan_device(rows, now=now)
-    assert ("media_recurrence", "refuted") in outcomes
+    assert ("media_recurrence", "refuted") in _pairs(outcomes)
 
 
 def test_scan_device_refute_window_upper_bound_is_inclusive_counter_evidence():
@@ -158,26 +185,6 @@ def test_scan_device_refute_window_upper_bound_is_inclusive_counter_evidence():
     now = end_ts + rulestats.REFUTE_WINDOW + timedelta(days=5)
     outcomes = rulestats.scan_device(rows, now=now)
     assert outcomes == []  # blocked: re-fire lands exactly on the inclusive upper bound
-
-
-# --------------------------------------------------------------------------- #
-# Dedup (since): an already-emitted episode must not be re-emitted.
-# --------------------------------------------------------------------------- #
-def test_scan_device_episode_not_doubled_when_since_matches_prior_end_ts():
-    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    rows = [
-        _row(t0, flags=["pending_gt10"]),
-        _row(t0 + timedelta(days=1), flags=["pending_gt10"]),
-        _row(t0 + timedelta(days=2), flags=[]),  # closes; end_ts = t0+1d
-        _row(t0 + timedelta(days=10), flags=[], band="bad"),  # confirms
-    ]
-    now = t0 + timedelta(days=20)
-    first = rulestats.scan_device(rows, now=now)
-    assert ("pending_high", "confirmed") in first
-
-    end_ts = t0 + timedelta(days=1)
-    second = rulestats.scan_device(rows, now=now, since=end_ts)
-    assert not any(rule_key == "pending_high" for rule_key, _ in second)
 
 
 # --------------------------------------------------------------------------- #
@@ -283,11 +290,58 @@ def test_run_rulestats_scan_records_and_is_idempotent_on_repeat(db_init):
     assert stats["early_chain"] == {"confirmed": 1, "refuted": 0}
     assert stats["media_recurrence"] == {"confirmed": 0, "refuted": 1}
 
-    # idempotent repeat: no new data -> counts unchanged (since wiring works end to end).
+    # idempotent repeat: no new data -> counts unchanged. Fix pass: this now proves
+    # the rule_episodes-backed dedup (INSERT OR IGNORE), not the old since-watermark.
     result2 = db.run_rulestats_scan()
     assert result2["confirmed"] == 0
     assert result2["refuted"] == 0
     assert db.get_rule_stats() == stats
+
+
+def test_run_rulestats_scan_delayed_refute_is_eventually_counted_regression(db_init, monkeypatch):
+    """Regression pin for the fixed since-watermark bug: an episode NOT YET
+    resolvable at sweep 1 (too recent) must still be counted once enough
+    wall-clock time has passed by a later sweep. Under the old sweep-timestamp
+    watermark this was silently dropped forever the moment sweep 1 ran at all --
+    this is the exact repro from the original task-1-report.md concern, now
+    locked in as a passing test."""
+    db = db_init
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db.upsert_device("dev-1", t0.isoformat(), "1.0.0")
+    _seed_score(db, "dev-1", t0.isoformat(), flags=["recurrence"])
+    _seed_score(db, "dev-1", (t0 + timedelta(days=1)).isoformat(), flags=[])  # closes; end_ts=t0
+
+    class _FrozenDatetime(datetime):
+        frozen = t0 + timedelta(days=5)  # sweep 1: too recent to refute (needs 60d)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.frozen
+
+    monkeypatch.setattr(db, "datetime", _FrozenDatetime)
+
+    sweep1 = db.run_rulestats_scan()
+    assert sweep1["refuted"] == 0
+    assert db.get_rule_stats() == {}  # not yet resolvable -- correctly nothing recorded
+
+    _FrozenDatetime.frozen = t0 + timedelta(days=65)  # sweep 2: past the 60d refute wait
+    sweep2 = db.run_rulestats_scan()
+    assert sweep2["refuted"] == 1
+    assert db.get_rule_stats()["media_recurrence"] == {"confirmed": 0, "refuted": 1}
+
+
+def test_run_rulestats_scan_prunes_episodes_older_than_the_lookback_window(db_init):
+    db = db_init
+    old_end_ts = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    with db._lock, db._connect() as conn:
+        conn.execute(
+            "INSERT INTO rule_episodes (rule_key, device_id, end_ts, outcome) VALUES (?,?,?,?)",
+            ("pending_high", "dev-ghost", old_end_ts, "refuted"),
+        )
+    db.run_rulestats_scan()  # zero devices, but the prune step runs unconditionally
+    with db._connect() as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM rule_episodes").fetchone()[0]
+    assert remaining == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -299,24 +353,45 @@ def test_get_rule_stats_empty_when_no_rows(db_init):
 
 def test_record_rule_outcomes_aggregates_duplicates_and_upserts_across_calls(db_init):
     db = db_init
-    db.record_rule_outcomes(
+    deltas = db.record_rule_outcomes(
         [
-            ("pending_high", "confirmed"),
-            ("pending_high", "confirmed"),
-            ("pending_high", "refuted"),
+            ("pending_high", "confirmed", "dev-1", "2026-01-01T00:00:00+00:00"),
+            ("pending_high", "confirmed", "dev-2", "2026-01-02T00:00:00+00:00"),
+            ("pending_high", "refuted", "dev-1", "2026-01-03T00:00:00+00:00"),
         ]
     )
+    assert deltas == {"pending_high": {"confirmed": 2, "refuted": 1}}
     assert db.get_rule_stats()["pending_high"] == {"confirmed": 2, "refuted": 1}
 
-    db.record_rule_outcomes([("pending_high", "confirmed")])
+    db.record_rule_outcomes([("pending_high", "confirmed", "dev-3", "2026-01-04T00:00:00+00:00")])
     assert db.get_rule_stats()["pending_high"] == {"confirmed": 3, "refuted": 1}
+
+
+def test_record_rule_outcomes_second_call_with_identical_tuple_is_a_noop(db_init):
+    """The rule_episodes PK (rule_key, device_id, end_ts) is the dedup mechanism
+    now -- re-submitting the exact same episode (e.g. re-discovered by a later
+    sweep with no memory of the first) must not double-count it."""
+    db = db_init
+    outcome = ("pending_high", "confirmed", "dev-1", "2026-01-01T00:00:00+00:00")
+
+    deltas1 = db.record_rule_outcomes([outcome])
+    assert deltas1 == {"pending_high": {"confirmed": 1, "refuted": 0}}
+    assert db.get_rule_stats()["pending_high"] == {"confirmed": 1, "refuted": 0}
+
+    deltas2 = db.record_rule_outcomes([outcome])
+    assert deltas2 == {}  # INSERT OR IGNORE no-op -- zero new deltas
+    assert db.get_rule_stats()["pending_high"] == {"confirmed": 1, "refuted": 0}  # unchanged
 
 
 def test_record_rule_outcomes_rejects_unknown_rule_key(db_init):
     with pytest.raises(ValueError):
-        db_init.record_rule_outcomes([("not_a_real_rule", "confirmed")])
+        db_init.record_rule_outcomes(
+            [("not_a_real_rule", "confirmed", "dev-1", "2026-01-01T00:00:00+00:00")]
+        )
 
 
 def test_record_rule_outcomes_rejects_unknown_outcome(db_init):
     with pytest.raises(ValueError):
-        db_init.record_rule_outcomes([("pending_high", "maybe")])
+        db_init.record_rule_outcomes(
+            [("pending_high", "maybe", "dev-1", "2026-01-01T00:00:00+00:00")]
+        )
