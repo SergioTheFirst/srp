@@ -187,8 +187,10 @@ def main() -> int:
         fleet = client.get("/")
         detail = client.get(f"/device/{DEVICE}")
         print_page = client.get("/print")
+        health_page = client.get("/health")
         print(
-            f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}, print HTTP {print_page.status_code}"
+            f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}, "
+            f"print HTTP {print_page.status_code}, health HTTP {health_page.status_code}"
         )
         if fleet.status_code != 200:
             failures.append("fleet page did not render")
@@ -196,6 +198,8 @@ def main() -> int:
             failures.append("device detail page missing or hostname not rendered")
         if print_page.status_code != 200:
             failures.append("print analytics page did not render")
+        if health_page.status_code != 200 or "Здоровье флота" not in health_page.text:
+            failures.append("health page did not render")
 
         pa = client.get("/api/v1/fleet/print/analytics?days=30").json()
         print(f"print analytics: {pa.get('total_pages')} pages, {pa.get('total_jobs')} jobs")

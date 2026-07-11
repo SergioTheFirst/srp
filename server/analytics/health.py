@@ -608,8 +608,14 @@ def _context_factors(
 
 
 # --------------------------------------------------------------------------- #
-# Staleness (READ-side helper; deliberately NOT called by compute_health)
+# Read-side accessors (NOT called by compute_health; used by Ф7 dashboards)
 # --------------------------------------------------------------------------- #
+def action_for(dominant: Optional[str]) -> str:
+    """Public accessor for the Ф6 recommendation table -- read-side consumers (Ф7) map a
+    dominant mechanism to its Russian recommendation without duplicating _ACTIONS."""
+    return _ACTIONS.get(dominant, _ACTIONS[None])
+
+
 def health_staleness(score_ts: str, now: datetime) -> Optional[str]:
     """Score-age staleness, applied by callers (API/pages), never inside
     ``compute_health`` (which has no timestamp input).
