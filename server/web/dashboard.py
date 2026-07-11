@@ -16,6 +16,12 @@ from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
 from server import db, org_directory
+from server.analytics.health import (
+    _STATE_LABELS,
+    action_for,
+    apply_health_staleness,
+    health_staleness,
+)
 from server.analytics.netmap import subnet_context_for, subnet_hint
 from server.netdisco.cache import GraphCache
 from server.netdisco.unified import historical_graph_from_snapshot
@@ -91,6 +97,19 @@ def band_class(band: Optional[str]) -> str:
     """CSS class for a Ф6 band (good/watch/bad/unknown). Public Jinja global shared
     by Ф7 T7.1 (this page) and T7.2 (device hero) -- one band->class mapping."""
     return {"good": "good", "watch": "warn", "bad": "bad"}.get(band or "", "na")
+
+
+def _health_index_series(rows: list[dict]) -> list[dict]:
+    """(ts, index) pairs for the device-hero sparkline (T7.2) -- newest-first, as
+    ``get_score_series`` returns; the chart JS reverses to oldest->newest (same
+    convention as this page's own heartbeat-rollup chart, ssd3 Ф5). Rows with no
+    "health" key (pre-Ф6 history) are skipped, never faked as index=0."""
+    out = []
+    for row in rows:
+        health_blob = (row.get("risk") or {}).get("health")
+        if isinstance(health_blob, dict) and health_blob.get("index") is not None:
+            out.append({"ts": row.get("ts"), "index": health_blob["index"]})
+    return out
 
 
 def pct(v: Optional[float]) -> str:
@@ -208,6 +227,7 @@ _TEMPLATES.env.globals.update(
     risk_color=risk_color,
     level_color=level_color,
     band_class=band_class,
+    action_for=action_for,
     pct=pct,
     days_until=days_until,
     fmt_age=fmt_age,
@@ -418,6 +438,22 @@ def device(request: Request, device_id: str):
     # -- lets the device page fill IP/MAC gaps that historical telemetry hasn't
     # reported yet, from what the network map already knows about this MAC.
     card = db.get_identity_card(device_id=device_id)
+    # ssd3 Ф7 T7.2: device-hero health coordinates. Read-side staleness overlay
+    # applied here (never baked into the stored blob -- Ф6's own design); None
+    # when this device predates Ф6 / hasn't been recomputed since Ф6 shipped.
+    scores = d.get("scores") or {}
+    health_raw = (scores.get("risk") or {}).get("health")
+    score_ts = scores.get("ts")
+    health = None
+    health_stale_msg = None
+    health_series: list[dict] = []
+    if health_raw is not None:
+        now = datetime.now(timezone.utc)
+        health = apply_health_staleness(health_raw, score_ts, now)
+        if score_ts is not None:
+            health_stale_msg = health_staleness(score_ts, now)
+        if health.get("state") != "unknown":
+            health_series = _health_index_series(db.get_score_series(device_id, limit=200))
     return _TEMPLATES.TemplateResponse(
         request,
         "device.html",
@@ -429,6 +465,10 @@ def device(request: Request, device_id: str):
             "available_version": _fleet_available_version(request),
             # ssd3 Ф5: 90d daily rollup for the disk-latency chart under "Прогноз".
             "heartbeat_rollups": db.get_heartbeat_rollups(device_id, 90),
+            "health": health,
+            "health_stale_msg": health_stale_msg,
+            "health_series": health_series,
+            "state_labels": _STATE_LABELS,
         },
     )
 
