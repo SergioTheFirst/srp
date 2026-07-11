@@ -616,10 +616,22 @@ def action_for(dominant: Optional[str]) -> str:
     return _ACTIONS.get(dominant, _ACTIONS[None])
 
 
-_STALE_UNKNOWN_MSG = "проверка недостоверна: данные старше 10 дней"  # named so
-# apply_health_staleness compares against the same literal health_staleness
-# returns -- single source within this module (server.api keeps its own,
-# separately-reviewed copy of this exact string; untouched by this task).
+def state_label_for(state: Optional[str]) -> str:
+    """Public accessor for _STATE_LABELS -- mirrors action_for so read-side consumers
+    never reach into a module-private dict directly."""
+    return _STATE_LABELS.get(state or "unknown", _STATE_LABELS["unknown"])
+
+
+def dominant_label_for(dominant: Optional[str]) -> str:
+    """Public accessor for _DOMINANT_LABELS -- mirrors action_for."""
+    return _DOMINANT_LABELS.get(dominant, _DOMINANT_LABELS[None])
+
+
+# Named as a constant so apply_health_staleness (below) can compare against the
+# same literal health_staleness returns -- single source within this module
+# (server.api._with_health_staleness now delegates to apply_health_staleness
+# directly instead of keeping its own separate copy of this string).
+_STALE_UNKNOWN_MSG = "проверка недостоверна: данные старше 10 дней"
 
 
 def health_staleness(score_ts: str, now: datetime) -> Optional[str]:

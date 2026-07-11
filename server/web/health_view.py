@@ -93,7 +93,7 @@ def _state_distribution(rows: list[dict]) -> list[dict]:
     return [
         {
             "state": s,
-            "label": health._STATE_LABELS.get(s, s),
+            "label": health.state_label_for(s),
             "count": counts[s],
             "band": worst_band[s],
         }
@@ -117,11 +117,8 @@ def _heatmap(rows: list[dict]) -> dict:
     for r in ordered:
         device_ids.append(r["device_id"])
         hostnames.append(r.get("hostname") or "")
-        state_key = r.get("state") or "unknown"
-        state_labels.append(health._STATE_LABELS.get(state_key, health._STATE_LABELS["unknown"]))
-        dominant_labels.append(
-            health._DOMINANT_LABELS.get(r.get("dominant"), health._DOMINANT_LABELS[None])
-        )
+        state_labels.append(health.state_label_for(r.get("state")))
+        dominant_labels.append(health.dominant_label_for(r.get("dominant")))
         axis_bands = r.get("axis_bands") or {}
         row_z = [
             _band_ord(r.get("band")),
@@ -141,25 +138,22 @@ def _heatmap(rows: list[dict]) -> dict:
     }
 
 
-def _escalations(deltas: list[dict], fh_by_id: dict[str, dict]) -> list[dict]:
+def _escalations(deltas: list[dict], health_by_id: dict[str, dict]) -> list[dict]:
     """Join deltas against a {device_id: row} map from the SAME get_fleet_health()
     call (no extra query) -- adds dominant mechanism + Russian recommendation."""
     out = []
     for d in deltas:
-        dominant = (fh_by_id.get(d["device_id"]) or {}).get("dominant")
-        prev_key = d.get("prev_state") or "unknown"
-        state_key = d.get("state") or "unknown"
-        dlabel = health._DOMINANT_LABELS.get(dominant, health._DOMINANT_LABELS[None])
+        dominant = (health_by_id.get(d["device_id"]) or {}).get("dominant")
         out.append(
             {
                 "device_id": d["device_id"],
                 "hostname": d.get("hostname") or "",
                 "prev_state": d.get("prev_state"),
-                "prev_label": health._STATE_LABELS.get(prev_key, health._STATE_LABELS["unknown"]),
+                "prev_label": health.state_label_for(d.get("prev_state")),
                 "state": d.get("state"),
-                "state_label": health._STATE_LABELS.get(state_key, health._STATE_LABELS["unknown"]),
+                "state_label": health.state_label_for(d.get("state")),
                 "dominant": dominant,
-                "dominant_label": dlabel,
+                "dominant_label": health.dominant_label_for(dominant),
                 "action": health.action_for(dominant),
             }
         )
@@ -247,7 +241,7 @@ def fleet_health(request: Request):
     now = datetime.now(timezone.utc)
     rows = db.get_fleet_health()
     deltas = db.get_fleet_health_deltas()
-    fh_by_id = {r["device_id"]: r for r in rows}
+    health_by_id = {r["device_id"]: r for r in rows}
     model_by_id = {d["device_id"]: d.get("model") for d in db.get_devices()}
 
     worsening = _worsening_selection(rows)
@@ -265,7 +259,7 @@ def fleet_health(request: Request):
             "heatmap": _heatmap(rows),
             "worsening": worsening,
             "sparklines": sparklines,
-            "escalations": _escalations(deltas, fh_by_id),
+            "escalations": _escalations(deltas, health_by_id),
             "risk_models": _risk_models(rows, model_by_id),
         },
     )

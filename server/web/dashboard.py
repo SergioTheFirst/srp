@@ -411,6 +411,28 @@ def pipeline_health(request: Request):
     return _TEMPLATES.TemplateResponse(request, "pipeline.html", {"m": db.get_pipeline_metrics()})
 
 
+def _device_health_context(
+    d: dict, device_id: str
+) -> tuple[Optional[dict], Optional[str], list[dict]]:
+    """ssd3 Ф7 T7.2: device-hero health coordinates. Read-side staleness overlay
+    applied here (never baked into the stored blob -- Ф6's own design); None
+    when this device predates Ф6 / hasn't been recomputed since Ф6 shipped."""
+    scores = d.get("scores") or {}
+    health_raw = (scores.get("risk") or {}).get("health")
+    if health_raw is None:
+        return None, None, []
+    score_ts = scores.get("ts")
+    now = datetime.now(timezone.utc)
+    health = apply_health_staleness(health_raw, score_ts, now)
+    health_stale_msg = health_staleness(score_ts, now) if score_ts is not None else None
+    health_series = (
+        _health_index_series(db.get_score_series(device_id, limit=200))
+        if health.get("state") != "unknown"
+        else []
+    )
+    return health, health_stale_msg, health_series
+
+
 @router.get("/device/{device_id}", response_class=HTMLResponse)
 def device(request: Request, device_id: str):
     d = db.get_device(device_id)
@@ -438,22 +460,7 @@ def device(request: Request, device_id: str):
     # -- lets the device page fill IP/MAC gaps that historical telemetry hasn't
     # reported yet, from what the network map already knows about this MAC.
     card = db.get_identity_card(device_id=device_id)
-    # ssd3 Ф7 T7.2: device-hero health coordinates. Read-side staleness overlay
-    # applied here (never baked into the stored blob -- Ф6's own design); None
-    # when this device predates Ф6 / hasn't been recomputed since Ф6 shipped.
-    scores = d.get("scores") or {}
-    health_raw = (scores.get("risk") or {}).get("health")
-    score_ts = scores.get("ts")
-    health = None
-    health_stale_msg = None
-    health_series: list[dict] = []
-    if health_raw is not None:
-        now = datetime.now(timezone.utc)
-        health = apply_health_staleness(health_raw, score_ts, now)
-        if score_ts is not None:
-            health_stale_msg = health_staleness(score_ts, now)
-        if health.get("state") != "unknown":
-            health_series = _health_index_series(db.get_score_series(device_id, limit=200))
+    health, health_stale_msg, health_series = _device_health_context(d, device_id)
     return _TEMPLATES.TemplateResponse(
         request,
         "device.html",

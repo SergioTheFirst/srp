@@ -273,5 +273,6 @@ def test_hero_delta_7d_none_renders_neutral_dash_not_broken(client) -> None:
 def test_hero_sparkline_island_embeds_index_series(client) -> None:
     _seed("hero-13", "HERO-13", {"health": _real_health()})
     body = client.get("/device/hero-13").text
-    assert 'id="hero-health-series"' in body
-    assert "78.0" in body or "78" in body
+    frag = _hero_fragment(body)
+    assert 'id="hero-health-series"' in frag
+    assert "78.0" in frag
