@@ -2131,6 +2131,7 @@ _DEVICE_TABLES: tuple[str, ...] = (
     "devices",
     "heartbeat_rollup_daily",
     "event_rollup_daily",
+    "rule_episodes",
 )
 
 _SECONDS_PER_DAY = 86_400
