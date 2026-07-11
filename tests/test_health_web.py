@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from server import db
 from server.analytics import health
-from server.web import dashboard
+from server.web import dashboard, health_view
 
 pytestmark = pytest.mark.integration
 
@@ -101,7 +101,7 @@ def test_kpi_counts_critical_low_obs_stale_and_worsened() -> None:
         _hrow("d5", state="h0", score_ts=_iso(now - timedelta(days=6))),  # stale
     ]
     deltas = [{"device_id": "d3"}, {"device_id": "d5"}]
-    kpi = dashboard._kpi_counts(rows, deltas, now)
+    kpi = health_view._kpi_counts(rows, deltas, now)
     assert kpi["critical"] == 2
     assert kpi["worsened"] == 2
     assert kpi["low_obs"] == 1
@@ -110,7 +110,7 @@ def test_kpi_counts_critical_low_obs_stale_and_worsened() -> None:
 
 def test_state_distribution_buckets_none_state_into_unknown() -> None:
     rows = [_hrow("a", state="h4"), _hrow("b", state=None), _hrow("c", state="weird")]
-    dist = {d["state"]: d for d in dashboard._state_distribution(rows)}
+    dist = {d["state"]: d for d in health_view._state_distribution(rows)}
     assert dist["h4"]["count"] == 1
     assert dist["unknown"]["count"] == 2  # None + unrecognised both -> unknown
     assert dist["h4"]["label"] == health._STATE_LABELS["h4"]  # no re-translation
@@ -127,14 +127,14 @@ def test_state_distribution_colour_is_worst_real_band_not_guessed_from_state() -
         _hrow("h2-mixed-a", state="h2", band="good"),
         _hrow("h2-mixed-b", state="h2", band="bad"),  # one bad device -> whole bucket reads bad
     ]
-    dist = {d["state"]: d for d in dashboard._state_distribution(rows)}
+    dist = {d["state"]: d for d in health_view._state_distribution(rows)}
     assert dist["h1"]["band"] == "good"  # both real devices are good -> honest, not "watch"
     assert dist["h2"]["band"] == "bad"  # worst of {good, bad} is bad -> never hides the bad one
 
 
 def test_state_distribution_empty_bucket_defaults_to_unknown_band() -> None:
     rows = [_hrow("a", state="h0", band="good")]
-    dist = {d["state"]: d for d in dashboard._state_distribution(rows)}
+    dist = {d["state"]: d for d in health_view._state_distribution(rows)}
     assert dist["h4"]["count"] == 0
     assert dist["h4"]["band"] == "unknown"  # no devices -> no real band to report
 
@@ -148,7 +148,7 @@ def test_heatmap_sorts_worst_state_first_then_index_asc() -> None:
         _hrow("crit_hi", state="h4", index=30.0),
         _hrow("crit_lo", state="h4", index=10.0),  # same state, lower index => first
     ]
-    hm = dashboard._heatmap(rows)
+    hm = health_view._heatmap(rows)
     assert hm["device_ids"][:3] == ["crit_lo", "crit_hi", "good1"]
 
 
@@ -169,7 +169,7 @@ def test_heatmap_z_is_discrete_band_ordinals_in_column_order() -> None:
             "trajectory": "unknown",
         },
     )
-    hm = dashboard._heatmap([row])
+    hm = health_view._heatmap([row])
     # cols: Состояние | D | R | O | storage | aging | os | battery | disk_fill | network | trajectory
     assert hm["z"][0] == [1, 2, 0, 3, 2, 0, 1, 0, 0, 0, 3]
     assert len(hm["cols"]) == 11
@@ -178,7 +178,7 @@ def test_heatmap_z_is_discrete_band_ordinals_in_column_order() -> None:
 
 def test_heatmap_caps_at_100_rows() -> None:
     rows = [_hrow(f"d{i}", state="h2", index=float(i)) for i in range(130)]
-    assert len(dashboard._heatmap(rows)["z"]) == 100
+    assert len(health_view._heatmap(rows)["z"]) == 100
 
 
 # --------------------------------------------------------------------------- #
@@ -189,7 +189,7 @@ def test_escalations_join_dominant_and_action() -> None:
         {"device_id": "e1", "hostname": "ESC-1", "state": "h3", "prev_state": "h1"},
     ]
     fh_by_id = {"e1": _hrow("e1", dominant="storage")}
-    out = dashboard._escalations(deltas, fh_by_id)
+    out = health_view._escalations(deltas, fh_by_id)
     assert len(out) == 1
     e = out[0]
     assert e["hostname"] == "ESC-1"
@@ -210,7 +210,7 @@ def test_risk_models_ranks_worst_mean_index_first_and_skips_none() -> None:
         _hrow("d", index=None),  # None must not zero the mean for model Y
     ]
     model_by_id = {"a": "X", "b": "X", "c": "Y", "d": "Y"}
-    models = dashboard._risk_models(rows, model_by_id)
+    models = health_view._risk_models(rows, model_by_id)
     assert [m["model"] for m in models] == ["X", "Y"]  # 30 < 90 -> X first
     assert models[0]["mean_index"] == 30.0
     assert models[1]["mean_index"] == 90.0  # None row skipped, not averaged as 0
@@ -228,7 +228,7 @@ def test_risk_models_carries_mean_drO_each_independently_skipping_none() -> None
         _hrow("b", index=30.0, damage=60.0, resilience=None, observability_pct=90.0),
     ]
     model_by_id = {"a": "Z", "b": "Z"}
-    models = dashboard._risk_models(rows, model_by_id)
+    models = health_view._risk_models(rows, model_by_id)
     assert len(models) == 1
     z = models[0]
     assert z["model"] == "Z"
@@ -242,7 +242,7 @@ def test_risk_models_carries_mean_drO_each_independently_skipping_none() -> None
 def test_risk_models_mean_drO_is_none_when_no_device_has_that_field() -> None:
     rows = [_hrow("a", index=50.0, damage=None)]
     model_by_id = {"a": "W"}
-    models = dashboard._risk_models(rows, model_by_id)
+    models = health_view._risk_models(rows, model_by_id)
     assert models[0]["mean_damage"] is None  # no device contributed -> None, not 0
 
 
@@ -255,7 +255,7 @@ def test_index_sparkline_skips_missing_health_key() -> None:
         {"risk": {}},  # pre-Ф6 row: no health key -> gap, not 0
         {"risk": {"health": {"index": 80.0}}},
     ]
-    spark = dashboard._index_sparkline(series)
+    spark = health_view._index_sparkline(series)
     assert spark["count"] == 2  # only the two real points
     # a fabricated index=0 (from the missing row) would drag a y to the bottom edge;
     # with the row skipped, both plotted y's come from 60/80 (upper half of 0..100).
@@ -270,7 +270,7 @@ def test_worsening_selection_only_negative_delta_most_negative_first() -> None:
         _hrow("w3", delta_7d=3.0),  # improving -> excluded
         _hrow("w4", delta_7d=None),  # no delta -> excluded
     ]
-    sel = dashboard._worsening_selection(rows)
+    sel = health_view._worsening_selection(rows)
     assert [r["device_id"] for r in sel] == ["w2", "w1"]
 
 
