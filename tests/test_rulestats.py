@@ -496,18 +496,31 @@ def test_recurrence_hit_mult_composes_reinforcement_multiplicatively():
 
 
 def test_reinforcement_does_not_leak_onto_a_fourth_rule():
-    """Aggressively boosting all 3 reinforced rules must not change a 4th,
-    untouched rule's (chain_stage2) contribution by even one bit."""
-    disk = {"disk": "PhysicalDisk0", "reallocated_sectors": 150}
-    chain = SimpleNamespace(stage=2, counts=None, burstiness=None)
-    boosted = {k: {"confirmed": 15, "refuted": 0} for k in rulestats.RULE_KEYS}  # all at ceiling
+    """Aggressively boosting all 3 reinforced rules to their 1.5x ceiling must
+    not change a 4th, untouched rule's (predict_fail) contribution by even one
+    bit -- while a reinforced rule (pending_gt10) genuinely fires alongside it
+    in the SAME call, so this can't pass vacuously the way an all-quiet disk
+    (nothing in RULE_KEYS ever triggered) would. predict_fail is chosen over
+    chain_stage2 here specifically because chain.stage>=1 would also arm the
+    unrelated pending+chain synergy rule once pending>0 is added -- muddying
+    which rule's isolation is actually being proven; predict_fail has no such
+    interaction with pending_gt10."""
+    disk = {"disk": "PhysicalDisk0", "smart_predict_fail": True, "smart_attrs": {"197": 15}}
+    boosted = {
+        k: {"confirmed": 15, "refuted": 0} for k in rulestats.RULE_KEYS
+    }  # all at 1.5x ceiling
 
-    with_boost = _score_disk(disk, None, chain=chain, rule_stats=boosted)
-    without = _score_disk(disk, None, chain=chain, rule_stats=None)
+    _value_boost, factors_boost, _coords_boost = _score_disk(disk, None, rule_stats=boosted)
+    _value_plain, factors_plain, _coords_plain = _score_disk(disk, None, rule_stats=None)
 
-    assert with_boost == without
-    assert with_boost[2]["flags"] == ["chain_stage2"]
-    assert with_boost[0] == pytest.approx(60 * 1.25)
+    predict_fail_factor = {"label": "прошивка предсказывает отказ диска", "delta": 70.0}
+    assert predict_fail_factor in factors_boost
+    assert predict_fail_factor in factors_plain
+
+    # sanity: the boost DID reach pending_gt10 in this same call -- proves the
+    # isolation above is real, not an artifact of nothing firing at all.
+    assert any("подтверждено" in f["label"] for f in factors_boost)
+    assert not any("подтверждено" in f["label"] for f in factors_plain)
 
 
 # --------------------------------------------------------------------------- #
