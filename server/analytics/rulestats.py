@@ -11,6 +11,16 @@ RULE_KEYS = ("pending_high", "media_recurrence", "early_chain")
 # this module only needs the names for documentation/validation, not the mapping
 # itself -- do not hardcode flag strings here, that's Task 2's concern).
 
+# Russian labels for the /pipeline dashboard and storage.py's lineage factors --
+# single source of truth so the same rule has the same name everywhere. Echo the
+# EXISTING factor labels in storage.py as closely as possible (same concept,
+# same words) rather than inventing new phrasing.
+RULE_LABELS: dict[str, str] = {
+    "pending_high": "повышенное число pending-секторов",
+    "media_recurrence": "рецидив дефектов диска",
+    "early_chain": "ранние сигналы без повреждений",
+}
+
 # Public (no leading underscore): db.py's run_rulestats_scan derives its history
 # lookback from REFUTE_WINDOW (the longer of the two) so the two files can't drift
 # apart on "how many days of history does a full resolution need".

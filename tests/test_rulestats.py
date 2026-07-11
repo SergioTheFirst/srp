@@ -10,14 +10,19 @@ record_rule_outcomes/run_rulestats_scan own dedup via INSERT OR IGNORE.
 scan_device/reinforcement tests are pure-function (no DB). The
 get_score_series(since=...)/run_rulestats_scan/record_rule_outcomes tests go
 through server.db, pure SQLite -- no network, no FastAPI.
+
+Task 2: application-layer tests -- storage.py's 3 reinforcement call sites
+(_score_disk) and get_pipeline_metrics()'s rule_stats surfacing.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from server.analytics import rulestats
+from server.analytics.storage import _score_disk
 
 pytestmark = pytest.mark.unit
 
@@ -55,6 +60,13 @@ def _pairs(outcomes):
     """Drop end_ts from scan_device's (rule_key, outcome, end_ts) triples, for
     tests that only care about which (rule_key, outcome) pairs were emitted."""
     return [(rule_key, outcome) for rule_key, outcome, _end_ts in outcomes]
+
+
+# --------------------------------------------------------------------------- #
+# RULE_LABELS -- Task 2: single source of truth for /pipeline + storage.py lineage.
+# --------------------------------------------------------------------------- #
+def test_rule_labels_covers_exactly_the_rule_keys():
+    assert set(rulestats.RULE_LABELS) == set(rulestats.RULE_KEYS)
 
 
 # --------------------------------------------------------------------------- #
@@ -395,3 +407,123 @@ def test_record_rule_outcomes_rejects_unknown_outcome(db_init):
         db_init.record_rule_outcomes(
             [("pending_high", "maybe", "dev-1", "2026-01-01T00:00:00+00:00")]
         )
+
+
+# --------------------------------------------------------------------------- #
+# Task 2 -- storage.py application layer: _score_disk's 3 reinforcement call
+# sites (pending_gt10 / recurrence / early_events). The byte-for-byte
+# regression pin below is the stop-gate this whole ssd3 phase exists to satisfy.
+# --------------------------------------------------------------------------- #
+def _recurring_disk_series(serial_hash="abc123"):
+    """Two readings >=7d apart with a growing attr 197 -- trips _has_recurrence."""
+    return [
+        {
+            "serial_hash": serial_hash,
+            "received_at": "2026-01-01T00:00:00+00:00",
+            "smart_attrs": {"197": 5},
+        },
+        {
+            "serial_hash": serial_hash,
+            "received_at": "2026-01-10T00:00:00+00:00",
+            "smart_attrs": {"197": 15},
+        },
+    ]
+
+
+def test_empty_or_none_rule_stats_reproduces_byte_for_byte_pre_f8_result():
+    """DoD #7 stop-gate, this task's most important test: until the fleet has
+    enough confirmed/refuted history, the storage engine's output must be
+    IDENTICAL to its pre-Ф8 behavior -- not just "close", byte-for-byte. Seeds
+    one disk that trips all 3 reinforced rules at once (pending>10 AND
+    recurrence AND an early-only chain) so this single test covers all 3 call
+    sites, not just one."""
+    disk = {"disk": "PhysicalDisk0", "serial_hash": "abc123", "smart_attrs": {"197": 15}}
+    disk_series = _recurring_disk_series()
+    chain = SimpleNamespace(stage=0, counts={"early": 1, "damage": 0}, burstiness=None)
+
+    # no rule_stats kwarg at all -- the exact call shape of every pre-Task-2 caller.
+    baseline = _score_disk(disk, None, disk_series=disk_series, chain=chain)
+    none_result = _score_disk(disk, None, disk_series=disk_series, chain=chain, rule_stats=None)
+    empty_result = _score_disk(disk, None, disk_series=disk_series, chain=chain, rule_stats={})
+    zeroed = {k: {"confirmed": 0, "refuted": 0} for k in rulestats.RULE_KEYS}
+    zeroed_result = _score_disk(disk, None, disk_series=disk_series, chain=chain, rule_stats=zeroed)
+
+    assert baseline == none_result == empty_result == zeroed_result
+    # sanity: the pin isn't vacuous -- all 3 reinforced rules actually fired.
+    assert baseline[2]["flags"] == ["pending_gt10", "recurrence", "early_events"]
+
+
+def test_pending_high_boost_scales_axis_and_coordinate():
+    disk = {"disk": "PhysicalDisk0", "smart_attrs": {"197": 15}}
+    rule_stats = {"pending_high": {"confirmed": 5, "refuted": 0}}  # ratio=1.0 -> boost 1.2x
+
+    value, factors, coords = _score_disk(disk, None, rule_stats=rule_stats)
+
+    assert value == 60 * 1.2
+    assert coords["damage"] == 60 * 1.2
+    labels = " ".join(f["label"] for f in factors)
+    assert "подтверждено" in labels
+    assert "5" in labels
+
+
+def test_pending_high_mute_scales_axis_and_coordinate():
+    disk = {"disk": "PhysicalDisk0", "smart_attrs": {"197": 15}}
+    rule_stats = {"pending_high": {"confirmed": 0, "refuted": 10}}  # ratio=0.0 -> mute 0.8x
+
+    value, factors, coords = _score_disk(disk, None, rule_stats=rule_stats)
+
+    assert value == 60 * 0.8
+    assert coords["damage"] == 60 * 0.8
+    labels = " ".join(f["label"] for f in factors)
+    assert "приглушено" in labels
+
+
+def test_recurrence_hit_mult_composes_reinforcement_multiplicatively():
+    """The EFFECTIVE axis multiplier must be 1.3 * m, not 1.3 unscaled and not
+    m alone -- recurrence is the only multiplier in play here so max(multipliers)
+    is unambiguous."""
+    disk = {"disk": "PhysicalDisk0", "serial_hash": "abc123", "reallocated_sectors": 150}
+    disk_series = _recurring_disk_series()
+    rule_stats = {"media_recurrence": {"confirmed": 5, "refuted": 0}}  # boost 1.2x
+
+    value, _factors, _coords = _score_disk(
+        disk, None, disk_series=disk_series, rule_stats=rule_stats
+    )
+
+    # 150 realloc sectors -> flat +60 (legacy, unaffected); recurrence's own
+    # multiplier is 1.3 * 1.2, applied once at the end.
+    assert value == pytest.approx(60 * (1.3 * 1.2))
+
+
+def test_reinforcement_does_not_leak_onto_a_fourth_rule():
+    """Aggressively boosting all 3 reinforced rules must not change a 4th,
+    untouched rule's (chain_stage2) contribution by even one bit."""
+    disk = {"disk": "PhysicalDisk0", "reallocated_sectors": 150}
+    chain = SimpleNamespace(stage=2, counts=None, burstiness=None)
+    boosted = {k: {"confirmed": 15, "refuted": 0} for k in rulestats.RULE_KEYS}  # all at ceiling
+
+    with_boost = _score_disk(disk, None, chain=chain, rule_stats=boosted)
+    without = _score_disk(disk, None, chain=chain, rule_stats=None)
+
+    assert with_boost == without
+    assert with_boost[2]["flags"] == ["chain_stage2"]
+    assert with_boost[0] == pytest.approx(60 * 1.25)
+
+
+# --------------------------------------------------------------------------- #
+# get_pipeline_metrics() -- rule_stats always shows all 3 RULE_KEYS, in order,
+# even with an empty table (the plan is explicit this is the expected starting
+# state, not something to hide).
+# --------------------------------------------------------------------------- #
+def test_get_pipeline_metrics_rule_stats_shape_with_empty_table(db_init):
+    db = db_init
+    metrics = db.get_pipeline_metrics()
+
+    rule_stats = metrics["rule_stats"]
+    assert len(rule_stats) == 3
+    assert [r["rule_key"] for r in rule_stats] == list(rulestats.RULE_KEYS)
+    for r in rule_stats:
+        assert r["confirmed"] == 0
+        assert r["refuted"] == 0
+        assert r["multiplier"] == 1.0
+        assert r["label"] == rulestats.RULE_LABELS[r["rule_key"]]

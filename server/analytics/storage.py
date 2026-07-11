@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from server.analytics.rulestats import RULE_LABELS, reinforcement
 from server.scoring.score100 import (
     Direction,
     Factor,
@@ -133,6 +134,7 @@ def _score_disk(
     disk_series: Optional[list[dict[str, Any]]] = None,
     chain: Optional[Any] = None,
     trends: Optional[dict[str, Any]] = None,
+    rule_stats: Optional[dict[str, dict[str, int]]] = None,
 ) -> tuple[float, list[Factor], dict[str, Any]]:
     """Risk 0..100 for one disk (higher = closer to failure) + its (D, R) tags.
 
@@ -187,6 +189,26 @@ def _score_disk(
             resilience_loss += coord_pts
         if flag:
             flags.append(flag)
+
+    def _reinforcement_for(rule_key: str) -> float:
+        """Reinforcement multiplier for rule_key (1.0 when rule_stats is None/empty/
+        below threshold -- see rulestats.reinforcement). When the multiplier is not
+        neutral, also records a zero-score lineage factor so the dashboard shows
+        WHY a rule's contribution changed, not just that it did."""
+        stats = (rule_stats or {}).get(rule_key, {})
+        mult = reinforcement(rule_key, stats)
+        if mult > 1.0:
+            hit(
+                f"правило «{RULE_LABELS[rule_key]}» подтверждено парком: "
+                f"{stats.get('confirmed', 0)} случаев",
+                0.0,
+            )
+        elif mult < 1.0:
+            hit(
+                f"правило «{RULE_LABELS[rule_key]}» приглушено: на этом парке не подтверждается",
+                0.0,
+            )
+        return mult
 
     # ----- legacy rules (byte-for-byte unchanged; T2.4 regression pin) -----
     realloc = _num(disk, "reallocated_sectors")
@@ -254,7 +276,14 @@ def _score_disk(
     attrs = attrs if isinstance(attrs, dict) else {}
     pending = _num(attrs, "197")
     if pending is not None and pending > 10:
-        hit(f"{int(pending)} секторов в ожидании переназначения", 60, "D", 60, "pending_gt10")
+        m = _reinforcement_for("pending_high")
+        hit(
+            f"{int(pending)} секторов в ожидании переназначения",
+            60 * m,
+            "D",
+            60 * m,
+            "pending_gt10",
+        )
     elif pending is not None and pending > 0:
         hit(f"{int(pending)} секторов в ожидании переназначения", 45, "D", 45, "damage_present")
 
@@ -338,7 +367,8 @@ def _score_disk(
         disk_series and disk_series[0].get("serial_hash") == disk.get("serial_hash")
     )
     if is_target_disk and disk_series and _has_recurrence(disk_series):
-        hit_mult("рецидив дефектов диска (промежуток ≥7 дней)", 1.3, "R", 30, "recurrence")
+        m = _reinforcement_for("media_recurrence")
+        hit_mult("рецидив дефектов диска (промежуток ≥7 дней)", 1.3 * m, "R", 30 * m, "recurrence")
 
     realloc_t = trends.get("smart_realloc") if trends else None
     pending_t = trends.get("smart_pending") if trends else None
@@ -403,7 +433,8 @@ def _score_disk(
         and (counts.get("early") or 0) > 0
         and (counts.get("damage") or 0) == 0
     ):
-        hit("ранние сигналы (ретраи) без видимых повреждений", 0, "R", 15, "early_events")
+        m = _reinforcement_for("early_chain")
+        hit("ранние сигналы (ретраи) без видимых повреждений", 0 * m, "R", 15 * m, "early_events")
 
     # Bathtub context (§1.2: weak on its own) -- only a tie-breaker once
     # something else in THIS (ssd3) pass already fired.
@@ -455,6 +486,7 @@ def compute_storage_risk(
     disk_series: Optional[list[dict[str, Any]]] = None,
     chain: Optional[Any] = None,
     trends: Optional[dict[str, Any]] = None,
+    rule_stats: Optional[dict[str, dict[str, int]]] = None,
 ) -> Score100:
     """Deterministic storage-failure risk for one device, worst disk wins.
 
@@ -490,7 +522,12 @@ def compute_storage_risk(
             continue
         smart_disks += 1
         value, factors, coords = _score_disk(
-            disk, heartbeat, disk_series=disk_series, chain=chain, trends=trends
+            disk,
+            heartbeat,
+            disk_series=disk_series,
+            chain=chain,
+            trends=trends,
+            rule_stats=rule_stats,
         )
         if worst_value is None or value > worst_value:
             worst_value = value

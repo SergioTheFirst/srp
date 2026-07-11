@@ -3850,10 +3850,32 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "SELECT ts, action FROM maintenance_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
+        # ssd3 Ф8: fleet rule self-reinforcement counts for the /pipeline table.
+        rule_stats_rows = conn.execute(
+            "SELECT rule_key, confirmed, refuted FROM rule_stats"
+        ).fetchall()
+
     src_by_state: dict[str, int] = {r[0]: r[1] for r in src_rows}
     gate_pass = sum(src_by_state.get(s, 0) for s in _GATE_PASS_STATES)
     gate_fail = sum(src_by_state.get(s, 0) for s in _GATE_FAIL_STATES)
     not_applicable = src_by_state.get("not_applicable", 0)
+
+    # Always all 3 RULE_KEYS, in order, even with zero rows -- a closed, fixed
+    # list; empty history / multiplier=1.0 is the expected starting state.
+    rule_stats_by_key = {
+        r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]}
+        for r in rule_stats_rows
+    }
+    rule_stats_display = [
+        {
+            "rule_key": key,
+            "label": rulestats.RULE_LABELS[key],
+            "confirmed": rule_stats_by_key.get(key, {}).get("confirmed", 0),
+            "refuted": rule_stats_by_key.get(key, {}).get("refuted", 0),
+            "multiplier": rulestats.reinforcement(key, rule_stats_by_key.get(key, {})),
+        }
+        for key in rulestats.RULE_KEYS
+    ]
 
     return {
         "ts": _now_iso(),
@@ -3885,6 +3907,7 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "last_maintenance_ts": maint_row["ts"] if maint_row else None,
             "last_maintenance_action": maint_row["action"] if maint_row else None,
         },
+        "rule_stats": rule_stats_display,
     }
 
 
