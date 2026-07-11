@@ -116,12 +116,22 @@
     <tr>
       <th>Модель</th>
       <th>Устройств</th>
-      <th title="Средняя проекция (сводка координат D, R, O) по устройствам этой модели — не самостоятельный показатель">Ср. проекция</th>
+      <th title="Средние Повреждения (D) по устройствам этой модели">D</th>
+      <th title="Средняя Устойчивость (R) по устройствам этой модели">R</th>
+      <th title="Средняя Видимость (O) по устройствам этой модели">O</th>
+      <th title="Средняя проекция (сводка координат D, R, O выше) по устройствам этой модели — не самостоятельный показатель">Ср. проекция</th>
     </tr>
   </thead>
   <tbody>
   {% for m in risk_models %}
-    <tr><td>{{ m.model }}</td><td>{{ m.count }}</td><td>{{ "%.0f"|format(m.mean_index) }}</td></tr>
+    <tr>
+      <td>{{ m.model }}</td>
+      <td>{{ m.count }}</td>
+      <td>{{ "%.0f"|format(m.mean_damage) if m.mean_damage is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_resilience) if m.mean_resilience is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_observability) if m.mean_observability is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_index) }}</td>
+    </tr>
   {% endfor %}
   </tbody>
 </table>
@@ -141,7 +151,6 @@
   var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: []};
   var sd = data.state_dist || [];
   var BAND_WORDS = ["хорошо", "наблюдение", "плохо", "неизвестно"];
-  var STATE_BAND = {h0: "good", h1: "watch", h2: "watch", h3: "bad", h4: "bad", unknown: "unknown"};
 
   function drawDonut(css) {
     var total = sd.reduce(function (s, r) { return s + r.count; }, 0);
@@ -152,13 +161,18 @@
       bad: css.getPropertyValue("--bad").trim() || "#ffe000",
       unknown: css.getPropertyValue("--na").trim() || "#5878a0"
     };
+    // Colour = the worst REAL band among that bucket's devices (computed server-side
+    // in _state_distribution from get_fleet_health()'s own band field) -- never a
+    // state->band guess: _reconcile clamps no band by state, so e.g. an h1 device
+    // can legitimately be band="good", and a static state->colour table would paint
+    // the whole slice "watch" regardless of what the real devices show.
     Plotly.newPlot(elDonut, [{
       type: "pie",
       hole: 0.6,
       sort: false,
       labels: sd.map(function (s) { return s.label; }),
       values: sd.map(function (s) { return s.count; }),
-      marker: { colors: sd.map(function (s) { return bandHex[STATE_BAND[s.state] || "unknown"]; }) },
+      marker: { colors: sd.map(function (s) { return bandHex[s.band] || bandHex.unknown; }) },
       textinfo: "label+value",
       hovertemplate: "%{label}: %{value}<extra></extra>",
       hoverlabel: srpHoverLabel()

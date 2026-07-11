@@ -407,17 +407,30 @@ def _kpi_counts(rows: list[dict], deltas: list[dict], now: datetime) -> dict:
 
 
 _STATE_DIST_ORDER = ("h4", "h3", "h2", "h1", "h0", "unknown")
+_BAND_SEVERITY = {"bad": 2, "watch": 1, "good": 0}  # higher = worse; "unknown" = no vote
 
 
 def _state_distribution(rows: list[dict]) -> list[dict]:
-    """Fleet counts per state (h0..h4 + unknown) for the donut KPI tile. Any state
-    outside the known vocabulary (None, foreign value) buckets into "unknown"."""
+    """Fleet counts + worst-actual-band per state (h0..h4 + unknown; unrecognised/
+    None state -> "unknown"). Colour = the WORST ``band`` actually present in that
+    bucket -- never guessed from ``state`` (``_reconcile`` clamps no band by state,
+    so e.g. an h1 device can legitimately be band="good")."""
     counts = dict.fromkeys(_STATE_DIST_ORDER, 0)
+    worst_band: dict[str, str] = dict.fromkeys(_STATE_DIST_ORDER, "unknown")
     for r in rows:
         state = r.get("state")
-        counts[state if state in counts else "unknown"] += 1
+        key = state if state in counts else "unknown"
+        counts[key] += 1
+        band = r.get("band") or "unknown"
+        if _BAND_SEVERITY.get(band, -1) > _BAND_SEVERITY.get(worst_band[key], -1):
+            worst_band[key] = band
     return [
-        {"state": s, "label": health._STATE_LABELS.get(s, s), "count": counts[s]}
+        {
+            "state": s,
+            "label": health._STATE_LABELS.get(s, s),
+            "count": counts[s],
+            "band": worst_band[s],
+        }
         for s in _STATE_DIST_ORDER
     ]
 
@@ -467,10 +480,10 @@ def _escalations(deltas: list[dict], fh_by_id: dict[str, dict]) -> list[dict]:
     call (no extra query) -- adds dominant mechanism + Russian recommendation."""
     out = []
     for d in deltas:
-        fh = fh_by_id.get(d["device_id"]) or {}
-        dominant = fh.get("dominant")
+        dominant = (fh_by_id.get(d["device_id"]) or {}).get("dominant")
         prev_key = d.get("prev_state") or "unknown"
         state_key = d.get("state") or "unknown"
+        dlabel = health._DOMINANT_LABELS.get(dominant, health._DOMINANT_LABELS[None])
         out.append(
             {
                 "device_id": d["device_id"],
@@ -480,31 +493,51 @@ def _escalations(deltas: list[dict], fh_by_id: dict[str, dict]) -> list[dict]:
                 "state": d.get("state"),
                 "state_label": health._STATE_LABELS.get(state_key, health._STATE_LABELS["unknown"]),
                 "dominant": dominant,
-                "dominant_label": health._DOMINANT_LABELS.get(
-                    dominant, health._DOMINANT_LABELS[None]
-                ),
+                "dominant_label": dlabel,
                 "action": health.action_for(dominant),
             }
         )
     return out
 
 
-def _risk_models(rows: list[dict], model_by_id: dict[str, Optional[str]]) -> list[dict]:
-    """Top-3 models by mean index (ascending -- lower = worse), joined against a
-    {device_id: model} lookup. index=None rows are skipped so a blind device never
-    drags a model's mean toward 0."""
+def _field_means(
+    rows: list[dict], model_by_id: dict[str, Optional[str]], field: str
+) -> dict[str, tuple[float, int]]:
+    """(mean, count) of *field* per model, skipping rows where THAT field is None --
+    called once per field so each coordinate's mean is independent (one device's gap
+    in one field never drags another field's average toward 0)."""
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
     for r in rows:
         model = model_by_id.get(r["device_id"])
-        idx = r.get("index")
-        if not model or idx is None:
+        v = r.get(field)
+        if not model or v is None:
             continue
-        sums[model] = sums.get(model, 0.0) + idx
+        sums[model] = sums.get(model, 0.0) + v
         counts[model] = counts.get(model, 0) + 1
-    means: dict[str, float] = {m: round(sums[m] / counts[m], 1) for m in sums}
-    ranked_models = sorted(means, key=lambda m: means[m])[:3]
-    return [{"model": m, "mean_index": means[m], "count": counts[m]} for m in ranked_models]
+    return {m: (round(sums[m] / counts[m], 1), counts[m]) for m in sums}
+
+
+def _risk_models(rows: list[dict], model_by_id: dict[str, Optional[str]]) -> list[dict]:
+    """Top-3 models by mean index (ascending -- lower = worse). K1: the projection
+    never appears alone -- mean Damage/Resilience/Observability ride alongside it,
+    each independently skipping devices missing that one field (_field_means)."""
+    idx = _field_means(rows, model_by_id, "index")
+    dmg = _field_means(rows, model_by_id, "damage")
+    res = _field_means(rows, model_by_id, "resilience")
+    obs = _field_means(rows, model_by_id, "observability_pct")
+    ranked_models = sorted(idx, key=lambda m: idx[m][0])[:3]
+    return [
+        {
+            "model": m,
+            "mean_index": idx[m][0],
+            "count": idx[m][1],
+            "mean_damage": dmg[m][0] if m in dmg else None,
+            "mean_resilience": res[m][0] if m in res else None,
+            "mean_observability": obs[m][0] if m in obs else None,
+        }
+        for m in ranked_models
+    ]
 
 
 def _worsening_selection(rows: list[dict], limit: int = 10) -> list[dict]:

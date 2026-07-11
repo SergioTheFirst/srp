@@ -116,6 +116,29 @@ def test_state_distribution_buckets_none_state_into_unknown() -> None:
     assert dist["h4"]["label"] == health._STATE_LABELS["h4"]  # no re-translation
 
 
+def test_state_distribution_colour_is_worst_real_band_not_guessed_from_state() -> None:
+    """_reconcile clamps no band by state -- h1 can legitimately be band="good".
+    A state->band guess table would paint the whole h1 slice "watch" regardless of
+    what the real devices show; the donut must colour by the WORST band actually
+    present in that bucket instead."""
+    rows = [
+        _hrow("h1-good", state="h1", band="good"),
+        _hrow("h1-good-2", state="h1", band="good"),
+        _hrow("h2-mixed-a", state="h2", band="good"),
+        _hrow("h2-mixed-b", state="h2", band="bad"),  # one bad device -> whole bucket reads bad
+    ]
+    dist = {d["state"]: d for d in dashboard._state_distribution(rows)}
+    assert dist["h1"]["band"] == "good"  # both real devices are good -> honest, not "watch"
+    assert dist["h2"]["band"] == "bad"  # worst of {good, bad} is bad -> never hides the bad one
+
+
+def test_state_distribution_empty_bucket_defaults_to_unknown_band() -> None:
+    rows = [_hrow("a", state="h0", band="good")]
+    dist = {d["state"]: d for d in dashboard._state_distribution(rows)}
+    assert dist["h4"]["count"] == 0
+    assert dist["h4"]["band"] == "unknown"  # no devices -> no real band to report
+
+
 # --------------------------------------------------------------------------- #
 # Heatmap row build
 # --------------------------------------------------------------------------- #
@@ -194,6 +217,35 @@ def test_risk_models_ranks_worst_mean_index_first_and_skips_none() -> None:
     assert models[1]["count"] == 1
 
 
+def test_risk_models_carries_mean_drO_each_independently_skipping_none() -> None:
+    """K1: the projection must never appear without the three coordinates next to
+    it. Each field's mean is independent -- a device missing ONE coordinate must
+    not affect another coordinate's average for the same model (a row-level "skip
+    the whole device if any field is None" implementation would wrongly zero out
+    every mean here, since every device below is missing a different field)."""
+    rows = [
+        _hrow("a", index=50.0, damage=None, resilience=80.0, observability_pct=70.0),
+        _hrow("b", index=30.0, damage=60.0, resilience=None, observability_pct=90.0),
+    ]
+    model_by_id = {"a": "Z", "b": "Z"}
+    models = dashboard._risk_models(rows, model_by_id)
+    assert len(models) == 1
+    z = models[0]
+    assert z["model"] == "Z"
+    assert z["count"] == 2  # both devices have a valid index
+    assert z["mean_index"] == 40.0  # (50 + 30) / 2
+    assert z["mean_damage"] == 60.0  # only b's damage counted (a's is None)
+    assert z["mean_resilience"] == 80.0  # only a's resilience counted (b's is None)
+    assert z["mean_observability"] == 80.0  # (70 + 90) / 2, both present
+
+
+def test_risk_models_mean_drO_is_none_when_no_device_has_that_field() -> None:
+    rows = [_hrow("a", index=50.0, damage=None)]
+    model_by_id = {"a": "W"}
+    models = dashboard._risk_models(rows, model_by_id)
+    assert models[0]["mean_damage"] is None  # no device contributed -> None, not 0
+
+
 # --------------------------------------------------------------------------- #
 # Index sparkline (skips pre-Ф6 rows with no health key, never treats as 0)
 # --------------------------------------------------------------------------- #
@@ -205,7 +257,6 @@ def test_index_sparkline_skips_missing_health_key() -> None:
     ]
     spark = dashboard._index_sparkline(series)
     assert spark["count"] == 2  # only the two real points
-    assert "0" not in [p.split(",")[1] for p in spark["points"].split()] or True  # numeric-only
     # a fabricated index=0 (from the missing row) would drag a y to the bottom edge;
     # with the row skipped, both plotted y's come from 60/80 (upper half of 0..100).
     ys = [float(p.split(",")[1]) for p in spark["points"].split()]
