@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from server.analytics import rulestats
 from server.analytics.oui import normalize_mac
 
 _db_path: Optional[Path] = None
@@ -364,6 +365,12 @@ CREATE TABLE IF NOT EXISTS maintenance_log (
   ts     TEXT NOT NULL,
   action TEXT NOT NULL,
   detail TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_stats (
+  rule_key   TEXT PRIMARY KEY,  -- closed list: pending_high|media_recurrence|early_chain
+  confirmed  INTEGER NOT NULL DEFAULT 0,
+  refuted    INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
 );
 """
 
@@ -1186,6 +1193,83 @@ def _log_maintenance(action: str, detail: Optional[str]) -> None:
             "INSERT INTO maintenance_log (ts, action, detail) VALUES (?,?,?)",
             (_now_iso(), action, detail),
         )
+
+
+def get_rule_stats() -> dict[str, dict[str, int]]:
+    """All rule_stats rows, keyed by rule_key. Missing rule_keys are simply
+    absent from the returned dict (caller/rulestats.reinforcement treats a
+    missing key the same as {"confirmed": 0, "refuted": 0})."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT rule_key, confirmed, refuted FROM rule_stats").fetchall()
+    return {r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]} for r in rows}
+
+
+def record_rule_outcomes(outcomes: list[tuple[str, str]]) -> None:
+    """Upsert (rule_key, 'confirmed'|'refuted') pairs from a scan into rule_stats,
+    incrementing the matching counter. outcomes may repeat the same rule_key
+    multiple times in one call (one fleet sweep can resolve several episodes
+    for the same rule across different devices) -- aggregate in Python before
+    writing, one UPDATE/INSERT per distinct rule_key, not one per outcome.
+
+    rule_key is validated against rulestats.RULE_KEYS (a closed 3-value Python
+    literal, never SQL-interpolated from external input) and outcome against
+    {"confirmed", "refuted"} before anything is written -- scan_device can only
+    ever emit these values by construction, so a mismatch here means a bug in
+    scan_device, not bad input to silently tolerate.
+    """
+    increments: dict[str, dict[str, int]] = {}
+    for rule_key, outcome in outcomes:
+        if rule_key not in rulestats.RULE_KEYS:
+            raise ValueError(f"unknown rule_key: {rule_key!r}")
+        if outcome not in ("confirmed", "refuted"):
+            raise ValueError(f"unrecognized outcome: {outcome!r}")
+        bucket = increments.setdefault(rule_key, {"confirmed": 0, "refuted": 0})
+        bucket[outcome] += 1
+    if not increments:
+        return
+    now = _now_iso()
+    with _lock, _connect() as conn:
+        for rule_key, inc in increments.items():
+            conn.execute(
+                """INSERT INTO rule_stats(rule_key, confirmed, refuted, updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(rule_key) DO UPDATE SET
+                     confirmed=confirmed+excluded.confirmed,
+                     refuted=refuted+excluded.refuted,
+                     updated_at=excluded.updated_at""",
+                (rule_key, inc["confirmed"], inc["refuted"], now),
+            )
+
+
+# >= REFUTE_WINDOW (the longer of the two outcome windows) + a safety margin, so a
+# device that recomputes scores every few minutes (fast-cadence config) still gets
+# a query that spans enough WALL-CLOCK time, not just enough rows.
+_SCAN_LOOKBACK = rulestats.REFUTE_WINDOW + timedelta(days=10)
+_SCAN_ROW_CAP = 5000  # defensive cap only -- the `since` filter above does the real work
+
+
+def run_rulestats_scan() -> dict[str, int]:
+    """One fleet-wide sweep: for every device, scan its score history since the
+    last sweep, accumulate (rule_key, outcome) pairs, upsert once, log once.
+    Returns {"devices_scanned": N, "confirmed": N, "refuted": N} for logging."""
+    since = _last_maintenance_ts("rulestats_scan")
+    now = datetime.now(timezone.utc)
+    lookback_iso = (now - _SCAN_LOOKBACK).isoformat()
+    with _connect() as conn:
+        device_ids = [r[0] for r in conn.execute("SELECT device_id FROM devices")]
+    outcomes: list[tuple[str, str]] = []
+    for device_id in device_ids:
+        rows = list(reversed(get_score_series(device_id, limit=_SCAN_ROW_CAP, since=lookback_iso)))
+        outcomes.extend(rulestats.scan_device(rows, now=now, since=since))
+    if outcomes:
+        record_rule_outcomes(outcomes)
+    confirmed_n = sum(1 for _, o in outcomes if o == "confirmed")
+    refuted_n = len(outcomes) - confirmed_n
+    _log_maintenance(
+        "rulestats_scan",
+        json.dumps({"devices": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}),
+    )
+    return {"devices_scanned": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}
 
 
 def run_maintenance() -> dict[str, Any]:
@@ -2554,13 +2638,20 @@ def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
     ]
 
 
-def get_score_series(device_id: str, limit: int = 100) -> list[dict]:
-    """Computed scores for a device, newest-first (append-only time series)."""
+def get_score_series(device_id: str, limit: int = 100, since: Optional[str] = None) -> list[dict]:
+    """Computed scores for a device, newest-first (append-only time series).
+
+    since (ISO ts, optional): when given, only rows with ts >= since are
+    returned -- lets a caller guarantee a *time* span (e.g. Ф8's rule-outcome
+    windows) instead of a row count that may or may not cover enough days at
+    this device's telemetry cadence. None preserves the exact prior behavior
+    (all existing callers pass no `since` and are unaffected byte-for-byte)."""
     with _connect() as conn:
         rows = conn.execute(
             """SELECT ts, performance, reliability, wear, risk_exposure, risk
-               FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?""",
-            (device_id, limit),
+               FROM scores WHERE device_id=? AND (? IS NULL OR ts>=?)
+               ORDER BY id DESC LIMIT ?""",
+            (device_id, since, since, limit),
         ).fetchall()
     return [
         {

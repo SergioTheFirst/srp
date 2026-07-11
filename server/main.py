@@ -84,6 +84,7 @@ def _run_maintenance_sweep(cfg: ServerConfig) -> None:
     """
     try:
         db.run_daily_rollup()
+        db.run_rulestats_scan()
         db.prune_aged(
             heartbeat_raw_days=cfg.heartbeat_raw_days,
             events_raw_days=cfg.events_raw_days,
