@@ -17,6 +17,7 @@ from server.analytics.health import (
     _ACTIONS,
     _BLIND_ACTION,
     HealthVerdict,
+    apply_health_staleness,
     compute_health,
     health_staleness,
 )
@@ -610,3 +611,85 @@ def test_staleness_over_10_days_signals_unknown() -> None:
 
 def test_staleness_unparseable_is_none() -> None:
     assert health_staleness("not-a-date", datetime(2026, 7, 10)) is None
+
+
+# --------------------------------------------------------------------------- #
+# apply_health_staleness (T7.2 read-side overlay; field-for-field match of
+# server.api._with_health_staleness, which stays private/untouched)
+# --------------------------------------------------------------------------- #
+def _real_health(**over: Any) -> dict:
+    base = {
+        "state": "h1",
+        "band": "watch",
+        "confidence": "high",
+        "index": 70.0,
+        "blind_spots": [],
+        "missing_evidence": [],
+    }
+    base.update(over)
+    return base
+
+
+def test_apply_staleness_fresh_returns_equal_copy_not_same_object() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    health = _real_health()
+    ts = (now - timedelta(days=1)).isoformat()
+    out = apply_health_staleness(health, ts, now)
+    assert out == health
+    assert out is not health  # always a new dict, even when unchanged
+
+
+def test_apply_staleness_no_score_ts_returns_copy_unchanged() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    health = _real_health()
+    out = apply_health_staleness(health, None, now)
+    assert out == health
+    assert out is not health
+
+
+def test_apply_staleness_3_to_10_days_caps_confidence_low_adds_missing_evidence() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    health = _real_health(confidence="high")
+    ts = (now - timedelta(days=5)).isoformat()
+    out = apply_health_staleness(health, ts, now)
+    assert out["confidence"] == "low"
+    assert out["state"] == "h1"  # state/band untouched in the 3-10 day window
+    assert out["band"] == "watch"
+    assert len(out["missing_evidence"]) == 1
+    assert "5" in out["missing_evidence"][0]
+    assert _has_cyr(out["missing_evidence"][0])
+    assert health["missing_evidence"] == []  # original dict never mutated
+
+
+def test_apply_staleness_over_10_days_forces_unknown_and_blind_spot() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    health = _real_health(state="h3", band="bad", confidence="medium")
+    ts = (now - timedelta(days=15)).isoformat()
+    out = apply_health_staleness(health, ts, now)
+    assert out["state"] == "unknown"
+    assert out["band"] == "unknown"
+    assert out["confidence"] == "unknown"
+    assert len(out["blind_spots"]) == 1
+    assert _has_cyr(out["blind_spots"][0])
+    assert health["state"] == "h3"  # original dict never mutated
+
+
+def test_apply_staleness_appends_to_existing_blind_spots_and_missing_evidence() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    health = _real_health(missing_evidence=["неполные координаты: точность снижена"])
+    ts = (now - timedelta(days=5)).isoformat()
+    out = apply_health_staleness(health, ts, now)
+    assert len(out["missing_evidence"]) == 2  # appended, not replaced
+    assert out["missing_evidence"][0] == "неполные координаты: точность снижена"
+
+
+def test_apply_staleness_matches_health_staleness_thresholds_exactly() -> None:
+    # same 3-day / 10-day boundary as health_staleness itself -- no drift possible
+    # since apply_health_staleness calls it internally.
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    exactly_3 = (now - timedelta(days=3)).isoformat()
+    just_over_3 = (now - timedelta(days=4)).isoformat()
+    out_fresh = apply_health_staleness(_real_health(), exactly_3, now)
+    out_stale = apply_health_staleness(_real_health(), just_over_3, now)
+    assert out_fresh["confidence"] == "high"  # untouched at exactly 3 days
+    assert out_stale["confidence"] == "low"

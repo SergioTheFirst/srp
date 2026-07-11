@@ -608,8 +608,20 @@ def _context_factors(
 
 
 # --------------------------------------------------------------------------- #
-# Staleness (READ-side helper; deliberately NOT called by compute_health)
+# Read-side accessors (NOT called by compute_health; used by Ф7 dashboards)
 # --------------------------------------------------------------------------- #
+def action_for(dominant: Optional[str]) -> str:
+    """Public accessor for the Ф6 recommendation table -- read-side consumers (Ф7) map a
+    dominant mechanism to its Russian recommendation without duplicating _ACTIONS."""
+    return _ACTIONS.get(dominant, _ACTIONS[None])
+
+
+_STALE_UNKNOWN_MSG = "проверка недостоверна: данные старше 10 дней"  # named so
+# apply_health_staleness compares against the same literal health_staleness
+# returns -- single source within this module (server.api keeps its own,
+# separately-reviewed copy of this exact string; untouched by this task).
+
+
 def health_staleness(score_ts: str, now: datetime) -> Optional[str]:
     """Score-age staleness, applied by callers (API/pages), never inside
     ``compute_health`` (which has no timestamp input).
@@ -627,10 +639,38 @@ def health_staleness(score_ts: str, now: datetime) -> Optional[str]:
         return None
     days = (now - ts).days
     if days > 10:
-        return "проверка недостоверна: данные старше 10 дней"
+        return _STALE_UNKNOWN_MSG
     if days > 3:
         return f"данные устарели ({days} дн.)"
     return None
+
+
+def apply_health_staleness(health: dict, score_ts: Optional[str], now: datetime) -> dict:
+    """Read-side staleness overlay (T6.1 step 8 / T7.2): returns a new dict, never
+    mutates ``health``. >10d -> state/band/confidence forced to "unknown" +
+    blind_spots note; >3d -> confidence capped "low" + missing_evidence note;
+    otherwise ``health`` unchanged (still a copy).
+
+    Field-for-field match of ``server.api._with_health_staleness`` (Ф6's own
+    private JSON-API helper, left untouched by this task) -- this is the public
+    counterpart T7.2's page routes call directly, so the fleet page, the API,
+    and the device page never disagree on what "stale" looks like.
+    """
+    out = dict(health)
+    if not score_ts:
+        return out
+    msg = health_staleness(score_ts, now)
+    if msg is None:
+        return out
+    if msg == _STALE_UNKNOWN_MSG:
+        out["state"] = "unknown"
+        out["band"] = "unknown"
+        out["confidence"] = "unknown"
+        out["blind_spots"] = [*(out.get("blind_spots") or []), msg]
+    else:
+        out["confidence"] = "low"
+        out["missing_evidence"] = [*(out.get("missing_evidence") or []), msg]
+    return out
 
 
 def _parse_dt(value: Any) -> Optional[datetime]:

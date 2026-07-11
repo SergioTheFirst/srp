@@ -186,16 +186,26 @@ def main() -> int:
 
         fleet = client.get("/")
         detail = client.get(f"/device/{DEVICE}")
+        # ssd3 Ф7 T7.3: the per-device health API (Ф6) exists but wasn't smoke-tested
+        # yet -- check it alongside the /device/{id} page it's rendered into (T7.2).
+        device_health = client.get(f"/api/v1/devices/{DEVICE}/health")
         print_page = client.get("/print")
+        health_page = client.get("/health")
         print(
-            f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}, print HTTP {print_page.status_code}"
+            f"dashboard: fleet HTTP {fleet.status_code}, detail HTTP {detail.status_code}, "
+            f"device-health HTTP {device_health.status_code}, "
+            f"print HTTP {print_page.status_code}, health HTTP {health_page.status_code}"
         )
         if fleet.status_code != 200:
             failures.append("fleet page did not render")
         if detail.status_code != 200 or "SMOKE-LT-01" not in detail.text:
             failures.append("device detail page missing or hostname not rendered")
+        if device_health.status_code != 200:
+            failures.append("device health API did not return 200")
         if print_page.status_code != 200:
             failures.append("print analytics page did not render")
+        if health_page.status_code != 200 or "Здоровье флота" not in health_page.text:
+            failures.append("health page did not render")
 
         pa = client.get("/api/v1/fleet/print/analytics?days=30").json()
         print(f"print analytics: {pa.get('total_pages')} pages, {pa.get('total_jobs')} jobs")

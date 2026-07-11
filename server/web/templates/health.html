@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}Здоровье · SRP{% endblock %}
+{% block subtitle %}Здоровье флота — три координаты (D · R · O){% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+.no-data { text-align: center; padding: 40px 20px; color: var(--muted); }
+.heatmap-legend { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.heatmap-legend .muted { font-size: 12px; margin-right: 4px; }
+.worsening-row { display: flex; align-items: center; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.worsening-row .coord-chips { display: flex; gap: 8px; }
+.spark-wrap { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 140px; }
+.spark-wrap svg { flex: 1; max-width: 160px; height: 24px; }
+.spark-wrap polyline { fill: none; stroke: var(--bad); stroke-width: 2; }
+.spark-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block body %}
+
+{# ══════════════════════════════════════════════════════════════════════
+   MODULE: KPI tiles — state distribution donut + 4 tiles
+   ══════════════════════════════════════════════════════════════════════ #}
+<div class="section-label">Здоровье флота — обзор</div>
+<div class="cards" style="margin-bottom:16px">
+  <div class="stat"><div class="n bad">{{ kpi.critical }}</div><div class="l">Критичные (≤7д)</div></div>
+  <div class="stat"><div class="n warn">{{ kpi.worsened }}</div><div class="l">Ухудшились за неделю</div></div>
+  <div class="stat"><div class="n warn">{{ kpi.low_obs }}</div><div class="l">Видимость &lt;40%</div></div>
+  <div class="stat"><div class="n na">{{ kpi.stale }}</div><div class="l">Данные устарели</div></div>
+</div>
+<div class="riskrow" style="margin-bottom:24px">
+  <div class="name" style="margin-bottom:6px">Распределение флота по состояниям</div>
+  <div id="chart-state-donut" style="height:260px"></div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════
+   MODULE: Heatmap — device x dimension severity grid (Состояние|D|R|O|7 axes)
+   ══════════════════════════════════════════════════════════════════════ #}
+<div class="section-label incident">Тепловая карта — устройства × измерения</div>
+<div class="heatmap-legend">
+  <span class="muted">Легенда:</span>
+  <span class="chip good">хорошо</span>
+  <span class="chip warn">наблюдение</span>
+  <span class="chip bad">плохо</span>
+  <span class="chip na">неизвестно</span>
+</div>
+<div class="riskrow" style="margin-bottom:24px">
+  <div id="chart-heatmap" style="height:520px"></div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════
+   MODULE: Worsening — top-10 by delta_7d + index-projection sparkline
+   ══════════════════════════════════════════════════════════════════════ #}
+<div class="section-label">Ухудшаются за 7 дней</div>
+{% if worsening %}
+  {% for r in worsening %}
+  {% set sp = sparklines.get(r.device_id) %}
+  <div class="riskrow">
+    <div class="head">
+      <div><a href="/device/{{ r.device_id }}" class="name">{{ r.hostname }}</a></div>
+      <span class="chip bad">Δ7д {{ "%.1f"|format(r.delta_7d) }}</span>
+    </div>
+    <div class="worsening-row">
+      <div class="coord-chips">
+        <span class="chip {{ band_class(r.damage_band) }}" title="Повреждения (D)">D {{ "%.0f"|format(r.damage) if r.damage is not none else "—" }}</span>
+        <span class="chip {{ band_class(r.resilience_band) }}" title="Устойчивость (R)">R {{ "%.0f"|format(r.resilience) if r.resilience is not none else "—" }}</span>
+        <span class="chip {{ band_class(r.observability_band) }}" title="Видимость (O)">O {{ "%.0f"|format(r.observability_pct) if r.observability_pct is not none else "—" }}</span>
+      </div>
+      <div class="spark-wrap" title="Индекс-проекция (D,R,O) — динамика по последним точкам">
+        {% if sp and sp.count >= 2 %}
+        <svg viewBox="0 0 100 24" preserveAspectRatio="none"><polyline points="{{ sp.points }}" /></svg>
+        <span class="spark-label">проекция, {{ sp.count }} точек</span>
+        {% else %}
+        <span class="spark-label">проекция — недостаточно точек</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+<div class="no-data">За последнюю неделю ухудшений не зафиксировано</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════
+   MODULE: Escalations — new state escalations (was -> became)
+   ══════════════════════════════════════════════════════════════════════ #}
+<div class="section-label incident" style="margin-top:28px">Новые эскалации</div>
+{% if escalations %}
+<table style="margin-bottom:24px">
+  <thead>
+    <tr><th>Устройство</th><th>Было → стало</th><th>Механизм</th><th>Рекомендация</th></tr>
+  </thead>
+  <tbody>
+  {% for e in escalations %}
+    <tr>
+      <td><a href="/device/{{ e.device_id }}">{{ e.hostname }}</a></td>
+      <td>{{ e.prev_label }} → {{ e.state_label }}</td>
+      <td>{{ e.dominant_label }}</td>
+      <td class="muted">{{ e.action }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="no-data" style="margin-bottom:24px">Новых эскалаций нет</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════
+   MODULE: Risk models — top-3 models by mean index-projection
+   ══════════════════════════════════════════════════════════════════════ #}
+<div class="section-label">Модели риска</div>
+{% if risk_models %}
+<table>
+  <thead>
+    <tr>
+      <th>Модель</th>
+      <th>Устройств</th>
+      <th title="Средние Повреждения (D) по устройствам этой модели">D</th>
+      <th title="Средняя Устойчивость (R) по устройствам этой модели">R</th>
+      <th title="Средняя Видимость (O) по устройствам этой модели">O</th>
+      <th title="Средняя проекция (сводка координат D, R, O выше) по устройствам этой модели — не самостоятельный показатель">Ср. проекция</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for m in risk_models %}
+    <tr>
+      <td>{{ m.model }}</td>
+      <td>{{ m.count }}</td>
+      <td>{{ "%.0f"|format(m.mean_damage) if m.mean_damage is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_resilience) if m.mean_resilience is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_observability) if m.mean_observability is not none else "—" }}</td>
+      <td>{{ "%.0f"|format(m.mean_index) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="no-data">Недостаточно данных по моделям</div>
+{% endif %}
+
+{# ── Data island (heatmap + donut only -- everything else above is pure SSR) ── #}
+<script id="health-data" type="application/json">{{ {"heatmap": heatmap, "state_dist": state_dist} | tojson }}</script>
+{% include "_plotly_hover.html" %}
+<script>
+(function () {
+  var elDonut = document.getElementById("chart-state-donut");
+  var elHeat = document.getElementById("chart-heatmap");
+  if (typeof Plotly === "undefined" || !elDonut || !elHeat) return;
+  var data = JSON.parse(document.getElementById("health-data").textContent || "{}");
+  var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: []};
+  var sd = data.state_dist || [];
+  var BAND_WORDS = ["хорошо", "наблюдение", "плохо", "неизвестно"];
+
+  function drawDonut(css) {
+    var total = sd.reduce(function (s, r) { return s + r.count; }, 0);
+    if (total === 0) { elDonut.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
+    var bandHex = {
+      good: css.getPropertyValue("--good").trim() || "#10d97a",
+      watch: css.getPropertyValue("--warn").trim() || "#f59e0b",
+      bad: css.getPropertyValue("--bad").trim() || "#ffe000",
+      unknown: css.getPropertyValue("--na").trim() || "#5878a0"
+    };
+    // Colour = the worst REAL band among that bucket's devices (computed server-side
+    // in _state_distribution from get_fleet_health()'s own band field) -- never a
+    // state->band guess: _reconcile clamps no band by state, so e.g. an h1 device
+    // can legitimately be band="good", and a static state->colour table would paint
+    // the whole slice "watch" regardless of what the real devices show.
+    Plotly.newPlot(elDonut, [{
+      type: "pie",
+      hole: 0.6,
+      sort: false,
+      labels: sd.map(function (s) { return s.label; }),
+      values: sd.map(function (s) { return s.count; }),
+      marker: { colors: sd.map(function (s) { return bandHex[s.band] || bandHex.unknown; }) },
+      textinfo: "label+value",
+      hovertemplate: "%{label}: %{value}<extra></extra>",
+      hoverlabel: srpHoverLabel()
+    }], {
+      paper_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+      showlegend: false,
+      margin: { t: 10, r: 10, b: 10, l: 10 }
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  function buildHoverText() {
+    return hm.z.map(function (row, i) {
+      var host = window.srpEsc(hm.hostnames[i]);
+      return row.map(function (val, j) {
+        if (j === 0) {
+          return host + ": " + hm.state_labels[i] + " · доминирующий фактор: " + hm.dominant_labels[i];
+        }
+        return host + ": " + hm.cols[j] + " = " + BAND_WORDS[val];
+      });
+    });
+  }
+
+  function drawHeatmap(css) {
+    if (!hm.z.length) { elHeat.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
+    var goodHex = css.getPropertyValue("--good").trim() || "#10d97a";
+    var warnHex = css.getPropertyValue("--warn").trim() || "#f59e0b";
+    var badHex = css.getPropertyValue("--bad").trim() || "#ffe000";
+    var naHex = css.getPropertyValue("--na").trim() || "#5878a0";
+    // Discrete 4-band colourscale: hard stops, never a smooth/interpolated gradient
+    // (band is a categorical label, not a continuous measurement -- ssd3 Ф7 T7.1).
+    var colorscale = [
+      [0, goodHex], [0.249, goodHex],
+      [0.25, warnHex], [0.499, warnHex],
+      [0.5, badHex], [0.749, badHex],
+      [0.75, naHex], [1, naHex]
+    ];
+    var yTicks = hm.hostnames.map(function (h) { return window.srpEsc(h); });
+    var customdata = hm.device_ids.map(function (id) { return hm.cols.map(function () { return id; }); });
+    Plotly.newPlot(elHeat, [{
+      type: "heatmap",
+      x: hm.cols,
+      y: yTicks,
+      z: hm.z,
+      zmin: 0,
+      zmax: 3,
+      colorscale: colorscale,
+      showscale: false,
+      xgap: 2,
+      ygap: 2,
+      customdata: customdata,
+      text: buildHoverText(),
+      hovertemplate: "%{text}<extra></extra>",
+      hoverlabel: srpHoverLabel()
+    }], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 11 },
+      margin: { t: 10, r: 10, b: 130, l: 140 },
+      xaxis: { tickangle: -30, automargin: true },
+      yaxis: { automargin: true, autorange: "reversed" }
+    }, { responsive: true, displayModeBar: false });
+
+    elHeat.removeAllListeners && elHeat.removeAllListeners("plotly_click");
+    elHeat.on("plotly_click", function (ev) {
+      var pt = ev.points && ev.points[0];
+      var id = pt && pt.customdata;
+      if (id) { window.location = "/device/" + encodeURIComponent(id); }
+    });
+  }
+
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    drawDonut(css);
+    drawHeatmap(css);
+  }
+
+  function init() {
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+{% endblock %}

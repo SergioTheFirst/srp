@@ -1,0 +1,179 @@
+{# Ф7 T7.2 device-hero: compact three-coordinate (D/R/O) summary, rendered
+   above the "Прогноз — траектории и ресурс" section on device.html. Split into
+   its own partial purely to keep device.html under this repo's 800-line cap
+   (device.html was already at the cap before this task -- same reasoning as
+   the dashboard.py -> health_view.py extraction Task 1 did on this branch),
+   not a behavioural change. Context (health / health_stale_msg / health_series
+   / state_labels / band_class / action_for) comes from the including
+   device.html's own scope -- Jinja includes inherit the caller's context, same
+   as this page's existing _net_section.html / _plotly_hover.html partials. #}
+<div class="section-label" style="margin-top:16px">Здоровье — координаты (D · R · O)</div>
+<div id="device-hero" class="hero-health">
+  {% if health is none %}
+  <p class="muted small" style="padding:6px 0">нет данных о координатах здоровья</p>
+  {% elif health.state == "unknown" %}
+  {% set obs = health.observability or {} %}
+  {% set blind_ev = (health.blind_spots or [])|join("; ") %}
+  <div class="alert-banner alert-warn">
+    ⚠ данных недостаточно — видимость {{ "%.0f"|format(obs.value) if obs.value is not none else "?" }}%
+  </div>
+  {% if blind_ev %}
+  <div class="axis-blind">⚠ не видно: {{ blind_ev }}</div>
+  {% endif %}
+  {% else %}
+  {% if health_stale_msg %}
+  <div class="alert-banner alert-warn">⚠ {{ health_stale_msg }}</div>
+  {% endif %}
+
+  {# three coordinate bars — value shown directly (never inverted): colour
+     (band_class, the stored band -- never re-derived from the raw value)
+     is what tells the viewer whether a value is concerning, not fill side #}
+  {% set coord_meta = [
+      ("damage", "Повреждения"),
+      ("resilience", "Устойчивость"),
+      ("observability", "Наблюдаемость"),
+  ] %}
+  <div class="hero-coords">
+    {% for key, label in coord_meta %}
+    {% set coord = health[key] or {} %}
+    {% set cband = band_class(coord.band) %}
+    {% set cev = ((coord.evidence or [])|map(attribute="label")|join("; ")) or "нет факторов" %}
+    <div class="riskrow">
+      <div class="head">
+        <span class="name">{{ label }}</span>
+        <span class="chip {{ cband }}">{{ "%.0f"|format(coord.value) if coord.value is not none else "—" }}</span>
+      </div>
+      <div class="riskbar {{ cband }}" title="{{ cev }}">
+        <i style="width:{{ coord.value if coord.value is not none else 0 }}%"></i>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# state ladder h0 -> h4: five steps, current one enlarged + coloured by the
+     overall verdict band (the other four are dim -- never coloured by a
+     hypothetical own band); labels from health.py's own _STATE_LABELS #}
+  {% set ladder_band = band_class(health.band) %}
+  {% set state_ev = ((health.state_evidence or [])|map(attribute="label")|join("; ")) or health.state_label %}
+  <div class="ladder">
+    {% for step in ["h0", "h1", "h2", "h3", "h4"] %}
+    <div class="ladder-step {{ 'current ' ~ ladder_band if step == health.state else '' }}"
+         {% if step == health.state %}title="{{ state_ev }}"{% endif %}>
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">{{ state_labels.get(step, step) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# index / horizon / Δ7д chips — index NEVER stands alone (K1): always
+     captioned "проекция (D, R, O)", never just the bare number #}
+  {% set horizon_label = {7: "≤7 дней", 30: "≤30", 90: "≤90"}.get(health.horizon_days, "—") %}
+  {% set delta = health.delta_7d %}
+  {% set delta_cls = "na" if delta is none or delta == 0 else ("good" if delta > 0 else "bad") %}
+  {% set delta_arrow = "—" if delta is none else ("▲" if delta > 0 else ("▼" if delta < 0 else "→")) %}
+  <div class="hero-chips">
+    <span class="chip accent" title="проекция здоровья: свод Повреждений и Устойчивости, 0–100, выше = лучше">
+      проекция (D, R, O): {{ "%.0f"|format(health.index) if health.index is not none else "—" }}
+    </span>
+    <span class="chip {{ band_class(health.band) }}" title="{{ health.horizon_reason or 'прогноз горизонта' }}">горизонт {{ horizon_label }}</span>
+    <span class="chip {{ delta_cls }}" title="изменение индекса здоровья за 7 дней">Δ7д {{ delta_arrow }}{% if delta is not none %} {{ "%.1f"|format(delta) }}{% endif %}</span>
+  </div>
+
+  <p class="small muted" style="margin:10px 0 0">{{ health.dominant_label }} — {{ action_for(health.dominant) }}</p>
+
+  {# index sparkline: server embeds a bounded (limit=200) newest-first array
+     once; the 30д/90д toggle is a client-side-only re-slice of that same
+     array (ts >= cutoff) -- no second fetch, no server round-trip #}
+  {% if health_series %}
+  <div class="hero-spark-head">
+    <span class="small muted">индекс здоровья, динамика</span>
+    <span>
+      <button type="button" class="btn-small active" data-hero-spark-days="30">30д</button>
+      <button type="button" class="btn-small" data-hero-spark-days="90">90д</button>
+    </span>
+  </div>
+  <div id="hero-health-spark" style="height:90px"></div>
+  {% include "_plotly_hover.html" %}
+  <script id="hero-health-series" type="application/json">{{ health_series | tojson }}</script>
+  <script>
+  (function () {
+    var el = document.getElementById("hero-health-spark");
+    var dataEl = document.getElementById("hero-health-series");
+    if (!el || !dataEl) return;
+    var all = JSON.parse(dataEl.textContent || "[]")
+                .filter(function (r) { return r.ts && r.index != null; })
+                .reverse();  // stored newest-first -> chart oldest -> newest
+    var days = 30;
+
+    function draw() {
+      if (typeof Plotly === "undefined") return;
+      var cutoff = new Date(Date.now() - days * 86400000).toISOString();
+      var rows = all.filter(function (r) { return r.ts >= cutoff; });
+      if (rows.length < 2) {
+        el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>";
+        return;
+      }
+      var css = getComputedStyle(document.documentElement);
+      var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+      var grid = css.getPropertyValue("--line").trim() || "#132030";
+      Plotly.newPlot(el, [{
+        x: rows.map(function (r) { return r.ts; }),
+        y: rows.map(function (r) { return r.index; }),
+        type: "scatter", mode: "lines",
+        line: { color: acc, width: 2 },
+        hovertemplate: "%{x}<br>индекс <b>%{y:.0f}</b><extra></extra>"
+      }], {
+        paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+        font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 11 },
+        margin: { t: 6, r: 10, b: 26, l: 32 },
+        xaxis: { gridcolor: grid, showgrid: false },
+        yaxis: { gridcolor: grid, range: [0, 100] },
+        showlegend: false, autosize: true,
+        hoverlabel: srpHoverLabel()
+      }, { responsive: true, displayModeBar: false });
+    }
+
+    function init() {
+      draw();
+      document.querySelectorAll("[data-hero-spark-days]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          document.querySelectorAll("[data-hero-spark-days]").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          days = parseInt(btn.getAttribute("data-hero-spark-days"), 10);
+          draw();
+        });
+      });
+      new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
+</div>
+<style>
+.hero-coords { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+.hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.hero-spark-head { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 6px; }
+.btn-small.active { border-color: var(--accent); color: var(--accent); }
+.no-data { text-align: center; padding: 24px 10px; color: var(--muted); }
+.ladder { display: flex; align-items: flex-start; justify-content: space-between; position: relative; margin: 14px 0 4px; }
+.ladder::before {
+  content: ""; position: absolute; top: 7px; left: 16px; right: 16px; height: 1px;
+  background: var(--line); z-index: 0;
+}
+.ladder-step { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; z-index: 1; flex: 1; }
+.ladder-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line); }
+.ladder-step.current .ladder-dot { width: 20px; height: 20px; border-color: transparent; }
+.ladder-step.current.good .ladder-dot { background: var(--good); }
+.ladder-step.current.warn .ladder-dot { background: var(--warn); }
+.ladder-step.current.bad  .ladder-dot { background: var(--bad); }
+.ladder-step.current.na   .ladder-dot { background: var(--na); }
+.ladder-label { font: 600 10px/1 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.ladder-step.current .ladder-label { color: var(--text); }
+</style>
