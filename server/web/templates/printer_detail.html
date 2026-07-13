@@ -112,7 +112,7 @@ td.r,th.r{text-align:right;}
 <script>
 (function () {
   var el = document.getElementById("chart-counter");
-  if (!el || typeof Plotly === "undefined") return;
+  if (!el) return;
   var s = JSON.parse(document.getElementById("series-data").textContent || "[]")
             .filter(function (r) { return r.total_pages != null && r.received_at; })
             .reverse();  // stored newest-first; chart oldest -> newest
@@ -136,8 +136,17 @@ td.r,th.r{text-align:right;}
       hoverlabel: srpHoverLabel(),
     }, { responsive: true, displayModeBar: false });
   }
-  draw();
-  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  function init() {
+    // Plotly is deferred -- it exists only after DOM parsing, never during it.
+    if (typeof Plotly === "undefined") return;
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
 </script>
 

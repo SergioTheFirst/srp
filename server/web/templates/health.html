@@ -146,7 +146,7 @@
 (function () {
   var elDonut = document.getElementById("chart-state-donut");
   var elHeat = document.getElementById("chart-heatmap");
-  if (typeof Plotly === "undefined" || !elDonut || !elHeat) return;
+  if (!elDonut || !elHeat) return;
   var data = JSON.parse(document.getElementById("health-data").textContent || "{}");
   var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: []};
   var sd = data.state_dist || [];
@@ -250,6 +250,9 @@
   }
 
   function init() {
+    // Plotly is loaded with defer -- it is only defined once DOM parsing ends, so this
+    // check belongs here, never at IIFE top-level (that runs during parsing = always undefined).
+    if (typeof Plotly === "undefined") return;
     draw();
     new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   }
