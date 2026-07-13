@@ -234,3 +234,46 @@ def test_main_update_branch_skips_interactive_and_returns_run_update_code(
 def test_main_update_missing_payload_dir_is_exit_bad_params(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(su, "_payload_dir", lambda: tmp_path / "missing")
     assert su.main(["--update"]) == su.EXIT_BAD_PARAMS
+
+
+# --------------------------------------------------------------------------- #
+# run_uninstall: агент обязан быть выгружен из памяти (owner-fix 2026-07-12)
+# --------------------------------------------------------------------------- #
+
+
+def test_run_uninstall_unloads_agent_and_tray_before_deregistering(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dest = tmp_path / "SRP"
+    dest.mkdir()
+    fake_run, calls = _fake_run({})
+    monkeypatch.setattr(su, "_run", fake_run)
+    monkeypatch.setattr(su, "_wait_files_unlocked", lambda *a, **k: True)
+
+    rc = su.run_uninstall(su.SetupOptions(uninstall=True), dest=str(dest))
+
+    assert rc == su.EXIT_OK
+    assert [_tag(c) for c in calls] == [
+        "schtasks:/end",
+        "taskkill:srp-agent.exe",
+        "taskkill:srp-tray.exe",
+        "schtasks:/delete",
+        "reg",
+    ]
+
+
+def test_run_uninstall_purge_proceeds_even_after_unlock_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dest = tmp_path / "SRP"
+    dest.mkdir()
+    (dest / "config.json").write_text("{}", encoding="utf-8")
+    fake_run, calls = _fake_run({})
+    monkeypatch.setattr(su, "_run", fake_run)
+    monkeypatch.setattr(su, "_wait_files_unlocked", lambda *a, **k: False)
+
+    rc = su.run_uninstall(su.SetupOptions(uninstall=True, purge=True), dest=str(dest))
+
+    assert rc == su.EXIT_OK
+    assert "taskkill:srp-agent.exe" in [_tag(c) for c in calls]
+    assert not dest.exists()
