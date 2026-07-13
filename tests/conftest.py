@@ -220,10 +220,13 @@ def envelope(device_id: str, msg_type: str, payload: dict[str, Any]) -> dict[str
 def _reset_ingest_guards() -> Iterator[None]:
     """Reset in-memory ingest-guards state before every test (rate-limit + dedup)."""
     from server.ingest_guards import reset_guards
+    from server.pipeline import set_rescore_queue
 
     reset_guards()
+    set_rescore_queue(None)
     yield
     reset_guards()
+    set_rescore_queue(None)
 
 
 @pytest.fixture

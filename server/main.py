@@ -380,6 +380,17 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             # optional adapters run only when the operator has configured at least one
             if cfg.netdisco_config().optional_adapters:
                 tasks.append(asyncio.create_task(_netdisco_adapter_loop(cfg)))
+        # W4.0: RescoreQueue is a threading.Thread worker, not an asyncio.Task --
+        # it is started/stopped on its own lifecycle below, never added to `tasks`
+        # (which the finally block cancels+awaits as asyncio tasks).
+        if cfg.async_rescore:
+            from server.pipeline import recompute_scores, set_rescore_queue
+            from server.rescore_queue import RescoreQueue
+
+            rescore_queue = RescoreQueue(recompute_scores)
+            rescore_queue.start()
+            set_rescore_queue(rescore_queue)
+            app.state.rescore_queue = rescore_queue
         try:
             yield
         finally:
@@ -388,6 +399,12 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            # shutdown: дать воркеру дожевать очередь и погаснуть
+            queue = getattr(app.state, "rescore_queue", None)
+            if queue is not None:
+                queue.drain(5.0)
+                queue.stop()
+                set_rescore_queue(None)
 
     app = FastAPI(
         title="SRP — раннее предупреждение отказов",

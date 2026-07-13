@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
@@ -55,6 +55,17 @@ _ERRCHAIN_EVENT_LIMIT = 1000
 # ssd3 Ф5 (T5.4): recurrent_weeks widens from the 30d raw window to 90d once
 # daily rollups exist -- more lookback than raw event retention alone keeps.
 _ROLLUP_LOOKBACK_DAYS = 90
+
+if TYPE_CHECKING:
+    from server.rescore_queue import RescoreQueue
+
+_RESCORE_QUEUE: Optional["RescoreQueue"] = None
+
+
+def set_rescore_queue(queue: Optional["RescoreQueue"]) -> None:
+    """W4.0: включить/выключить фоновый rescore (None = синхронно, как раньше)."""
+    global _RESCORE_QUEUE
+    _RESCORE_QUEUE = queue
 
 
 def _now_iso() -> str:
@@ -460,7 +471,15 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # so we store the events above and skip the recompute. Message types that do
     # change scores still rescore synchronously, so fresh scores land on ingest.
     no_rescore = {"events", "print_jobs", "liveness", "update_status"}
-    scores = None if env.msg_type in no_rescore else recompute_scores(did)
+    if env.msg_type in no_rescore:
+        scores = None
+    elif _RESCORE_QUEUE is not None:
+        # W4.0: писать быстро, пересчитывать асинхронно -- recompute уходит из
+        # HTTP-запроса; свежие скоры появятся в /api/v1/devices после воркера.
+        _RESCORE_QUEUE.submit(did)
+        scores = None
+    else:
+        scores = recompute_scores(did)
     return {
         "device_id": did,
         "msg_type": env.msg_type,
