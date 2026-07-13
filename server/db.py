@@ -17,6 +17,7 @@ import ipaddress
 import json
 import sqlite3
 import threading
+import time
 import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,7 +37,44 @@ _retain_net = 2000  # netdisco device readings kept per device (phase 2)
 _retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
 _retain_disk = 2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2), config-driven
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
-_lock = threading.Lock()
+
+
+class _TimedLock:
+    """threading.Lock со счётом ожидания для /metrics (§6 «ожидание write-лока»).
+
+    Счётчики мутируются только ПОД замком -- доп. синхронизация не нужна;
+    stats() терпит рваное чтение (это мониторинг, не бухгалтерия).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.acquisitions = 0
+        self.wait_total_sec = 0.0
+        self.wait_max_sec = 0.0
+
+    def __enter__(self) -> "_TimedLock":
+        t0 = time.perf_counter()
+        self._lock.acquire()
+        waited = time.perf_counter() - t0
+        self.acquisitions += 1
+        self.wait_total_sec += waited
+        if waited > self.wait_max_sec:
+            self.wait_max_sec = waited
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+    def stats(self) -> dict[str, float]:
+        n = self.acquisitions
+        return {
+            "acquisitions": float(n),
+            "wait_avg_ms": (self.wait_total_sec / n * 1000.0) if n else 0.0,
+            "wait_max_ms": self.wait_max_sec * 1000.0,
+        }
+
+
+_lock = _TimedLock()
 
 
 def _now_iso() -> str:
@@ -3883,6 +3921,12 @@ _GATE_FAIL_STATES = frozenset({"unavailable", "stale", "suspect"})
 _GATE_PASS_STATES = frozenset({"ok", "degraded"})
 
 
+def _reject_counts_snapshot() -> dict[str, int]:
+    from server.ingest_guards import REJECT_COUNTS  # локальный импорт: без циклов
+
+    return dict(REJECT_COUNTS)
+
+
 def get_pipeline_metrics() -> dict[str, Any]:
     """Single-pass pipeline health stats for /api/v1/metrics and /pipeline page."""
     with _connect() as conn:
@@ -4001,6 +4045,8 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "last_maintenance_action": maint_row["action"] if maint_row else None,
         },
         "rule_stats": rule_stats_display,
+        "lock": _lock.stats(),
+        "ingest_rejects": _reject_counts_snapshot(),
     }
 
 

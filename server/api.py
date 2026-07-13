@@ -18,7 +18,7 @@ from shared.schema import Envelope, utcnow_iso
 from server import db, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.health import apply_health_staleness
-from server.ingest_guards import check_idempotency, check_rate_limit
+from server.ingest_guards import check_idempotency, check_rate_limit, count_reject
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.netdisco.cache import GraphCache
@@ -39,14 +39,18 @@ def ingest(env: Envelope, request: Request) -> dict:
     expected = getattr(request.app.state, "ingest_token", "")
     provided = request.headers.get("x-srp-token") or ""
     if expected and not hmac.compare_digest(provided, expected):
+        count_reject("auth")
         raise HTTPException(status_code=401, detail="invalid or missing ingest token")
     if not check_rate_limit(env.device_id):
+        count_reject("rate_limit")
         raise HTTPException(status_code=429, detail="rate limit exceeded")
     if not check_idempotency(env.idempotency_key):
+        count_reject("duplicate")
         return {"device_id": env.device_id, "msg_type": env.msg_type, "duplicate": True}
     try:
         return ingest_envelope(env)
     except ValueError as exc:
+        count_reject("invalid")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 

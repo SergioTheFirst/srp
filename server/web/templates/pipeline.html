@@ -210,6 +210,30 @@
       </div>
     </div>
   </div>
+
+  <div class="metric-card {{ 'warn' if m.lock.wait_max_ms > 500 else 'na' }}">
+    <div class="mc-label">Write-лок БД</div>
+    <div class="mc-rows">
+      <div class="mc-row"><span class="mc-key">захватов</span>
+        <span class="mc-val accent">{{ "%.0f"|format(m.lock.acquisitions) }}</span></div>
+      <div class="mc-row"><span class="mc-key">ожидание, среднее</span>
+        <span class="mc-val na">{{ "%.2f"|format(m.lock.wait_avg_ms) }} мс</span></div>
+      <div class="mc-row"><span class="mc-key">ожидание, максимум</span>
+        <span class="mc-val {{ 'warn' if m.lock.wait_max_ms > 500 else 'good' }}">{{ "%.1f"|format(m.lock.wait_max_ms) }} мс</span></div>
+    </div>
+  </div>
+
+  {% set rej = m.ingest_rejects %}
+  {% set rej_total = rej.values()|sum %}
+  <div class="metric-card {{ 'warn' if rej_total else 'good' }}">
+    <div class="mc-label">Отказы ingest</div>
+    <div class="mc-rows">
+      {% for k, v in rej.items() %}
+      <div class="mc-row"><span class="mc-key">{{ k }}</span>
+        <span class="mc-val {{ 'warn' if v else 'na' }}">{{ v }}</span></div>
+      {% endfor %}
+    </div>
+  </div>
 </div>
 
 {# ── Парковое подтверждение правил (ssd3 Ф8) ──────────────────────────────── #}
