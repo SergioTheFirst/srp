@@ -16,8 +16,8 @@
 | Row | SRP task archetypes | Model · effort |
 |---|---|---|
 | R1 | fact/Q&A · rename/format · gate-fix (E501/mypy/import) · CHANGELOG/ledger/doc line · RU-string tweak · 1-file deterministic patch | Haiku · low |
-| R2 | execute ONE task of an APPROVED plan · tests for existing behavior · bugfix WITH repro · dashboard/template tweak · review a routine diff | Opus · low |
-| R3 | new collector/engine/endpoint on an existing template (print_jobs · W4.2 engines · certificates-fold) · multi-file change · bug w/o repro | Opus · high |
+| R2 | execute ONE task of an APPROVED plan · tests for existing behavior · bugfix WITH repro · dashboard/template tweak · review a routine diff | Sonnet · max |
+| R3 | new collector/engine/endpoint on an existing template (print_jobs · W4.2 engines · certificates-fold) · multi-file change · bug w/o repro | Sonnet · max |
 | R4 | `shared/schema.py` (contract) · `server/trust/` · scoring weights/bands/gating · agent PowerShell/privacy · ingest/auth/SQL surface · spec/plan/decomposition · ambiguous ask | Opus · max |
 - Dynamic: (a) design at R4 → EXECUTING its approved plan-tasks drops to R2 each; (b) escalate +1 row when unsure, >3 files, or after 2 failed attempts at the current row; (c) R4 triggers NEVER de-escalate — inside any plan those steps run ≥R3 + security-review.
 - Applies to subagent `model` AND main-thread `/effort`. Fan-out searches → Haiku; deep code-explain → Sonnet. Fast Mode (`/fast`) speeds Opus output — it saves time, not tokens; cost cuts come from the Haiku/Sonnet rows.

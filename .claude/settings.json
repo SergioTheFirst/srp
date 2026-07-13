@@ -1,5 +1,4 @@
 {
-  "$comment": "Shared, committed Claude Code config for SRP. Hooks keep edited Python files ruff-clean automatically; the authoritative gate is still `make check` / CI. Per-developer overrides go in settings.local.json (gitignored).",
   "hooks": {
     "PostToolUse": [
       {
@@ -12,5 +11,9 @@
         ]
       }
     ]
+  },
+  "$comment": "Shared, committed Claude Code config for SRP. Hooks keep edited Python files ruff-clean automatically; the authoritative gate is still `make check` / CI. Per-developer overrides go in settings.local.json (gitignored).",
+  "enabledPlugins": {
+    "ponytail@ponytail": true
   }
 }
