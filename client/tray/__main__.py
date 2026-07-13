@@ -27,7 +27,7 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from client.tray import certs as cz
 from client.tray import panel, spool
@@ -39,6 +39,7 @@ log = logging.getLogger("client.tray")
 _POLL_MS = 60_000  # re-read status.json + recompute the icon once a minute
 _CERT_INTERVAL_SEC = 30 * 60  # re-check the personal certificate every 30 min (spec §3)
 _MUTEX_NAME = "Local\\SRPTrayInstanceMutex"
+_AGENT_STOP_TIMEOUT_SEC = 15.0  # elevated --stop-agent: ждать разблокировки srp-agent.exe
 
 
 # --------------------------------------------------------------------------- #
@@ -210,14 +211,100 @@ class _TrayApp:
 
     def request_exit(self) -> None:
         proc = subprocess.run(self._child("--ask-password"), creationflags=NO_WINDOW)  # nosec B603
-        if proc.returncode == 0:
-            self.icon.post_quit()
+        if proc.returncode != 0:
+            return
+        # Пароль верен -> выгрузить и SYSTEM-агента. Трей бежит под обычным
+        # пользователем, поэтому остановка идёт в UAC-элевированном ребёнке;
+        # отказ от UAC закрывает иконку, но честно говорит, что агент жив.
+        if not _launch_stop_agent_elevated():
+            _alert(
+                "Значок закрыт, но srp-agent.exe продолжает работать: "
+                "остановка требует прав администратора."
+            )
+        self.icon.post_quit()
 
     def run(self) -> None:
         self.icon.set_timer(_POLL_MS, self.refresh)
         self.refresh()
         self.icon.run()
         self.icon.remove()
+
+
+# --------------------------------------------------------------------------- #
+# «Выход» = остановить и SYSTEM-агента (owner-fix 2026-07-12)
+# --------------------------------------------------------------------------- #
+
+
+def _stop_agent_params(frozen: bool) -> str:
+    """Строка параметров ShellExecuteW для elevated-ребёнка --stop-agent."""
+    return "--stop-agent" if frozen else "-m client.tray --stop-agent"
+
+
+def _alert(text: str) -> None:
+    """Модальное предупреждение (0x30 = MB_OK | MB_ICONWARNING)."""
+    ctypes.windll.user32.MessageBoxW(None, text, "SRP", 0x30)
+
+
+def _launch_stop_agent_elevated() -> bool:
+    """UAC-элевация этого же exe с --stop-agent; True = ребёнок запущен.
+
+    ShellExecuteW возвращает > 32 при успехе (контракт WinAPI); <= 32 покрывает
+    отказ UAC (SE_ERR_ACCESSDENIED=5) и ошибки запуска. restype пиним в
+    c_void_p: дефолтный c_int обрезает 64-битный HINSTANCE (та же причина, по
+    которой icon.py пинит сигнатуры).
+    """
+    shell = ctypes.windll.shell32
+    shell.ShellExecuteW.restype = ctypes.c_void_p
+    rc = shell.ShellExecuteW(
+        None,
+        "runas",
+        sys.executable,
+        _stop_agent_params(bool(getattr(sys, "frozen", False))),
+        None,
+        0,  # SW_HIDE -- у ребёнка нет окна, весь его UI = MessageBox при провале
+    )
+    return int(rc or 0) > 32
+
+
+def run_stop_agent(
+    runner: Optional[Callable[[list[str]], int]] = None,
+    wait_unlocked: Optional[Callable[[], bool]] = None,
+    alert: Callable[[str], None] = _alert,
+) -> int:
+    """Elevated-ребёнок (``srp-tray --stop-agent``): выгрузить SYSTEM-агента.
+
+    Порядок обязателен: сначала ``schtasks /end`` гасит инстанс задачи -- иначе
+    её RestartOnFailure (3x/1min, task_template.xml) воскресит агента после
+    голого taskkill; затем ``taskkill`` добивает процессы вне задачи. Коды
+    возврата игнорируются (задача может не бежать, процесса может не быть);
+    честный сигнал успеха -- разблокировка EXE. Задача остаётся
+    зарегистрированной: после перезагрузки агент вернётся -- «Выход» выгружает
+    из памяти, а не удаляет (полное удаление = setup --uninstall).
+    """
+    from client.deploy.setup import (
+        AGENT_EXE,
+        DEST,
+        _wait_files_unlocked,
+        schtasks_stop_cmd,
+        taskkill_agent_cmd,
+    )
+
+    def _default_runner(cmd: list[str]) -> int:
+        # фиксированный argv, собранный строкой выше -- ни shell, ни ввода юзера
+        return subprocess.run(  # nosec B603
+            cmd, capture_output=True, creationflags=NO_WINDOW
+        ).returncode
+
+    run = runner or _default_runner
+    run(schtasks_stop_cmd())
+    run(taskkill_agent_cmd())
+    wait = wait_unlocked or (
+        lambda: _wait_files_unlocked([Path(DEST) / AGENT_EXE], timeout_sec=_AGENT_STOP_TIMEOUT_SEC)
+    )
+    if not wait():
+        alert("Не удалось остановить srp-agent.exe (файл всё ещё занят).")
+        return 1
+    return 0
 
 
 def _acquire_single_instance() -> Optional[int]:
@@ -240,6 +327,12 @@ def _parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
     p.add_argument(
         "--ask-password", action="store_true", help="modal password prompt (exit 0 if ok)"
     )
+    p.add_argument(
+        "--stop-agent",
+        action="store_true",
+        dest="stop_agent",
+        help="остановить SYSTEM-агента (запускается elevated из «Выход»)",
+    )
     return p.parse_args(argv)
 
 
@@ -258,6 +351,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if args.ask_password:
         return panel.run_password_prompt(config_path=config_path, tray_state_path=tray_state_path)
+    if args.stop_agent:
+        return run_stop_agent()
 
     _setup_logging()
     try:
