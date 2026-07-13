@@ -152,6 +152,11 @@
 <div class="alert-banner alert-warn">⚠ Источники пропали: {{ s.risk.regressed_sources|join(", ") }}</div>
 {% endif %}
 
+{# ── Главный вердикт: координаты здоровья D·R·O (Ф7 hero) ──────────────── #}
+{% include "_device_hero.html" %}
+
+{# ── Оси score100 — детализация (вторичный уровень после координат) ────── #}
+<div class="section-label" style="margin-top:24px">Оси score100 — детализация</div>
 {# ── Day-1 score cards ─────────────────────────────────────────────────── #}
 {% set c1 = health_color(s.performance) %}
 {% set c2 = health_color(s.reliability) %}
@@ -224,9 +229,6 @@
   </div>
 </div>
 {% endif %}
-
-{# ── Health hero (Ф7 T7.2) — three-coordinate summary above "Прогноз" ───── #}
-{% include "_device_hero.html" %}
 
 {# ════════════════════════════════════════════════════════════════════════
    ПРОГНОЗ — траектории и ресурс

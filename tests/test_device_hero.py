@@ -276,3 +276,13 @@ def test_hero_sparkline_island_embeds_index_series(client) -> None:
     frag = _hero_fragment(body)
     assert 'id="hero-health-series"' in frag
     assert "78.0" in frag
+
+
+def test_device_page_hero_precedes_score100_axes(seeded_client) -> None:
+    devices = seeded_client.get("/api/v1/devices").json()
+    assert devices
+    html = seeded_client.get(f"/device/{devices[0]['device_id']}").text
+    hero = html.find('id="device-hero"')
+    axes = html.find("Оси score100")
+    assert hero != -1 and axes != -1, "нет hero или подписи осей"
+    assert hero < axes, "вердикт D/R/O должен идти раньше score100-детализации"
