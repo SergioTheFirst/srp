@@ -179,6 +179,37 @@ def test_rate_limit_independent_per_device(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Unit: client-side payload size cap
+# --------------------------------------------------------------------------- #
+
+
+def test_oversized_payload_dropped_not_buffered(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from client import transport as tr
+
+    cfg = SimpleNamespace(
+        server_url="http://127.0.0.1:9",  # discard-порт: сеть не должна понадобиться
+        device_id="d1",
+        hostname="h",
+        site_code="",
+        site_name="",
+        org_code="",
+        dept_code="",
+        comment="",
+        ingest_token="",
+        http_timeout_sec=1.0,
+        resolved_buffer_path=lambda: tmp_path / "buffer.jsonl",
+    )
+    t = tr.Transport(cfg)
+
+    big = {"blob": "x" * (tr._MAX_PAYLOAD_BYTES + 1)}
+    assert t.send("historical", big) is True  # «обработан» = отброшен без ретраев
+    assert t.buffer_depth() == 0  # и НЕ лёг в оффлайн-буфер
+    assert "cap" in t.last_error
+
+
+# --------------------------------------------------------------------------- #
 # Integration: HTTP behaviour
 # --------------------------------------------------------------------------- #
 
