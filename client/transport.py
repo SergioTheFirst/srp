@@ -34,6 +34,9 @@ _RETRY_BACKOFF_SEC = 1.0
 # Extra random jitter added to retry sleep to prevent thundering herd when many
 # agents reconnect simultaneously after a server outage.
 _RETRY_JITTER_SEC = 2.0
+# Чуть ниже серверного лимита 512 KiB (server/main.py body-cap): негабарит
+# режем ещё на агенте -- не жечь сеть ради гарантированного 413.
+_MAX_PAYLOAD_BYTES = 500_000
 
 
 class Transport:
@@ -148,6 +151,14 @@ class Transport:
     def _attempt(self, envelope: dict[str, Any]) -> str:
         """One POST. Returns 'ok' | 'drop' | 'retry'."""
         body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+        if len(body) > _MAX_PAYLOAD_BYTES:
+            self.last_error = f"payload {len(body)} bytes > cap"
+            log.warning(
+                "oversized %s payload (%d bytes) -- dropping, not buffering",
+                envelope.get("msg_type"),
+                len(body),
+            )
+            return "drop"
         headers = {"Content-Type": "application/json"}
         if self._cfg.ingest_token:
             headers["X-SRP-Token"] = self._cfg.ingest_token
