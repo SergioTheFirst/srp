@@ -17,6 +17,7 @@ import ipaddress
 import json
 import sqlite3
 import threading
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -359,6 +360,15 @@ CREATE TABLE IF NOT EXISTS event_rollup_daily (
   event_key   TEXT NOT NULL,
   n           INTEGER NOT NULL,
   PRIMARY KEY (device_id, day, event_key)
+);
+CREATE TABLE IF NOT EXISTS raw_archive (
+  device_id  TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  rows_n     INTEGER NOT NULL,
+  blob       BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, day, kind)
 );
 CREATE TABLE IF NOT EXISTS maintenance_log (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1149,6 +1159,72 @@ def run_daily_rollup() -> dict[str, int]:
     return {"days": len(days), "heartbeat_rows": hb_n, "event_rows": ev_n}
 
 
+_ARCHIVE_TABLES = ("heartbeats", "events")  # закрытый литерал -- не внешний ввод
+
+
+def _archive_aged_rows(conn: sqlite3.Connection, table: str, days: int) -> int:
+    """D9: zlib-архив строк *table* старше порога -- ДО их DELETE в prune_aged.
+
+    Группировка по (device_id, день UTC); день, состарившийся частично
+    (граница -- timestamp), дописывается: существующий blob распаковывается,
+    строки добавляются, blob пересжимается -- никакой конкатенации zlib-потоков.
+    Той же транзакцией prune удаляет исходники, поэтому повторный прогон не
+    видит уже заархивированных строк -- дублей нет by construction.
+    """
+    if table not in _ARCHIVE_TABLES:
+        raise ValueError(f"not archivable: {table!r}")
+    rows = conn.execute(
+        # B608: table names are fixed module literals, never user input.
+        f"SELECT * FROM {table} WHERE received_at < datetime('now', ?)",  # nosec B608
+        (f"-{days} days",),
+    ).fetchall()
+    if not rows:
+        return 0
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in rows:
+        d = dict(r)
+        day = str(d.get("received_at") or "")[:10]
+        grouped.setdefault((str(d.get("device_id")), day), []).append(d)
+    now = _now_iso()
+    for (device_id, day), items in grouped.items():
+        lines = [json.dumps(i, ensure_ascii=False, sort_keys=True) for i in items]
+        existing = conn.execute(
+            "SELECT blob FROM raw_archive WHERE device_id=? AND day=? AND kind=?",
+            (device_id, day, table),
+        ).fetchone()
+        if existing is not None:
+            lines = zlib.decompress(existing["blob"]).decode("utf-8").splitlines() + lines
+        conn.execute(
+            "INSERT OR REPLACE INTO raw_archive "
+            "(device_id, day, kind, rows_n, blob, created_at) VALUES (?,?,?,?,?,?)",
+            (
+                device_id,
+                day,
+                table,
+                len(lines),
+                zlib.compress("\n".join(lines).encode("utf-8")),
+                now,
+            ),
+        )
+    return len(rows)
+
+
+def get_raw_archive(device_id: str, kind: str, days: int) -> list[dict[str, Any]]:
+    """Распакованные сырые строки из архива (репроцессинг/feature-mining, D9)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT blob FROM raw_archive
+               WHERE device_id=? AND kind=? AND day >= date('now', ?)
+               ORDER BY day""",
+            (device_id, kind, f"-{days} days"),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        for line in zlib.decompress(r["blob"]).decode("utf-8").splitlines():
+            out.append(json.loads(line))
+    return out
+
+
 def prune_aged(
     *, heartbeat_raw_days: int, events_raw_days: int, rollup_days: int
 ) -> dict[str, int]:
@@ -1160,12 +1236,16 @@ def prune_aged(
     deleted: dict[str, int] = {}
     with _lock, _connect() as conn:
         if heartbeat_raw_days > 0:
+            deleted["raw_archived_heartbeats"] = _archive_aged_rows(
+                conn, "heartbeats", heartbeat_raw_days
+            )
             cur = conn.execute(
                 "DELETE FROM heartbeats WHERE received_at < datetime('now', ?)",
                 (f"-{heartbeat_raw_days} days",),
             )
             deleted["heartbeats"] = cur.rowcount
         if events_raw_days > 0:
+            deleted["raw_archived_events"] = _archive_aged_rows(conn, "events", events_raw_days)
             cur = conn.execute(
                 "DELETE FROM events WHERE received_at < datetime('now', ?)",
                 (f"-{events_raw_days} days",),
@@ -1177,6 +1257,8 @@ def prune_aged(
             deleted["heartbeat_rollup_daily"] = cur.rowcount
             cur = conn.execute("DELETE FROM event_rollup_daily WHERE day < ?", (cutoff,))
             deleted["event_rollup_daily"] = cur.rowcount
+            cur = conn.execute("DELETE FROM raw_archive WHERE day < ?", (cutoff,))
+            deleted["raw_archive"] = cur.rowcount
     if any(deleted.values()):
         _log_maintenance("prune_aged", json.dumps(deleted))
     return deleted
@@ -2132,6 +2214,7 @@ _DEVICE_TABLES: tuple[str, ...] = (
     "heartbeat_rollup_daily",
     "event_rollup_daily",
     "rule_episodes",
+    "raw_archive",
 )
 
 _SECONDS_PER_DAY = 86_400
