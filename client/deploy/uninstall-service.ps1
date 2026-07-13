@@ -29,5 +29,10 @@ try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction Stop } catch {
     Write-Warning "Could not stop '$TaskName' (continuing to unregister): $($_.Exception.Message)"
 }
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+
+# Выгрузить процесс агента (паритет с setup.exe --uninstall): задача может быть
+# уже остановлена, а srp-agent.exe -- продолжать работать (ручной запуск).
+try { Stop-Process -Name "srp-agent" -Force -ErrorAction Stop } catch {}
+
 Write-Host "Removed scheduled task '$TaskName'."
 Write-Host "(config.json, buffer.jsonl and srp-agent.log were left in place.)"

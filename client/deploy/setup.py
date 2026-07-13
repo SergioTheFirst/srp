@@ -527,8 +527,12 @@ def run_update(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
 
 
 def run_uninstall(opts: SetupOptions, *, dest: str = DEST) -> int:
-    _run(schtasks_stop_cmd())
-    _run(taskkill_tray_cmd())
+    # Выгрузить ОБА процесса из памяти (в этом смысл uninstall), переиспользуя
+    # stop-путь обновления: schtasks /end -> taskkill agent+tray -> ждать
+    # разблокировки EXE. Таймаут логируем, но НЕ абортим: снять автостарт и
+    # Run-ключ всё равно строго лучше, чем оставить их.
+    if not _stop_running_processes(dest):
+        _log(dest, "uninstall: агент/трей не освободили файлы за 60 с -- продолжаю")
     _run(schtasks_delete_cmd())
     _run(reg_delete_run_cmd())
     if opts.purge:
