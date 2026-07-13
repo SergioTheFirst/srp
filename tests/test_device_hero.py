@@ -148,9 +148,15 @@ def _blind_health(**over: Any) -> dict:
 def _hero_fragment(body: str) -> str:
     """The hero block's own HTML, isolated from the rest of the page (base.html's
     :root token block legitimately contains hex literals, so a whole-page scan is
-    not a valid pin -- match test_health_web.py's own island-isolation approach)."""
+    not a valid pin -- match test_health_web.py's own island-isolation approach).
+
+    Since the risk-hierarchy reorder (ssd3/cctodo W4.3-3), the hero renders
+    immediately before the "Оси score100" label, not before "Прогноз" -- end the
+    slice there so it stays a tight hero-only window instead of also swallowing
+    the score100 axis cards and source-coverage widget that now sit between the
+    hero and "Прогноз"."""
     start = body.index('id="device-hero"')
-    end = body.index("Прогноз — траектории")
+    end = body.index("Оси score100")
     return body[start:end]
 
 
@@ -276,3 +282,13 @@ def test_hero_sparkline_island_embeds_index_series(client) -> None:
     frag = _hero_fragment(body)
     assert 'id="hero-health-series"' in frag
     assert "78.0" in frag
+
+
+def test_device_page_hero_precedes_score100_axes(seeded_client) -> None:
+    devices = seeded_client.get("/api/v1/devices").json()
+    assert devices
+    html = seeded_client.get(f"/device/{devices[0]['device_id']}").text
+    hero = html.find('id="device-hero"')
+    axes = html.find("Оси score100")
+    assert hero != -1 and axes != -1, "нет hero или подписи осей"
+    assert hero < axes, "вердикт D/R/O должен идти раньше score100-детализации"
