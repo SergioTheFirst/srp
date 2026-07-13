@@ -1162,8 +1162,14 @@ def run_daily_rollup() -> dict[str, int]:
 _ARCHIVE_TABLES = ("heartbeats", "events")  # закрытый литерал -- не внешний ввод
 
 
-def _archive_aged_rows(conn: sqlite3.Connection, table: str, days: int) -> int:
-    """D9: zlib-архив строк *table* старше порога -- ДО их DELETE в prune_aged.
+def _archive_aged_rows(conn: sqlite3.Connection, table: str, cutoff: str) -> int:
+    """D9: zlib-архив строк *table* старше *cutoff* -- ДО их DELETE в prune_aged.
+
+    *cutoff* -- уже вычисленная строка (та же, что уйдёт в парный DELETE), а
+    не число дней: `datetime('now', ...)` в SQLite пересчитывается заново при
+    каждом вызове, и раздельные SELECT/DELETE с одинаковым `-N days` могут
+    разъехаться на пограничных строках (cutoff-drift race) -- один Python-cutoff
+    на оба стейтмента закрывает это.
 
     Группировка по (device_id, день UTC); день, состарившийся частично
     (граница -- timestamp), дописывается: существующий blob распаковывается,
@@ -1175,8 +1181,8 @@ def _archive_aged_rows(conn: sqlite3.Connection, table: str, days: int) -> int:
         raise ValueError(f"not archivable: {table!r}")
     rows = conn.execute(
         # B608: table names are fixed module literals, never user input.
-        f"SELECT * FROM {table} WHERE received_at < datetime('now', ?)",  # nosec B608
-        (f"-{days} days",),
+        f"SELECT * FROM {table} WHERE received_at < ?",  # nosec B608
+        (cutoff,),
     ).fetchall()
     if not rows:
         return 0
@@ -1236,19 +1242,23 @@ def prune_aged(
     deleted: dict[str, int] = {}
     with _lock, _connect() as conn:
         if heartbeat_raw_days > 0:
-            deleted["raw_archived_heartbeats"] = _archive_aged_rows(
-                conn, "heartbeats", heartbeat_raw_days
+            hb_cutoff = (datetime.now(timezone.utc) - timedelta(days=heartbeat_raw_days)).strftime(
+                "%Y-%m-%d %H:%M:%S"
             )
+            deleted["raw_archived_heartbeats"] = _archive_aged_rows(conn, "heartbeats", hb_cutoff)
             cur = conn.execute(
-                "DELETE FROM heartbeats WHERE received_at < datetime('now', ?)",
-                (f"-{heartbeat_raw_days} days",),
+                "DELETE FROM heartbeats WHERE received_at < ?",
+                (hb_cutoff,),
             )
             deleted["heartbeats"] = cur.rowcount
         if events_raw_days > 0:
-            deleted["raw_archived_events"] = _archive_aged_rows(conn, "events", events_raw_days)
+            ev_cutoff = (datetime.now(timezone.utc) - timedelta(days=events_raw_days)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            deleted["raw_archived_events"] = _archive_aged_rows(conn, "events", ev_cutoff)
             cur = conn.execute(
-                "DELETE FROM events WHERE received_at < datetime('now', ?)",
-                (f"-{events_raw_days} days",),
+                "DELETE FROM events WHERE received_at < ?",
+                (ev_cutoff,),
             )
             deleted["events"] = cur.rowcount
         if rollup_days > 0:
