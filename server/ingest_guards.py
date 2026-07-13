@@ -31,6 +31,20 @@ _RATE_WINDOW_SEC: float = 60.0
 # multi-message flood without blocking legitimate reconnect bursts.
 _RATE_MAX_PER_WINDOW: int = 30
 
+# §6 «отказы буфера» серверной стороной: отклонённые конверты по причинам.
+# In-process счётчики (один uvicorn-воркер); тесты сбрасывают через reset-хук.
+REJECT_COUNTS: dict[str, int] = {
+    "auth": 0,
+    "rate_limit": 0,
+    "duplicate": 0,
+    "invalid": 0,
+    "too_large": 0,
+}
+
+
+def count_reject(reason: str) -> None:
+    REJECT_COUNTS[reason] = REJECT_COUNTS.get(reason, 0) + 1
+
 
 def check_idempotency(key: Optional[str]) -> bool:
     """True → new envelope (process it).  False → duplicate (already processed).
@@ -73,3 +87,5 @@ def reset_guards() -> None:
         _seen_keys.clear()
     with _rate_lock:
         _device_windows.clear()
+    for k in REJECT_COUNTS:
+        REJECT_COUNTS[k] = 0

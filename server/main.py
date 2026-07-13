@@ -22,6 +22,7 @@ from starlette.responses import Response
 from server import db, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
+from server.ingest_guards import count_reject
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.netdisco.cache import GraphCache
@@ -38,12 +39,14 @@ class _IngestBodySizeMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/api/v1/ingest":
             cl = request.headers.get("content-length")
             if cl and int(cl) > _MAX_INGEST_BODY_BYTES:
+                count_reject("too_large")
                 return Response("Request body too large", status_code=413)
             # Also guard chunked TE (no Content-Length header): read and cache
             # the body so pydantic can still parse it from the Starlette cache.
             if cl is None:
                 body = await request.body()
                 if len(body) > _MAX_INGEST_BODY_BYTES:
+                    count_reject("too_large")
                     return Response("Request body too large", status_code=413)
         return await call_next(request)
 

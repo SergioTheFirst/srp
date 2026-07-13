@@ -86,6 +86,25 @@ def test_metrics_scores_age_populated_after_ingest(client):
         assert age >= 0
 
 
+def test_metrics_expose_lock_and_reject_counters(client) -> None:
+    m = client.get("/api/v1/metrics").json()
+    assert {"acquisitions", "wait_avg_ms", "wait_max_ms"} <= set(m["lock"])
+    assert {"auth", "rate_limit", "duplicate", "invalid", "too_large"} <= set(m["ingest_rejects"])
+
+
+def test_rate_limit_reject_is_counted(client, monkeypatch) -> None:
+    from server import api as api_mod
+    from server import ingest_guards
+
+    monkeypatch.setattr(api_mod, "check_rate_limit", lambda _did: False)
+    r = client.post(
+        "/api/v1/ingest",
+        json=envelope("dev-rej", "heartbeat", healthy("heartbeat")),
+    )
+    assert r.status_code == 429
+    assert ingest_guards.REJECT_COUNTS["rate_limit"] == 1
+
+
 # ── /pipeline HTML page ───────────────────────────────────────────────────── #
 
 
