@@ -335,7 +335,7 @@
 <script>
 (function () {
   var el = document.getElementById("chart-disk-p95");
-  if (!el || typeof Plotly === "undefined") return;
+  if (!el) return;
   var rows = JSON.parse(document.getElementById("hb-rollup-data").textContent || "[]")
                .filter(function (r) { return r.day && (r.disk_read_ms_p95 != null || r.disk_write_ms_p95 != null); })
                .reverse();  // stored newest-first; chart oldest -> newest
@@ -364,8 +364,17 @@
       hoverlabel: srpHoverLabel(),
     }, { responsive: true, displayModeBar: false });
   }
-  draw();
-  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  function init() {
+    // Plotly is deferred -- it exists only after DOM parsing, never during it.
+    if (typeof Plotly === "undefined") return;
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
 </script>
 {% endif %}
