@@ -10,6 +10,9 @@ from __future__ import annotations
 from server import db
 from server.pipeline import recompute_scores
 
+# risk-блоб сюда не входит: несёт time-зависимые поля (ETA, staleness-возраст),
+# которые легитимно отличаются между двумя вызовами на ~секунду реального
+# времени -- сравнивать его целиком означало бы пинить недетерминизм как баг.
 _STABLE_AXES = ("performance", "reliability", "wear", "risk_exposure")
 
 
