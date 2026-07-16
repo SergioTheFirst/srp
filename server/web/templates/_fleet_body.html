@@ -61,11 +61,9 @@
       <tr>
         <th class="sortable" data-col="0" data-sort="text"><span>Устройство</span><span class="sort-icon"></span></th>
         <th>Статус</th>
-        <th class="sortable" data-col="2"><span>П</span><span class="sort-icon"></span></th>
-        <th class="sortable" data-col="3"><span>Н</span><span class="sort-icon"></span></th>
-        <th class="sortable" data-col="4"><span>И</span><span class="sort-icon"></span></th>
-        <th class="sortable" data-col="5"><span>Риск</span><span class="sort-icon"></span></th>
-        <th title="ухудшающиеся траектории">Тренд</th>
+        <th class="sortable" data-col="2" title="сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше"><span>Индекс</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="3" title="состояние по координатной модели: от «здоров» до «предотказ»"><span>Состояние</span><span class="sort-icon"></span></th>
+        <th title="главный фактор деградации и прогноз окна до ухудшения">Главный фактор</th>
         <th>Сертификат</th>
         <th title="страниц за сегодня">Печать</th>
         <th>Связь</th>
@@ -104,30 +102,35 @@
         </div>
       </td>
 
-      {# ── Scores ───────────────────────────────────────────────────────── #}
-      <td data-val="{{ d.performance or 0 }}">
-        <span class="chip {{ health_color(d.performance) }}">{{ "%.0f"|format(d.performance) if d.performance is not none else "—" }}</span>
-      </td>
-      <td data-val="{{ d.reliability or 0 }}">
-        <span class="chip {{ health_color(d.reliability) }}">{{ "%.0f"|format(d.reliability) if d.reliability is not none else "—" }}</span>
-      </td>
-      <td data-val="{{ d.wear or 0 }}">
-        <span class="chip {{ health_color(d.wear) }}">{{ "%.0f"|format(d.wear) if d.wear is not none else "—" }}</span>
-      </td>
-      <td data-val="{{ d.risk_exposure or 0 }}">
-        <span class="chip {{ risk_color(d.risk_exposure) }}">{{ "%.0f"|format(d.risk_exposure) if d.risk_exposure is not none else "—" }}</span>
-      </td>
-
-      {# ── Trend ────────────────────────────────────────────────────────── #}
-      <td style="text-align:center">
-        {% if d.worsening_count %}
-          <span class="trend-up" title="{{ d.worsening_count }} метрик ухудшаются">↑{{ d.worsening_count }}</span>
-        {% elif d.trajectory_risk is not none %}
-          <span class="trend-flat">→</span>
-        {% else %}
-          <span class="trend-none">·</span>
-        {% endif %}
-      </td>
+      {# ── Health: сводный индекс + состояние + главный фактор (ssd3 Ф7) ──── #}
+      {# One coordinate-model verdict replaces the four flat scores + Тренд:
+         index carries the 7-day delta (so no separate trend column), state is
+         the qualitative reading, dominant is what drives it. Same fields and
+         terminology as the device card -> the two pages never disagree. #}
+      {% set hh = d.health %}
+      {% if hh %}
+        {% set hband = band_class(hh.band) %}
+        {# index is only meaningful with a known state: the >10d staleness overlay
+           forces state->unknown but leaves the stale number, so gate on state. #}
+        {% set idx_ok = hh.index is not none and hh.state != 'unknown' %}
+        {% set delta = hh.delta_7d %}
+        {% set delta_cls = 'na' if (delta is none or delta == 0) else ('good' if delta > 0 else 'bad') %}
+        <td data-val="{{ hh.index if idx_ok else 0 }}">
+          <span class="hidx {{ hband }}">{{ "%.0f"|format(hh.index) if idx_ok else "—" }}</span>{% if idx_ok and delta is not none and delta != 0 %} <span class="hdelta {{ delta_cls }}" title="изменение индекса за 7 дней">{{ "▲" if delta > 0 else "▼" }}{{ "%.0f"|format(delta|abs) }}</span>{% endif %}
+        </td>
+        <td data-val="{{ {'h4':4,'h3':3,'h2':2,'h1':1,'h0':0}.get(hh.state, -1) }}">
+          <span class="hstate {{ hband }}">{{ state_label_for(hh.state) }}</span>
+        </td>
+        <td class="hfactor">
+          {% if hh.state not in ('h0', 'unknown') and hh.dominant %}
+            {{ dominant_label_for(hh.dominant) }}{% if hh.horizon_days %} <span class="hfar" title="{{ hh.horizon_reason or 'прогноз окна до ухудшения состояния' }}">≤{{ hh.horizon_days }}дн</span>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+      {% else %}
+        <td data-val="0"><span class="hidx na">—</span></td>
+        <td data-val="-1"><span class="hstate na">нет данных</span></td>
+        <td class="hfactor"><span class="muted">—</span></td>
+      {% endif %}
 
       {# ── Certificate: soonest active machine or personal cert ──────────── #}
       <td>

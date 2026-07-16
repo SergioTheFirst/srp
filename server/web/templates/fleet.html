@@ -154,6 +154,30 @@ tbody td .chip.bad,
 tbody td .chip.na,
 tbody td .chip.accent { color: #ffe000; }
 
+/* ── Health verdict cells (ssd3 Ф7) — band-colored, replace the flat scores ── */
+.hidx { font: 700 16px/1 var(--mono); }
+.hidx.good { color: var(--good); }
+.hidx.warn { color: var(--warn); }
+.hidx.bad  { color: var(--bad); }
+.hidx.na   { color: var(--muted); }
+.hdelta { font: 700 11px/1 var(--mono); vertical-align: middle; }
+.hdelta.good { color: var(--good); }
+.hdelta.bad  { color: var(--bad); }
+.hdelta.na   { color: var(--muted); }
+.hstate {
+  display: inline-block; font: 600 12px/1 var(--mono);
+  padding: 3px 8px; border-radius: 3px; letter-spacing: .2px; white-space: nowrap;
+}
+.hstate.good { background: var(--good-dim); color: var(--good); border: 1px solid rgba(16,217,122,.3); }
+.hstate.warn { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.3); }
+.hstate.bad  { background: var(--bad-dim);  color: var(--bad);  border: 1px solid rgba(228,30,63,.35); }
+.hstate.na   { background: var(--na-dim);   color: var(--muted);border: 1px solid rgba(51,78,104,.4); }
+.hfactor { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.hfar {
+  font: 600 11px/1 var(--mono); color: var(--warn);
+  padding: 1px 5px; border-radius: 3px; background: var(--warn-dim); margin-left: 2px;
+}
+
 /* Trend arrows — worsening arrow rendered as a high-contrast highlight */
 tbody td .trend-flat,
 tbody td .trend-none { font-size: 15px; }
