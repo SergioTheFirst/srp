@@ -254,3 +254,13 @@ def test_specs_fallback_when_no_inventory(client) -> None:
     _seed("card-15", "CARD-15", {})
     body = client.get("/device/card-15").text
     assert "Характеристики ещё не получены от агента" in body
+
+
+def test_specs_block_renders_without_scores(client) -> None:
+    # Никакого _seed()/db.store_scores() -- d.scores должен остаться None, чтобы
+    # реально проверить ветку "{% if not s %}": include стоит ДО этого гейта
+    # именно затем, чтобы блок «Компьютер» был виден и до расчёта скорингов.
+    db.touch_device("card-16", _iso_now(), "0.1.0", hostname="CARD-16")
+    db.store_inventory("card-16", _iso_now(), _INV)
+    body = client.get("/device/card-16").text
+    assert "Intel(R) Core(TM) i5-10400" in body
