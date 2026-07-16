@@ -186,7 +186,7 @@
    данных → в раскрывашке «Подробная диагностика». Порог 25 = граница warn
    существующей шкалы risk_color — карточка и правило не расходятся. #}
 {% set s100 = s.risk.score100 or {} %}
-{% set ns_ax = namespace(attention=[], rest=[], total=0) %}
+{% set ns_ax = namespace(attention=[], rest=[], unknown=0, total=0) %}
 {% for key, name, tip, na_tip in axes_meta %}
   {% set ax = s100.get(key) %}
   {% if ax %}
@@ -195,9 +195,15 @@
       {% set _ = ns_ax.attention.append((key, name, tip, na_tip)) %}
     {% else %}
       {% set _ = ns_ax.rest.append((key, name, tip, na_tip)) %}
+      {% if ax.value is none %}
+        {% set ns_ax.unknown = ns_ax.unknown + 1 %}
+      {% endif %}
     {% endif %}
   {% endif %}
 {% endfor %}
+{# rest = healthy (< 25) + unknown (no value) -- kept apart so "всё чисто" is
+   never claimed while an axis is still unresolved (UNKNOWN over false confidence). #}
+{% set healthy_rest = ns_ax.rest|length - ns_ax.unknown %}
 
 {# ── ТРЕБУЕТ ВНИМАНИЯ ──────────────────────────────────────────────────── #}
 <div class="section-label incident" id="attention-label" style="margin-top:24px">Требует внимания</div>
@@ -205,6 +211,8 @@
 <p class="muted small">Оси диагностики ещё не рассчитаны.</p>
 {% elif ns_ax.attention %}
 {% for key, name, tip, na_tip in ns_ax.attention %}{{ axm.render_axis(key, name, tip, na_tip) }}{% endfor %}
+{% elif ns_ax.unknown %}
+<p class="muted small">Без замечаний: {{ healthy_rest }} · нет данных для оценки: {{ ns_ax.unknown }} — см. «Подробная диагностика» ниже.</p>
 {% else %}
 <p class="small" style="color:var(--good)">✓ По рассчитанным проверкам замечаний нет.</p>
 {% endif %}
@@ -419,7 +427,7 @@
 
 {# ── ПОДРОБНАЯ ДИАГНОСТИКА (свёрнута по умолчанию) ─────────────────────── #}
 <details id="device-diagnostics" style="margin-top:26px">
-  <summary>Подробная диагностика{% if ns_ax.rest %} · проверок без замечаний: {{ ns_ax.rest|length }}{% endif %}</summary>
+  <summary>Подробная диагностика{% if ns_ax.rest %} · проверок без замечаний: {{ healthy_rest }}{% if ns_ax.unknown %} · без данных: {{ ns_ax.unknown }}{% endif %}{% endif %}</summary>
   <div style="margin-top:12px">
   {% for key, name, tip, na_tip in ns_ax.rest %}{{ axm.render_axis(key, name, tip, na_tip) }}{% endfor %}
   </div>

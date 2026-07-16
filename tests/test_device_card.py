@@ -106,3 +106,19 @@ def test_trajectory_axis_renamed_no_english_calque(client) -> None:
     body = client.get("/device/card-7").text
     assert "Риск по трендам" in body
     assert "Риск траектории" not in body
+
+
+def test_mixed_healthy_and_unknown_axes_not_shown_as_all_clear(client) -> None:
+    # Review finding: ns_ax.rest used to lump "healthy" (value < 25) and "unknown"
+    # (value is None) axes together with no way to tell them apart, so this exact
+    # combination (nothing in attention, but one axis unresolved) rendered a false
+    # "all clear" -- violates the "UNKNOWN over false confidence" invariant (CLAUDE.md §5).
+    _seed(
+        "card-8",
+        "CARD-8",
+        {"score100": {"storage_risk": _axis(5.0), "network_risk": _axis(None, confidence=None)}},
+    )
+    body = client.get("/device/card-8").text
+    assert "По рассчитанным проверкам замечаний нет" not in body
+    assert "Без замечаний: 1" in body
+    assert "нет данных для оценки: 1" in body
