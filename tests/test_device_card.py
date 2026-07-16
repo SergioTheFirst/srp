@@ -137,10 +137,13 @@ def test_risk_exposure_renamed_everywhere(client) -> None:
 def test_day1_scorecards_inside_details(client) -> None:
     _seed("card-9", "CARD-9", {})
     body = client.get("/device/card-9").text
-    details = body.find('id="device-diagnostics"')
+    details_open = body.find('id="device-diagnostics"')
+    details_close = body.find("</details>", details_open)
     day1 = body.find("Производительность")
-    assert details != -1 and day1 != -1
-    assert details < day1, "старые сводные баллы должны лежать внутри раскрывашки"
+    assert details_open != -1 and details_close != -1 and day1 != -1
+    assert details_open < day1 < details_close, (
+        "старые сводные баллы должны лежать внутри раскрывашки"
+    )
 
 
 def test_coverage_widget_moved_but_string_preserved(client) -> None:
@@ -152,9 +155,13 @@ def test_coverage_widget_moved_but_string_preserved(client) -> None:
         {"domains": {"smart": {"state": "trusted", "weight": 1.0}}, "classes": []},
     )
     body = client.get("/device/card-10").text
-    details = body.find('id="device-diagnostics"')
+    details_open = body.find('id="device-diagnostics"')
+    details_close = body.find("</details>", details_open)
     cov = body.find("Покрытие источников")
-    assert details != -1 and cov != -1 and details < cov
+    assert details_open != -1 and details_close != -1 and cov != -1
+    assert details_open < cov < details_close, (
+        "должно лежать внутри раскрывашки, не просто после её открытия"
+    )
 
 
 def test_failure_classes_inside_details(client) -> None:
@@ -174,6 +181,10 @@ def test_failure_classes_inside_details(client) -> None:
         },
     )
     body = client.get("/device/card-11").text
-    details = body.find('id="device-diagnostics"')
+    details_open = body.find('id="device-diagnostics"')
+    details_close = body.find("</details>", details_open)
     cls = body.find("Классы отказа")
-    assert details != -1 and cls != -1 and details < cls
+    assert details_open != -1 and details_close != -1 and cls != -1
+    assert details_open < cls < details_close, (
+        "должно лежать ВНУТРИ раскрывашки, не просто после её открытия"
+    )
