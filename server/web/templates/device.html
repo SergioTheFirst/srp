@@ -14,6 +14,33 @@
 {% set score_tip = "Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50" %}
 {% set level_ru = {"Critical": "Критич.", "Error": "Ошибка", "Warning": "Предупр.", "Information": "Инфо"} %}
 
+{% import "_axis_macros.html" as axm with context %}
+{# Метаданные всех score100-осей: (ключ, название, tip, na_tip).
+   Tip-тексты перенесены 1:1 со старых axis-card — не менять формулировки. #}
+{% set axes_meta = [
+  ("storage_risk", "Здоровье диска (SMART)",
+   "Риск отказа диска на основе данных SMART: переназначенные секторы, ошибки чтения/записи, температура, износ SSD. 0–100, выше = хуже",
+   "Нет данных SMART или диск не поддерживает мониторинг"),
+  ("battery_risk", "Здоровье батареи",
+   "Износ батареи: отношение реальной ёмкости к заводской. 0–100, выше = хуже. Внимание: вздутие не определяется по ёмкости",
+   "Нет данных о батарее или батарея не определена"),
+  ("os_degradation_risk", "Стабильность ОС",
+   "Нестабильность ОС: RSI Windows (индекс стабильности 1–10, ниже = хуже), синие экраны, неожиданные выключения, время загрузки. 0–100, выше = хуже",
+   "Нет данных RSI и счётчиков сбоев — не можем оценить"),
+  ("disk_fill_risk", "Заполнение диска / обслуживание Windows",
+   "Риск нехватки места на диске и сбоя обслуживания Windows (обновления, патчи). Основан на медиане свободного места за 14 дней и ошибках обновлений. 0–100, выше = хуже",
+   "Нет данных о свободном месте"),
+  ("network_risk", "Здоровье сети",
+   "Состояние сети машины: потери и задержка до шлюза, адрес без DHCP (APIPA), слабый Wi-Fi. 0–100, выше = хуже. Блокировка ICMP честно показывается как «не видно», а не как авария",
+   "Нет сетевой телеметрии или источник не прошёл проверку доверия"),
+  ("fleet_anomaly_risk", "Аномалии флота",
+   "Сравнение с другими устройствами того же типа или объекта. Выявляет массовые проблемы: плохой патч ОС, нестабильное питание в здании. 0–100, выше = хуже",
+   "Менее 2 устройств того же типа — сравнение невозможно"),
+  ("trajectory_risk", "Риск по трендам",
+   "Насколько быстро показатели движутся к допустимым пределам: износ SSD, батарея, заполнение диска, время загрузки. 0–100, выше = хуже",
+   "Недостаточно точек данных для расчёта тренда (нужно минимум 3)"),
+] %}
+
 {% block extra_head %}
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 <style>
@@ -155,6 +182,33 @@
 {# ── Главный вердикт: координаты здоровья D·R·O (Ф7 hero) ──────────────── #}
 {% include "_device_hero.html" %}
 
+{# ── Правило видимости: ось «горит» (value ≥ 25) → видна сразу; норма/нет
+   данных → в раскрывашке «Подробная диагностика». Порог 25 = граница warn
+   существующей шкалы risk_color — карточка и правило не расходятся. #}
+{% set s100 = s.risk.score100 or {} %}
+{% set ns_ax = namespace(attention=[], rest=[], total=0) %}
+{% for key, name, tip, na_tip in axes_meta %}
+  {% set ax = s100.get(key) %}
+  {% if ax %}
+    {% set ns_ax.total = ns_ax.total + 1 %}
+    {% if ax.value is not none and ax.value >= 25 %}
+      {% set _ = ns_ax.attention.append((key, name, tip, na_tip)) %}
+    {% else %}
+      {% set _ = ns_ax.rest.append((key, name, tip, na_tip)) %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+
+{# ── ТРЕБУЕТ ВНИМАНИЯ ──────────────────────────────────────────────────── #}
+<div class="section-label incident" id="attention-label" style="margin-top:24px">Требует внимания</div>
+{% if ns_ax.total == 0 %}
+<p class="muted small">Оси диагностики ещё не рассчитаны.</p>
+{% elif ns_ax.attention %}
+{% for key, name, tip, na_tip in ns_ax.attention %}{{ axm.render_axis(key, name, tip, na_tip) }}{% endfor %}
+{% else %}
+<p class="small" style="color:var(--good)">✓ По рассчитанным проверкам замечаний нет.</p>
+{% endif %}
+
 {# ── Оси score100 — детализация (вторичный уровень после координат) ────── #}
 <div class="section-label" style="margin-top:24px">Оси score100 — детализация</div>
 {# ── Day-1 score cards ─────────────────────────────────────────────────── #}
@@ -231,32 +285,12 @@
 {% endif %}
 
 {# ════════════════════════════════════════════════════════════════════════
-   ПРОГНОЗ — траектории и ресурс
+   ПРОГНОЗ — ресурс и сроки
    ════════════════════════════════════════════════════════════════════════ #}
-<div class="section-label predictive" style="margin-top:28px">Прогноз — траектории и ресурс</div>
+<div class="section-label predictive" style="margin-top:28px">Прогноз — ресурс и сроки</div>
 
-{% set traj_ax = (s.risk.score100 or {}).get("trajectory_risk") %}
-{% if traj_ax %}
-<div class="axis-card {{ 'na' if traj_ax.value is none else risk_color(traj_ax.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Совокупный риск выхода показателей за допустимые пределы по тренду. Рассчитывается по нескольким осям: износ SSD, батарея, диск, время загрузки">Риск траектории</div>
-      <div class="axis-reason">{{ traj_ax.reason or "совокупный риск выхода за пределы" }}</div>
-    </div>
-    {% if traj_ax.value is none %}
-      <span class="chip na" title="Недостаточно точек данных для расчёта тренда (нужно минимум 3)">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(traj_ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(traj_ax.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(traj_ax.confidence, traj_ax.confidence or "?") }}</div>
-    </div>
-    {% endif %}
-  </div>
-</div>
-
-{# Trajectory table with visual bars #}
 {% set tr = s.risk.trajectory or {} %}
+{% if tr %}
 {% set dir_chip  = {"worsening":"bad","improving":"good","flat":"na","insufficient":"na"} %}
 {% set dir_label = {"worsening":"↑ ухудш.","improving":"↓ улучш.","flat":"→ стаб.","insufficient":"мало данных"} %}
 {% set traj_tips = {
@@ -319,6 +353,8 @@
   {% endif %}
 {% endfor %}
 </div>
+{% else %}
+<p class="muted small">Трендов пока нет — мало точек данных.</p>
 {% endif %}
 
 {# ssd3 Ф5 (T5.4): 90d daily-rollup disk-latency chart #}
@@ -381,157 +417,13 @@
 </script>
 {% endif %}
 
-{# Storage risk #}
-{% set stor = (s.risk.score100 or {}).get("storage_risk") %}
-{% if stor %}
-<div class="axis-card {{ 'na' if stor.value is none else risk_color(stor.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Риск отказа диска на основе данных SMART: переназначенные секторы, ошибки чтения/записи, температура, износ SSD. 0–100, выше = хуже">Здоровье диска (SMART)</div>
-      <div class="axis-reason">{{ stor.reason or "" }}</div>
-    </div>
-    {% if stor.value is none %}<span class="chip na" title="Нет данных SMART или диск не поддерживает мониторинг">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(stor.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(stor.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(stor.confidence, stor.confidence or "?") }}</div>
-    </div>{% endif %}
+{# ── ПОДРОБНАЯ ДИАГНОСТИКА (свёрнута по умолчанию) ─────────────────────── #}
+<details id="device-diagnostics" style="margin-top:26px">
+  <summary>Подробная диагностика{% if ns_ax.rest %} · проверок без замечаний: {{ ns_ax.rest|length }}{% endif %}</summary>
+  <div style="margin-top:12px">
+  {% for key, name, tip, na_tip in ns_ax.rest %}{{ axm.render_axis(key, name, tip, na_tip) }}{% endfor %}
   </div>
-  {% if stor.factors %}<div class="axis-factors">{% for f in stor.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-</div>
-{% endif %}
-
-{# Battery risk #}
-{% set bat = (s.risk.score100 or {}).get("battery_risk") %}
-{% if bat %}
-{% set bat_no_battery = (bat.value is none and bat.source_lineage is defined and bat.source_lineage and bat.source_lineage.battery_present == false) %}
-<div class="axis-card {{ 'na' if bat.value is none else risk_color(bat.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Износ батареи: отношение реальной ёмкости к заводской. 0–100, выше = хуже. Внимание: вздутие не определяется по ёмкости">Здоровье батареи</div>
-      <div class="axis-reason">
-        {% if bat_no_battery %}нет батареи (десктоп)
-        {% elif bat.value is none %}{{ bat.reason or "нет данных о батарее" }}
-        {% else %}{{ bat.reason or "" }}{% endif %}
-      </div>
-    </div>
-    {% if bat.value is none %}
-      <span class="chip na" title="{{ 'Устройство без батареи' if bat_no_battery else 'Нет данных о батарее или батарея не определена' }}">{{ "—" if bat_no_battery else "НЕИЗВЕСТНО" }}</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(bat.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(bat.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(bat.confidence, bat.confidence or "?") }}</div>
-    </div>{% endif %}
-  </div>
-  {% if bat.factors %}<div class="axis-factors">{% for f in bat.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-  {% if bat.value is not none and bat.missing_evidence %}
-  <div class="axis-blind">⚠ не видно: {{ bat.missing_evidence | join("; ") }}</div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# ════════════════════════════════════════════════════════════════════════
-   ТЕКУЩЕЕ СОСТОЯНИЕ — текущие сигналы
-   ════════════════════════════════════════════════════════════════════════ #}
-<div class="section-label incident">Текущее состояние</div>
-
-{# OS degradation #}
-{% set osdeg = (s.risk.score100 or {}).get("os_degradation_risk") %}
-{% if osdeg %}
-<div class="axis-card {{ 'na' if osdeg.value is none else risk_color(osdeg.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Нестабильность ОС: RSI Windows (индекс стабильности 1–10, ниже = хуже), синие экраны, неожиданные выключения, время загрузки. 0–100, выше = хуже">Стабильность ОС</div>
-      <div class="axis-reason">{{ osdeg.reason or "" }}</div>
-    </div>
-    {% if osdeg.value is none %}<span class="chip na" title="Нет данных RSI и счётчиков сбоев — не можем оценить">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(osdeg.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(osdeg.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(osdeg.confidence, osdeg.confidence or "?") }}</div>
-    </div>{% endif %}
-  </div>
-  {% if osdeg.factors %}<div class="axis-factors">{% for f in osdeg.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-  {% if osdeg.value is not none and osdeg.missing_evidence %}
-  <div class="axis-blind">⚠ не видно: {{ osdeg.missing_evidence | join("; ") }}</div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# Disk fill #}
-{% set fill = (s.risk.score100 or {}).get("disk_fill_risk") %}
-{% if fill %}
-<div class="axis-card {{ 'na' if fill.value is none else risk_color(fill.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Риск нехватки места на диске и сбоя обслуживания Windows (обновления, патчи). Основан на медиане свободного места за 14 дней и ошибках обновлений. 0–100, выше = хуже">Заполнение диска / обслуживание Windows</div>
-      <div class="axis-reason">{{ fill.reason or "" }}</div>
-    </div>
-    {% if fill.value is none %}<span class="chip na" title="Нет данных о свободном месте">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(fill.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(fill.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(fill.confidence, fill.confidence or "?") }}</div>
-    </div>{% endif %}
-  </div>
-  {% if fill.factors %}<div class="axis-factors">{% for f in fill.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-  {% if fill.value is not none and fill.missing_evidence %}
-  <div class="axis-blind">⚠ не видно: {{ fill.missing_evidence | join("; ") }}</div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# Network risk (phase 2) #}
-{% set net_ax = (s.risk.score100 or {}).get("network_risk") %}
-{% if net_ax %}
-<div class="axis-card {{ 'na' if net_ax.value is none else risk_color(net_ax.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Состояние сети машины: потери и задержка до шлюза, адрес без DHCP (APIPA), слабый Wi-Fi. 0–100, выше = хуже. Блокировка ICMP честно показывается как «не видно», а не как авария">Здоровье сети</div>
-      <div class="axis-reason">{{ net_ax.reason or "" }}</div>
-    </div>
-    {% if net_ax.value is none %}<span class="chip na" title="Нет сетевой телеметрии или источник не прошёл проверку доверия">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(net_ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(net_ax.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(net_ax.confidence, net_ax.confidence or "?") }}</div>
-    </div>{% endif %}
-  </div>
-  {% if net_ax.factors %}<div class="axis-factors">{% for f in net_ax.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-  {% if net_subnet_note %}
-  <div class="axis-blind" title="Деградация видна на нескольких машинах подсети одновременно — причина почти наверняка общая (инфраструктура)">⚠ {{ net_subnet_note }}</div>
-  {% endif %}
-  {% if net_ax.value is not none and net_ax.missing_evidence %}
-  <div class="axis-blind">⚠ не видно: {{ net_ax.missing_evidence | join("; ") }}</div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# Fleet anomaly #}
-{% set fleet_ax = (s.risk.score100 or {}).get("fleet_anomaly_risk") %}
-{% if fleet_ax %}
-<div class="axis-card {{ 'na' if fleet_ax.value is none else risk_color(fleet_ax.value) }}">
-  <div class="axis-head">
-    <div>
-      <div class="axis-name"
-           title="Сравнение с другими устройствами того же типа или объекта. Выявляет массовые проблемы: плохой патч ОС, нестабильное питание в здании. 0–100, выше = хуже">Аномалии флота</div>
-      <div class="axis-reason">{{ fleet_ax.reason or "" }}</div>
-    </div>
-    {% if fleet_ax.value is none %}<span class="chip na" title="Менее 2 устройств того же типа — сравнение невозможно">НЕИЗВЕСТНО</span>
-    {% else %}
-    <div style="text-align:right">
-      <div class="axis-val {{ risk_color(fleet_ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(fleet_ax.value) }}</div>
-      <div class="axis-conf" title="{{ conf_tip }}">{{ conf_ru.get(fleet_ax.confidence, fleet_ax.confidence or "?") }}</div>
-    </div>{% endif %}
-  </div>
-  {% if fleet_ax.factors %}<div class="axis-factors">{% for f in fleet_ax.factors %}<div class="axis-factor-item">{{ f.label }}</div>{% endfor %}</div>{% endif %}
-</div>
-{% endif %}
+</details>
 
 {# ── Failure classes (Bayesian) ────────────────────────────────────────── #}
 <div class="section-label" style="margin-top:24px"
