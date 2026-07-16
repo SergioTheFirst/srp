@@ -122,3 +122,58 @@ def test_mixed_healthy_and_unknown_axes_not_shown_as_all_clear(client) -> None:
     assert "По рассчитанным проверкам замечаний нет" not in body
     assert "Без замечаний: 1" in body
     assert "нет данных для оценки: 1" in body
+
+
+# --------------------------------------------------------------------------- #
+# T2: старая иерархия внутри раскрывашки, «Риск-экспозиция» переименована
+# --------------------------------------------------------------------------- #
+def test_risk_exposure_renamed_everywhere(client) -> None:
+    _seed("card-8", "CARD-8", {})
+    body = client.get("/device/card-8").text
+    assert "Риск-экспозиция" not in body
+    assert "Суммарный риск сбоя" in body
+
+
+def test_day1_scorecards_inside_details(client) -> None:
+    _seed("card-9", "CARD-9", {})
+    body = client.get("/device/card-9").text
+    details = body.find('id="device-diagnostics"')
+    day1 = body.find("Производительность")
+    assert details != -1 and day1 != -1
+    assert details < day1, "старые сводные баллы должны лежать внутри раскрывашки"
+
+
+def test_coverage_widget_moved_but_string_preserved(client) -> None:
+    """«Покрытие источников» запинено test_dashboard_trust.py:41 — строка обязана
+    остаться в DOM (внутри раскрывашки)."""
+    _seed(
+        "card-10",
+        "CARD-10",
+        {"domains": {"smart": {"state": "trusted", "weight": 1.0}}, "classes": []},
+    )
+    body = client.get("/device/card-10").text
+    details = body.find('id="device-diagnostics"')
+    cov = body.find("Покрытие источников")
+    assert details != -1 and cov != -1 and details < cov
+
+
+def test_failure_classes_inside_details(client) -> None:
+    _seed(
+        "card-11",
+        "CARD-11",
+        {
+            "classes": [
+                {
+                    "label": "деградация накопителя",
+                    "trust": "unknown",
+                    "level": "low",
+                    "probability": 0.1,
+                    "factors": [],
+                }
+            ]
+        },
+    )
+    body = client.get("/device/card-11").text
+    details = body.find('id="device-diagnostics"')
+    cls = body.find("Классы отказа")
+    assert details != -1 and cls != -1 and details < cls

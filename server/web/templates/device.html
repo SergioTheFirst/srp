@@ -217,81 +217,6 @@
 <p class="small" style="color:var(--good)">✓ По рассчитанным проверкам замечаний нет.</p>
 {% endif %}
 
-{# ── Оси score100 — детализация (вторичный уровень после координат) ────── #}
-<div class="section-label" style="margin-top:24px">Оси score100 — детализация</div>
-{# ── Day-1 score cards ─────────────────────────────────────────────────── #}
-{% set c1 = health_color(s.performance) %}
-{% set c2 = health_color(s.reliability) %}
-{% set c3 = health_color(s.wear) %}
-{% set c4 = risk_color(s.risk_exposure) %}
-<div class="scoregrid" style="margin-top:16px">
-  <div class="scorecard {{ c1 }}"
-       title="Производительность: текущий балл 0–100 (выше = лучше). Складывается из загрузки CPU, свободной памяти и скорости диска">
-    <div class="lab">Производительность</div>
-    <div class="val {{ c1 }}">{{ "%.0f"|format(s.performance) if s.performance is not none else "—" }}</div>
-    <div class="bar"><i style="width:{{ s.performance if s.performance is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:6px">сейчас</div>
-  </div>
-  <div class="scorecard {{ c2 }}"
-       title="Надёжность: стабильность за 30 дней 0–100 (выше = лучше). Учитывает RSI Windows, синие экраны, частоту зависаний">
-    <div class="lab">Надёжность</div>
-    <div class="val {{ c2 }}">{{ "%.0f"|format(s.reliability) if s.reliability is not none else "—" }}</div>
-    <div class="bar"><i style="width:{{ s.reliability if s.reliability is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:6px">история 30д</div>
-  </div>
-  <div class="scorecard {{ c3 }}"
-       title="Остаток ресурса: износ оборудования 0–100 (выше = лучше). Учитывает износ SSD, батареи и возраст BIOS">
-    <div class="lab">Остаток ресурса</div>
-    <div class="val {{ c3 }}">{{ "%.0f"|format(s.wear) if s.wear is not none else "—" }}</div>
-    <div class="bar"><i style="width:{{ s.wear if s.wear is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:6px">железо</div>
-  </div>
-  <div class="scorecard {{ c4 }}"
-       title="Риск-экспозиция: суммарный риск сбоя 0–100 (выше = хуже). Итоговая оценка по всем компонентам системы">
-    <div class="lab">Риск-экспозиция</div>
-    <div class="val {{ c4 }}">{{ "%.0f"|format(s.risk_exposure) if s.risk_exposure is not none else "—" }}</div>
-    <div class="bar"><i style="width:{{ s.risk_exposure if s.risk_exposure is not none else 0 }}%"></i></div>
-    <div class="lab" style="margin-top:6px">выше = хуже</div>
-  </div>
-</div>
-
-{# ── Source coverage widget ────────────────────────────────────────────── #}
-{% if s.risk.domains %}
-{% set ns = namespace(trusted=0, unknown=0, na=0, total=0) %}
-{% for name, dom in s.risk.domains.items() %}
-  {% set ns.total = ns.total + 1 %}
-  {% if dom.state == "trusted" %}{% set ns.trusted = ns.trusted + 1 %}
-  {% elif dom.state == "unknown" %}{% set ns.unknown = ns.unknown + 1 %}
-  {% else %}{% set ns.na = ns.na + 1 %}{% endif %}
-{% endfor %}
-<div class="coverage-widget">
-  <div class="coverage-head">
-    <span class="coverage-title" title="Сколько источников телеметрии признаны достоверными">Покрытие источников</span>
-    <div class="coverage-counts">
-      <span class="cov-good" title="Источники с проверенными данными">✓ {{ ns.trusted }} доверен</span>
-      {% if ns.unknown %}<span class="cov-warn" title="Источники без подтверждения или с отсутствующими данными">? {{ ns.unknown }} неизвест.</span>{% endif %}
-      {% if ns.na %}<span class="cov-na" title="Источники, неприменимые для данного устройства">— {{ ns.na }} н/д</span>{% endif %}
-    </div>
-  </div>
-  {% if ns.total %}
-  <div class="coverage-bar-wrap">
-    <div class="coverage-bar">
-      <div class="cb-seg cb-good" style="width:{{ (ns.trusted / ns.total * 100)|round(1) }}%"></div>
-      <div class="cb-seg cb-warn" style="width:{{ (ns.unknown / ns.total * 100)|round(1) }}%"></div>
-      <div class="cb-seg cb-na"   style="width:{{ (ns.na    / ns.total * 100)|round(1) }}%"></div>
-    </div>
-  </div>
-  {% endif %}
-  <div class="coverage-chips">
-    {% for name, dom in s.risk.domains.items() %}
-    <span class="chip {{ {'trusted':'good','unknown':'warn','not_applicable':'na'}.get(dom.state,'na') }}"
-          style="font-size:10px"
-          title="{{ name }}: {{ trust_full.get(dom.state, dom.state) }}">{{ name }}</span>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
 {# ════════════════════════════════════════════════════════════════════════
    ПРОГНОЗ — ресурс и сроки
    ════════════════════════════════════════════════════════════════════════ #}
@@ -429,66 +354,9 @@
 <details id="device-diagnostics" style="margin-top:26px">
   <summary>Подробная диагностика{% if ns_ax.rest %} · проверок без замечаний: {{ healthy_rest }}{% if ns_ax.unknown %} · без данных: {{ ns_ax.unknown }}{% endif %}{% endif %}</summary>
   <div style="margin-top:12px">
-  {% for key, name, tip, na_tip in ns_ax.rest %}{{ axm.render_axis(key, name, tip, na_tip) }}{% endfor %}
+  {% include "_device_diagnostics.html" %}
   </div>
 </details>
-
-{# ── Failure classes (Bayesian) ────────────────────────────────────────── #}
-<div class="section-label" style="margin-top:24px"
-     title="Байесовская оценка вероятности отказа по каждому классу. Основана на весах сигналов из телеметрии">Классы отказа (байесовский анализ)</div>
-{% for c in s.risk.classes %}
-<div class="riskrow">
-  <div class="head">
-    <span class="name">{{ c.label }}</span>
-    {% if c.trust == "unknown" %}
-    <span class="chip na" title="Нет достаточных данных для оценки этого класса">НЕИЗВЕСТНО</span>
-    {% else %}
-    <span class="chip {{ level_color(c.level) }}"
-          title="Вероятность отказа по классу «{{ c.label }}»: байесовская оценка на основе телеметрии">{{ pct(c.probability) }}</span>
-    {% endif %}
-  </div>
-  <div class="riskbar {{ 'na' if c.trust == 'unknown' else level_color(c.level) }}">
-    <i style="width:{{ 0 if c.trust == 'unknown' else (c.probability * 100)|round(1) }}%"></i>
-  </div>
-  <ul class="factors">
-    {% for f in c.factors %}
-    <li>
-      <span>{{ f.label }}</span>
-      <span class="w {{ 'pos' if f.weight > 0 else 'neg' }}"
-            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">{{ "%+.2f"|format(f.weight) }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endfor %}
-
-{# ── Day-1 factor drilldowns ───────────────────────────────────────────── #}
-<div class="section-label" style="margin-top:8px"
-     title="Детальный разбор: какие метрики и насколько повлияли на каждый из четырёх базовых скоров">Диагностика — что повлияло на базовые скоры</div>
-{% set d1groups = [
-    ("Производительность",  s.risk.day1_factors.performance),
-    ("Надёжность",          s.risk.day1_factors.reliability),
-    ("Остаток ресурса",     s.risk.day1_factors.wear),
-    ("Риск-экспозиция",     s.risk.day1_factors.risk_exposure),
-] %}
-{% for title, items in d1groups %}
-<details {% if items %}open{% endif %} style="margin-bottom:7px">
-  <summary>{{ title }} — {{ items|length }} фактор(ов)</summary>
-  {% if items %}
-  <ul class="factors" style="margin-top:8px;padding-left:4px">
-    {% for f in items %}
-    <li>
-      <span>{{ f.label }}</span>
-      <span class="w {{ 'neg' if f.delta < 0 else 'pos' }}"
-            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">{{ "%+.1f"|format(f.delta) }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="muted small" style="padding:8px 0">Замечаний нет.</p>
-  {% endif %}
-</details>
-{% endfor %}
 {% endif %}{# end if s #}
 
 {# ── Events ────────────────────────────────────────────────────────────── #}
