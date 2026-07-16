@@ -2606,6 +2606,7 @@ def get_devices() -> list[dict[str, Any]]:
                    d.update_state, d.update_error, d.update_checked_at,
                    d.version_changed_at,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
+                   s.ts AS score_ts,
                    h.payload AS hist_payload,
                    a.note AS ack_note, a.acked_at AS ack_at,
                    nd.ip AS net_ip
@@ -2670,6 +2671,12 @@ def get_devices() -> list[dict[str, Any]]:
                 "reliability": r["reliability"],
                 "wear": r["wear"],
                 "risk_exposure": r["risk_exposure"],
+                # ssd3 Ф7: the coordinate-model verdict (index/state/dominant) the
+                # fleet table now shows instead of the four flat scores. Raw here;
+                # the read-side staleness overlay is applied at the web layer
+                # (dashboard._enrich_fleet), never baked into the stored blob.
+                "health": risk.get("health") if isinstance(risk, dict) else None,
+                "score_ts": r["score_ts"],
                 "top_risk": _top_risk(risk),
                 "device_trust": device_trust,
                 "unknown_domains": unknown_domains,

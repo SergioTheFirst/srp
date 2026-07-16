@@ -20,7 +20,9 @@ from server.analytics.health import (
     _STATE_LABELS,
     action_for,
     apply_health_staleness,
+    dominant_label_for,
     health_staleness,
+    state_label_for,
 )
 from server.analytics.netmap import subnet_context_for, subnet_hint
 from server.netdisco.cache import GraphCache
@@ -228,6 +230,8 @@ _TEMPLATES.env.globals.update(
     level_color=level_color,
     band_class=band_class,
     action_for=action_for,
+    state_label_for=state_label_for,
+    dominant_label_for=dominant_label_for,
     pct=pct,
     days_until=days_until,
     fmt_age=fmt_age,
@@ -330,12 +334,24 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
     """
     parsed = [parse_version(d.get("agent_version")) for d in devices]
     current = parse_version(available) or max([v for v in parsed if v is not None], default=None)
+    now = datetime.now(timezone.utc)
     enriched = []
     for d, ver in zip(devices, parsed):
+        # ssd3 Ф7: apply the read-side staleness overlay here (same helper the
+        # device page uses) so the fleet's «Индекс/Состояние» never disagree with
+        # the device card. >10d -> state/band forced "unknown"; None when the
+        # device predates Ф6 / has no stored verdict.
+        health_raw = d.get("health")
+        health = (
+            apply_health_staleness(health_raw, d.get("score_ts"), now)
+            if isinstance(health_raw, dict)
+            else None
+        )
         enriched.append(
             {
                 **d,
                 **_identity_labels(d),
+                "health": health,
                 "version_outdated": bool(current is not None and ver is not None and ver < current),
                 "is_new": _is_recent(d.get("first_seen"), days=7),
             }
