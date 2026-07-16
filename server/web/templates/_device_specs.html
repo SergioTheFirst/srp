@@ -1,0 +1,59 @@
+{# «Компьютер» -- краткие характеристики железа, первый блок карточки
+   (владелец 2026-07-15: инженер сначала видит, ЧТО за машина).
+   Данные: d.inventory (снапшот) + d.latest_heartbeat (живые значения).
+   Рендерится и без скорингов (вне if s). #}
+<div class="section-label" style="margin-top:18px">Компьютер</div>
+{% set inv = d.inventory %}
+{% set hb = d.latest_heartbeat %}
+{% if inv %}
+<div class="spec-grid">
+  <div class="spec-item">
+    <div class="spec-l">Процессор</div>
+    <div class="spec-v">{{ inv.cpu_name or "—" }}{% if inv.cpu_cores %} · ядер: {{ inv.cpu_cores }}{% if inv.cpu_logical %} / потоков: {{ inv.cpu_logical }}{% endif %}{% endif %}</div>
+    {% if hb and hb.cpu_pct is not none %}<div class="spec-now">загрузка сейчас: {{ "%.0f"|format(hb.cpu_pct) }}%</div>{% endif %}
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Память</div>
+    <div class="spec-v">{{ (inv.total_ram_gb ~ " ГБ") if inv.total_ram_gb is not none else "—" }}</div>
+    {% if hb and hb.mem_avail_mb is not none %}<div class="spec-now">свободно сейчас: {{ hb.mem_avail_mb }} МБ</div>{% endif %}
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Диски</div>
+    <div class="spec-v">
+      {% for disk in inv.disks or [] %}
+      <div>{{ disk.model or "?" }} · {{ disk.media_type or "?" }} · {{ (disk.size_gb ~ " ГБ") if disk.size_gb is not none else "объём неизвестен" }}</div>
+      {% else %}—{% endfor %}
+    </div>
+    {% if hb and hb.free_space_pct is not none %}<div class="spec-now">свободно на системном: {{ "%.0f"|format(hb.free_space_pct) }}%</div>{% endif %}
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Система</div>
+    <div class="spec-v">{{ inv.os_caption or "—" }}{% if inv.os_version %} · {{ inv.os_version }}{% endif %}</div>
+    {% if hb and hb.uptime_hours is not none %}<div class="spec-now">аптайм: {{ "%.0f"|format(hb.uptime_hours) }} ч</div>{% endif %}
+  </div>
+</div>
+{% if inv.pending_reboot or (inv.driver_problem_count or 0) > 0 %}
+<div class="spec-flags">
+  {% if inv.pending_reboot %}<span class="chip warn" title="Windows ожидает перезагрузку для завершения обновлений">требуется перезагрузка</span>{% endif %}
+  {% if (inv.driver_problem_count or 0) > 0 %}<span class="chip warn" title="Устройства с ошибками драйверов в диспетчере устройств">проблемных драйверов: {{ inv.driver_problem_count }}</span>{% endif %}
+</div>
+{% endif %}
+<details style="margin-top:8px">
+  <summary>Прочее железо</summary>
+  <table style="max-width:700px;margin-top:8px">
+    <tbody>
+      <tr><td class="muted small" style="width:180px">BIOS</td><td class="small mono">{{ inv.bios_version or "—" }} ({{ inv.bios_release_date or "?" }})</td></tr>
+      {% if inv.os_build %}<tr><td class="muted small">Сборка ОС</td><td class="small mono">{{ inv.os_build }}</td></tr>{% endif %}
+      {% if inv.os_install_date %}<tr><td class="muted small">ОС установлена</td><td class="small mono">{{ inv.os_install_date }}</td></tr>{% endif %}
+      {% if inv.memory_modules %}
+      <tr><td class="muted small">Модули памяти</td><td class="small">
+        {% for m in inv.memory_modules %}<div>{{ (m.capacity_gb ~ " ГБ") if m.capacity_gb is not none else "?" }}{% if m.speed_mhz %} · {{ m.speed_mhz }} МГц{% endif %}{% if m.manufacturer %} · {{ m.manufacturer }}{% endif %}</div>{% endfor %}
+      </td></tr>
+      {% endif %}
+      <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
+    </tbody>
+  </table>
+</details>
+{% else %}
+<p class="muted small">Характеристики ещё не получены от агента.</p>
+{% endif %}

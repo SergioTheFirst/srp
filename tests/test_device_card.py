@@ -194,3 +194,63 @@ def test_failure_classes_inside_details(client) -> None:
     assert details_open < cls < details_close, (
         "должно лежать ВНУТРИ раскрывашки, не просто после её открытия"
     )
+
+
+# --------------------------------------------------------------------------- #
+# T3: блок «Компьютер» вверху, «Инвентарь» снесён
+# --------------------------------------------------------------------------- #
+_INV = {
+    "hostname": "CARD-PC",
+    "os_caption": "Microsoft Windows 10 Pro",
+    "os_version": "10.0.19045",
+    "os_build": "19045",
+    "cpu_name": "Intel(R) Core(TM) i5-10400",
+    "cpu_cores": 6,
+    "cpu_logical": 12,
+    "total_ram_gb": 16,
+    "memory_modules": [{"capacity_gb": 8, "speed_mhz": 2666, "manufacturer": "Kingston"}],
+    "disks": [{"model": "Samsung SSD 870 EVO", "media_type": "SSD", "size_gb": 500}],
+    "bios_version": "1.5.0",
+    "bios_release_date": "2022-09-01",
+    "pending_reboot": True,
+    "driver_problem_count": 2,
+}
+
+
+def _seed_with_inventory(device_id: str, hostname: str) -> None:
+    _seed(device_id, hostname, {})
+    db.store_inventory(device_id, _iso_now(), _INV)
+
+
+def test_specs_block_labelled_and_on_top(client) -> None:
+    _seed_with_inventory("card-12", "CARD-12")
+    body = client.get("/device/card-12").text
+    for label in ("Процессор", "Память", "Диски", "Система"):
+        assert label in body, f"подпись «{label}» обязана быть в блоке «Компьютер»"
+    assert "Intel(R) Core(TM) i5-10400" in body
+    assert "ядер: 6" in body
+    assert "Samsung SSD 870 EVO" in body
+    # блок «Компьютер» идёт раньше вердикта
+    assert body.find("Процессор") < body.find('id="device-hero"')
+
+
+def test_specs_flags_pending_reboot_and_drivers(client) -> None:
+    _seed_with_inventory("card-13", "CARD-13")
+    body = client.get("/device/card-13").text
+    assert "требуется перезагрузка" in body
+    assert "проблемных драйверов: 2" in body
+
+
+def test_old_inventory_section_gone(client) -> None:
+    _seed_with_inventory("card-14", "CARD-14")
+    body = client.get("/device/card-14").text
+    assert ">Инвентарь<" not in body
+    # но содержимое не потеряно: BIOS и период активности живут в раскрывашке блока
+    assert "BIOS" in body
+    assert "Период активности" in body
+
+
+def test_specs_fallback_when_no_inventory(client) -> None:
+    _seed("card-15", "CARD-15", {})
+    body = client.get("/device/card-15").text
+    assert "Характеристики ещё не получены от агента" in body

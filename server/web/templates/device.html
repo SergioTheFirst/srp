@@ -136,6 +136,21 @@
 }
 .table-wrap { overflow-x: auto; }
 [title] { cursor: help; }
+
+/* ── Спец-полоса «Компьютер» ───────────────────────────────────────────── */
+.spec-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px; margin-top: 4px;
+}
+.spec-item {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 11px 14px;
+  box-shadow: var(--shadow-card);
+}
+.spec-l { font: 600 11px/1 var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.spec-v { font-size: 14px; line-height: 1.45; }
+.spec-now { font: 12px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
+.spec-flags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 </style>
 {% endblock %}
 
@@ -164,6 +179,8 @@
 {% if upd_parts %}
 <div class="small muted mono" style="margin-bottom:20px">{{ upd_parts|join(" · ") }}</div>
 {% endif %}
+
+{% include "_device_specs.html" %}
 
 {% if not s %}
   <div class="muted" style="padding:24px 0">
@@ -501,36 +518,6 @@
 
 {# ── Network topology twin (Ф6) ────────────────────────────────────────── #}
 {% include "_net_section.html" %}
-
-{# ── Inventory ─────────────────────────────────────────────────────────── #}
-<div class="section-label">Инвентарь</div>
-{% set inv = d.inventory %}
-{% set hb  = d.latest_heartbeat %}
-<table style="max-width:700px">
-  <tbody>
-    <tr><td class="muted small" style="width:180px">Производитель / модель</td><td>{{ d.manufacturer or "—" }} / {{ d.model or "—" }}</td></tr>
-    {% if inv %}
-    <tr><td class="muted small">ОС</td><td class="small">{{ inv.os_caption or "—" }} {{ inv.os_version or "" }}</td></tr>
-    <tr><td class="muted small">CPU</td><td class="small">{{ inv.cpu_name or "—" }}</td></tr>
-    <tr><td class="muted small">RAM</td><td class="small mono">{{ inv.total_ram_gb }} ГБ{% if inv.total_ram_gb is none %}—{% endif %}</td></tr>
-    <tr><td class="muted small">BIOS</td><td class="small mono">{{ inv.bios_version or "—" }} ({{ inv.bios_release_date or "?" }})</td></tr>
-    <tr><td class="muted small">Диски</td><td class="small">
-      {% for disk in inv.disks or [] %}
-        <div>{{ disk.model or "?" }} · {{ disk.media_type or "?" }} · {{ disk.size_gb }} ГБ</div>
-      {% else %}—{% endfor %}
-    </td></tr>
-    {% endif %}
-    {% if hb %}
-    <tr><td class="muted small">Heartbeat</td><td class="small">
-      CPU {{ "%.0f"|format(hb.cpu_pct) if hb.cpu_pct is not none else "?" }}% ·
-      RAM {{ hb.mem_avail_mb if hb.mem_avail_mb is not none else "?" }} МБ своб. ·
-      диск {{ "%.0f"|format(hb.free_space_pct) if hb.free_space_pct is not none else "?" }}% своб. ·
-      аптайм {{ "%.0f"|format(hb.uptime_hours) if hb.uptime_hours is not none else "?" }} ч
-    </td></tr>
-    {% endif %}
-    <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
-  </tbody>
-</table>
 
 {# ── Print summary (loaded async) ───────────────────────────────────────── #}
 <div class="section-label" style="margin-top:30px">Учёт печати (30 дней)</div>
