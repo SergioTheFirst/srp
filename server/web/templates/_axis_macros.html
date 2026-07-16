@@ -14,7 +14,7 @@
       <span class="chip na" title="{{ na_tip }}">{{ na_chip_text }}</span>
     {% else %}
     <div style="text-align:right">
-      <div class="axis-val {{ risk_color(ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(ax.value) }}</div>
+      <div class="axis-val {{ risk_color(ax.value) }}" title="{{ score_tip }}">{{ "%.0f"|format(ax.value) }} из 100</div>
       <div class="axis-conf" title="{{ conf_tip }}">уверенность: {{ conf_ru.get(ax.confidence, ax.confidence or "?") }}</div>
     </div>
     {% endif %}

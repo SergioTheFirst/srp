@@ -81,6 +81,15 @@ def test_axis_confidence_is_labelled(client) -> None:
     assert 'class="axis-conf"' in body
 
 
+def test_axis_value_is_not_a_bare_number(client) -> None:
+    # Final whole-branch review finding: axis-val rendered a bare "55" with the
+    # 0-100 scale explained only via title= -- violates the plan's own Global
+    # Constraint ("никаких голых чисел"). Fixed by appending "из 100".
+    _seed("card-17", "CARD-17", {"score100": {"storage_risk": _axis(55.0)}})
+    body = client.get("/device/card-17").text
+    assert "55 из 100" in body
+
+
 def test_all_clear_line_when_every_axis_healthy(client) -> None:
     _seed(
         "card-5", "CARD-5", {"score100": {"storage_risk": _axis(3.0), "disk_fill_risk": _axis(8.0)}}
