@@ -174,8 +174,9 @@ def test_hero_index_caption_present(client) -> None:
     _seed("hero-2", "HERO-2", {"health": _real_health(index=78.0)})
     body = client.get("/device/hero-2").text
     frag = _hero_fragment(body)
-    assert "проекция (D, R, O)" in frag
-    assert "78" in frag
+    assert "сводный индекс" in frag
+    assert "78 из 100" in frag
+    assert "(D, R, O)" not in frag  # латиница ушла (владелец 2026-07-15)
 
 
 def test_hero_ladder_highlights_exactly_current_state(client) -> None:
@@ -273,7 +274,7 @@ def test_hero_delta_7d_none_renders_neutral_dash_not_broken(client) -> None:
     r = client.get("/device/hero-12")
     assert r.status_code == 200
     frag = _hero_fragment(r.text)
-    assert "Δ7д" in frag
+    assert "за 7 дней" in frag
 
 
 def test_hero_sparkline_island_embeds_index_series(client) -> None:
@@ -293,3 +294,69 @@ def test_device_page_hero_precedes_attention_and_details(seeded_client) -> None:
     details = html.find('id="device-diagnostics"')
     assert hero != -1 and attention != -1 and details != -1
     assert hero < attention < details, "порядок: вердикт → требует внимания → раскрывашка"
+
+
+# --------------------------------------------------------------------------- #
+# Редизайн 2026-07-15: вердикт, линия вместо ползунка, подписи
+# --------------------------------------------------------------------------- #
+def test_hero_verdict_line_prominent(client) -> None:
+    _seed("hero-14", "HERO-14", {"health": _real_health()})
+    frag = _hero_fragment(client.get("/device/hero-14").text)
+    assert "состояние" in frag
+    assert "ранняя деградация" in frag  # state_label
+    assert "что делать" in frag
+    assert "снять образ данных" in frag  # action_for("storage")
+    assert "главный фактор" in frag
+    assert "накопитель" in frag  # dominant_label
+
+
+def test_hero_coordinate_evidence_is_static_text_not_tooltip(client) -> None:
+    ev = [{"label": "переназначенные секторы: 12"}]
+    _seed(
+        "hero-15",
+        "HERO-15",
+        {
+            "health": _real_health(
+                damage={"value": 40.0, "band": "watch", "confidence": "medium", "evidence": ev}
+            )
+        },
+    )
+    frag = _hero_fragment(client.get("/device/hero-15").text)
+    assert "почему: переназначенные секторы: 12" in frag  # статичный абзац
+    assert 'title="переназначенные секторы: 12"' not in frag  # НЕ hover-подсказка
+    assert 'class="coord-line"' in frag  # линия, не ползунок
+    assert 'class="riskbar' not in frag  # старой заливки нет
+
+
+def test_hero_coordinate_values_and_confidence_labelled(client) -> None:
+    _seed("hero-16", "HERO-16", {"health": _real_health()})
+    frag = _hero_fragment(client.get("/device/hero-16").text)
+    assert "20 из 100" in frag  # damage value подписан
+    assert "уверенность: высокая" in frag  # Coordinate.confidence всплыла
+    assert "выше = хуже" in frag  # направление шкалы Повреждений
+    assert "выше = лучше" in frag  # направление Устойчивости/Наблюдаемости
+
+
+def test_hero_blind_spots_surface_in_known_state(client) -> None:
+    """До редизайна blind_spots молча терялись, если state известен."""
+    _seed(
+        "hero-17",
+        "HERO-17",
+        {"health": _real_health(blind_spots=["нет анализа событий"])},
+    )
+    frag = _hero_fragment(client.get("/device/hero-17").text)
+    assert "не видно: нет анализа событий" in frag
+
+
+def test_hero_unknown_branch_offers_action(client) -> None:
+    _seed("hero-18", "HERO-18", {"health": _blind_health()})
+    frag = _hero_fragment(client.get("/device/hero-18").text)
+    assert "что делать" in frag
+    assert "восстановить видимость" in frag
+
+
+def test_hero_section_has_no_latin_dro(client) -> None:
+    _seed("hero-19", "HERO-19", {"health": _real_health()})
+    body = client.get("/device/hero-19").text
+    assert "Состояние машины" in body
+    assert "D · R · O" not in body

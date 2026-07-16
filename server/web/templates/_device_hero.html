@@ -1,13 +1,8 @@
-{# Ф7 T7.2 device-hero: compact three-coordinate (D/R/O) summary, rendered
-   above the "Прогноз — траектории и ресурс" section on device.html. Split into
-   its own partial purely to keep device.html under this repo's 800-line cap
-   (device.html was already at the cap before this task -- same reasoning as
-   the dashboard.py -> health_view.py extraction Task 1 did on this branch),
-   not a behavioural change. Context (health / health_stale_msg / health_series
-   / state_labels / band_class / action_for) comes from the including
-   device.html's own scope -- Jinja includes inherit the caller's context, same
-   as this page's existing _net_section.html / _plotly_hover.html partials. #}
-<div class="section-label" style="margin-top:16px">Здоровье — координаты (D · R · O)</div>
+{# Вердикт «Состояние машины»: сначала словами что с машиной и что делать,
+   потом лестница состояний, потом три координаты (линия-шкала + статичное
+   «почему» вместо hover-тултипа -- владелец 2026-07-15), потом чипы с
+   подписанными значениями и sparkline. Контекст наследуется от device.html. #}
+<div class="section-label" style="margin-top:16px">Состояние машины</div>
 <div id="device-hero" class="hero-health">
   {% if health is none %}
   <p class="muted small" style="padding:6px 0">нет данных о координатах здоровья</p>
@@ -20,73 +15,98 @@
   {% if blind_ev %}
   <div class="axis-blind">⚠ не видно: {{ blind_ev }}</div>
   {% endif %}
+  {# health.action (не action_for(health.dominant)): dominant всегда None в
+     unknown-состоянии, а action_for(None) отдаёт общий "данных недостаточно"
+     текст, а не предписанное действие для слепой зоны -- health.action уже
+     несёт нужный текст (health.py compute_health: _BLIND_ACTION при низкой
+     observability), считается один раз на сервере и приезжает в этом же
+     health-объекте. #}
+  <p class="hero-action"><span class="hero-kv-l">что делать</span> {{ health.action }}</p>
   {% else %}
   {% if health_stale_msg %}
   <div class="alert-banner alert-warn">⚠ {{ health_stale_msg }}</div>
   {% endif %}
 
-  {# three coordinate bars — value shown directly (never inverted): colour
-     (band_class, the stored band -- never re-derived from the raw value)
-     is what tells the viewer whether a value is concerning, not fill side #}
-  {% set coord_meta = [
-      ("damage", "Повреждения"),
-      ("resilience", "Устойчивость"),
-      ("observability", "Наблюдаемость"),
-  ] %}
-  <div class="hero-coords">
-    {% for key, label in coord_meta %}
-    {% set coord = health[key] or {} %}
-    {% set cband = band_class(coord.band) %}
-    {% set cev = ((coord.evidence or [])|map(attribute="label")|join("; ")) or "нет факторов" %}
-    <div class="riskrow">
-      <div class="head">
-        <span class="name">{{ label }}</span>
-        <span class="chip {{ cband }}">{{ "%.0f"|format(coord.value) if coord.value is not none else "—" }}</span>
-      </div>
-      <div class="riskbar {{ cband }}" title="{{ cev }}">
-        <i style="width:{{ coord.value if coord.value is not none else 0 }}%"></i>
-      </div>
+  {# 1. Вердикт словами -- самое важное, крупно, контрастно #}
+  <div class="hero-verdict">
+    <div>
+      <span class="hero-kv-l">состояние</span>
+      <span class="hero-state {{ band_class(health.band) }}">{{ health.state_label }}</span>
     </div>
-    {% endfor %}
+    <p class="hero-action">
+      <span class="hero-kv-l">главный фактор</span> {{ health.dominant_label }}
+      · <span class="hero-kv-l">что делать</span> {{ action_for(health.dominant) }}
+    </p>
   </div>
 
-  {# state ladder h0 -> h4: five steps, current one enlarged + coloured by the
-     overall verdict band (the other four are dim -- never coloured by a
-     hypothetical own band); labels from health.py's own _STATE_LABELS #}
+  {# 2. Лестница h0..h4 (шаги дискретны -- остаётся лестницей, не ползунком);
+     обоснование ступени -- статичным текстом, не title #}
   {% set ladder_band = band_class(health.band) %}
-  {% set state_ev = ((health.state_evidence or [])|map(attribute="label")|join("; ")) or health.state_label %}
   <div class="ladder">
     {% for step in ["h0", "h1", "h2", "h3", "h4"] %}
-    <div class="ladder-step {{ 'current ' ~ ladder_band if step == health.state else '' }}"
-         {% if step == health.state %}title="{{ state_ev }}"{% endif %}>
+    <div class="ladder-step {{ 'current ' ~ ladder_band if step == health.state else '' }}">
       <div class="ladder-dot"></div>
       <div class="ladder-label">{{ state_labels.get(step, step) }}</div>
     </div>
     {% endfor %}
   </div>
+  {% set state_ev = ((health.state_evidence or [])|map(attribute="label")|join("; ")) %}
+  {% if state_ev %}<p class="hero-why">почему: {{ state_ev }}</p>{% endif %}
 
-  {# index / horizon / Δ7д chips — index NEVER stands alone (K1): always
-     captioned "проекция (D, R, O)", never just the bare number #}
-  {% set horizon_label = {7: "≤7 дней", 30: "≤30", 90: "≤90"}.get(health.horizon_days, "—") %}
+  {# 3. Три координаты: значение подписано («NN из 100»), направление шкалы
+     подписано, «почему» -- статичный контрастный абзац под линией #}
+  {% set coord_meta = [
+      ("damage", "Повреждения", "накопленный необратимый износ железа · выше = хуже"),
+      ("resilience", "Устойчивость", "запас прочности к новым сбоям · выше = лучше"),
+      ("observability", "Наблюдаемость", "полнота данных для оценки · выше = лучше"),
+  ] %}
+  <div class="hero-coords">
+    {% for key, label, sub in coord_meta %}
+    {% set coord = health[key] or {} %}
+    {% set cband = band_class(coord.band) %}
+    {% set cev = ((coord.evidence or [])|map(attribute="label")|join("; ")) %}
+    <div class="coord-card">
+      <div class="head">
+        <span class="name">{{ label }}</span>
+        <span class="chip {{ cband }}">{{ ("%.0f"|format(coord.value)) ~ " из 100" if coord.value is not none else "—" }}</span>
+      </div>
+      <div class="coord-sub">{{ sub }}</div>
+      <div class="coord-line">
+        <i class="{{ cband }}" style="left:{{ coord.value if coord.value is not none else 0 }}%"></i>
+      </div>
+      <p class="coord-why">{% if cev %}почему: {{ cev }}{% else %}отклонений не зафиксировано{% endif %}</p>
+      {% if coord.confidence %}<div class="coord-conf">уверенность: {{ conf_ru.get(coord.confidence, coord.confidence) }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# 4. Слепые зоны видны и при известном состоянии (раньше терялись) #}
+  {% if health.blind_spots %}
+  <div class="axis-blind">⚠ не видно: {{ health.blind_spots|join("; ") }}</div>
+  {% endif %}
+
+  {# 5. Чипы: каждое значение подписано, латиницы нет #}
+  {% set horizon_label = {7: "≤7 дней", 30: "≤30 дней", 90: "≤90 дней"}.get(health.horizon_days, "не прогнозируется") %}
   {% set delta = health.delta_7d %}
   {% set delta_cls = "na" if delta is none or delta == 0 else ("good" if delta > 0 else "bad") %}
   {% set delta_arrow = "—" if delta is none else ("▲" if delta > 0 else ("▼" if delta < 0 else "→")) %}
   <div class="hero-chips">
-    <span class="chip accent" title="проекция здоровья: свод Повреждений и Устойчивости, 0–100, выше = лучше">
-      проекция (D, R, O): {{ "%.0f"|format(health.index) if health.index is not none else "—" }}
+    <span class="chip accent" title="сводный индекс здоровья: свод повреждений и устойчивости; 0–100, выше = лучше; никогда не заменяет три координаты выше">
+      сводный индекс: {{ ("%.0f"|format(health.index)) ~ " из 100" if health.index is not none else "—" }}
     </span>
-    <span class="chip {{ band_class(health.band) }}" title="{{ health.horizon_reason or 'прогноз горизонта' }}">горизонт {{ horizon_label }}</span>
-    <span class="chip {{ delta_cls }}" title="изменение индекса здоровья за 7 дней">Δ7д {{ delta_arrow }}{% if delta is not none %} {{ "%.1f"|format(delta) }}{% endif %}</span>
+    <span class="chip {{ band_class(health.band) }}" title="{{ health.horizon_reason or 'прогноз окна до ухудшения состояния' }}">окно до ухудшения: {{ horizon_label }}</span>
+    <span class="chip {{ delta_cls }}" title="изменение сводного индекса за 7 дней">за 7 дней: {{ delta_arrow }}{% if delta is not none %} {{ "%.1f"|format(delta) }}{% endif %}</span>
+    {% if health.confidence and health.confidence != "unknown" %}
+    <span class="chip na" title="{{ conf_tip }}">уверенность: {{ conf_ru.get(health.confidence, health.confidence) }}</span>
+    {% endif %}
   </div>
-
-  <p class="small muted" style="margin:10px 0 0">{{ health.dominant_label }} — {{ action_for(health.dominant) }}</p>
 
   {# index sparkline: server embeds a bounded (limit=200) newest-first array
      once; the 30д/90д toggle is a client-side-only re-slice of that same
      array (ts >= cutoff) -- no second fetch, no server round-trip #}
   {% if health_series %}
   <div class="hero-spark-head">
-    <span class="small muted">индекс здоровья, динамика</span>
+    <span class="small muted">сводный индекс, динамика</span>
     <span>
       <button type="button" class="btn-small active" data-hero-spark-days="30">30д</button>
       <button type="button" class="btn-small" data-hero-spark-days="90">90д</button>
@@ -157,7 +177,26 @@
   {% endif %}
 </div>
 <style>
-.hero-coords { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+.hero-verdict { margin: 4px 0 2px; }
+.hero-kv-l { font: 600 11px/1 var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+.hero-state { font: 700 22px/1.2 var(--font-body); }
+.hero-state.good { color: var(--good); } .hero-state.warn { color: var(--warn); }
+.hero-state.high { color: var(--high); } .hero-state.bad { color: var(--bad); }
+.hero-state.na { color: var(--na); }
+.hero-action { font-size: 15px; color: var(--text); margin: 8px 0 0; line-height: 1.55; }
+.hero-why { font-size: 13px; color: var(--text); margin: 6px 0 0; line-height: 1.5; }
+.hero-coords { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 14px 0 0; }
+.coord-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); padding: 14px 16px; box-shadow: var(--shadow-card); }
+.coord-card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.coord-card .name { font-weight: 600; font-size: 16px; }
+.coord-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.coord-line { position: relative; height: 2px; background: var(--line); border-radius: 1px; margin: 14px 0 2px; }
+.coord-line > i { position: absolute; top: -5px; width: 3px; height: 12px; border-radius: 2px; transform: translateX(-50%); }
+.coord-line > i.good { background: var(--good); } .coord-line > i.warn { background: var(--warn); }
+.coord-line > i.high { background: var(--high); } .coord-line > i.bad { background: var(--bad); }
+.coord-line > i.na { background: var(--na); }
+.coord-why { font-size: 13px; color: var(--text); margin: 8px 0 0; line-height: 1.5; }
+.coord-conf { font: 600 11px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
 .hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
 .hero-spark-head { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 6px; }
 .btn-small.active { border-color: var(--accent); color: var(--accent); }
