@@ -138,7 +138,11 @@ def test_day1_scorecards_inside_details(client) -> None:
     _seed("card-9", "CARD-9", {})
     body = client.get("/device/card-9").text
     details_open = body.find('id="device-diagnostics"')
-    details_close = body.find("</details>", details_open)
+    # Not body.find("</details>", ...): the Day-1 factor drilldowns nest their
+    # own <details> per group, so the first "</details>" after the drawer opens
+    # belongs to an inner group, not the outer drawer. "Недавние события" is the
+    # next unconditional section right after the drawer's real close (device.html).
+    details_close = body.find("Недавние события", details_open)
     day1 = body.find("Производительность")
     assert details_open != -1 and details_close != -1 and day1 != -1
     assert details_open < day1 < details_close, (
@@ -156,7 +160,8 @@ def test_coverage_widget_moved_but_string_preserved(client) -> None:
     )
     body = client.get("/device/card-10").text
     details_open = body.find('id="device-diagnostics"')
-    details_close = body.find("</details>", details_open)
+    # See test_day1_scorecards_inside_details for why not body.find("</details>", ...).
+    details_close = body.find("Недавние события", details_open)
     cov = body.find("Покрытие источников")
     assert details_open != -1 and details_close != -1 and cov != -1
     assert details_open < cov < details_close, (
@@ -182,7 +187,8 @@ def test_failure_classes_inside_details(client) -> None:
     )
     body = client.get("/device/card-11").text
     details_open = body.find('id="device-diagnostics"')
-    details_close = body.find("</details>", details_open)
+    # See test_day1_scorecards_inside_details for why not body.find("</details>", ...).
+    details_close = body.find("Недавние события", details_open)
     cls = body.find("Классы отказа")
     assert details_open != -1 and details_close != -1 and cls != -1
     assert details_open < cls < details_close, (
