@@ -76,7 +76,6 @@ _HEALTHY: dict[str, dict[str, Any]] = {
                 "temperature_c": 38,
             }
         ],
-        "battery": None,
         "observation_days": 30,
     },
     "heartbeat": {
@@ -145,13 +144,6 @@ _DEGRADING: dict[str, dict[str, Any]] = {
                 "temperature_c": 51,
             }
         ],
-        "battery": {
-            "present": True,
-            "design_capacity_mwh": 60000,
-            "full_charge_capacity_mwh": 39000,
-            "wear_pct": 35.0,
-            "cycle_count": 820,
-        },
         "observation_days": 30,
     },
     "heartbeat": {

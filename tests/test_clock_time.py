@@ -4,7 +4,7 @@ The server must not trust the client clock: Windows event/sample time depends on
 the machine's own system clock, so staleness, trends, and event windows are
 anchored to a server-stamped ``received_at``. ``ts`` is retained as the
 client-reported (observed) time for compatibility. A large ``|received_at - ts|``
-is itself a signal (corrupted trends and/or an aging CMOS battery).
+is itself a signal (corrupted trends and/or a drifting/misconfigured system clock).
 """
 
 from __future__ import annotations

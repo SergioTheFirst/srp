@@ -19,7 +19,7 @@ from server.scoring.score100 import (
 from server.scoring.scores import compute_day1_scores
 from tests.conftest import envelope, healthy
 
-_ALL_DOMAINS = ("storage", "battery", "disk_fill", "os_stability", "boot", "thermal")
+_ALL_DOMAINS = ("storage", "disk_fill", "os_stability", "boot", "thermal")
 
 
 def _trust(states=None, sources=None):
@@ -81,7 +81,7 @@ def test_healthy_trusted_is_numeric_high_confidence():
         healthy("inventory"),
         healthy("historical"),
         healthy("heartbeat"),
-        trust=_trust({"battery": "not_applicable"}),  # healthy machine is a desktop
+        trust=_trust(),
     )
     assert s["performance"].value == 100.0
     assert s["performance"].confidence == "high"

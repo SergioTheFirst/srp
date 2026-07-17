@@ -58,7 +58,7 @@ def test_untrusted_device_withholds():
 
 def test_ample_free_space_is_confident_zero():
     # Free space is directly measured, so a healthy drive is a confident all-clear
-    # (unlike the battery engine's swelling blind spot).
+    # (unlike an engine whose sensor has a hidden failure mode it cannot see).
     s = compute_disk_fill_risk(_series(50, 55, 52, 48), [])
     assert s.value == 0.0
     assert s.confidence == "high"

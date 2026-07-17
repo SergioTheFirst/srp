@@ -43,9 +43,11 @@ def test_thermal_fake_constant_is_suspect_and_zero_weight():
     assert resolve_domain_trust("thermal", {"throttle": t}).state is DomainTrustState.UNKNOWN
 
 
-def test_desktop_battery_is_not_applicable_no_noise():
-    t = _trust("battery", CollectorStatus.ABSENT, SemanticStatus.UNCHECKED, applicable=False)
-    d = resolve_domain_trust("battery", {"battery": t})
+def test_required_source_not_applicable_yields_domain_not_applicable_no_noise():
+    # A required source genuinely not applicable to this hardware (not a failure)
+    # must make the whole domain NOT_APPLICABLE, never UNKNOWN.
+    t = _trust("throttle", CollectorStatus.ABSENT, SemanticStatus.UNCHECKED, applicable=False)
+    d = resolve_domain_trust("thermal", {"throttle": t})
     assert d.state is DomainTrustState.NOT_APPLICABLE
 
 

@@ -20,9 +20,9 @@ free-space depletion and the Windows-servicing collapse it causes downstream:
 Output is the ``disk_fill_risk`` axis in the W0.5 Score100 envelope (higher = worse)
 with the same gating: untrusted identity withholds; no free-space telemetry *and* no
 servicing signal -> UNKNOWN (never a confident zero). Because free space is a direct
-measurement, a healthy system drive *is* a confident all-clear (unlike the battery
-engine's swelling blind spot). Pure arithmetic over the recent window (D4, no ML);
-the depletion *slope/ETA* lives in the W4.1 trajectory engine, not here.
+measurement, a healthy system drive *is* a confident all-clear (unlike an engine whose
+sensor has a hidden failure mode it cannot see). Pure arithmetic over the recent window
+(D4, no ML); the depletion *slope/ETA* lives in the W4.1 trajectory engine, not here.
 """
 
 from __future__ import annotations

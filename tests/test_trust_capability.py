@@ -48,7 +48,6 @@ def test_source_not_regressed_when_never_good(client):
 
     sh = {
         "storage_reliability": _sh("blocked"),
-        "battery": _sh("ok"),
         "reliability": _sh("ok"),
         "boot_time": _sh("ok"),
     }

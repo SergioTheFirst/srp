@@ -13,7 +13,6 @@ from typing import Any, NamedTuple, Optional
 # server/trust/domains.py DOMAIN_SOURCES.
 STORAGE_RELIABILITY = "storage_reliability"
 DISK_LATENCY = "disk_latency"
-BATTERY = "battery"
 FREE_SPACE = "free_space"
 RELIABILITY = "reliability"
 BOOT_TIME = "boot_time"

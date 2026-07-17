@@ -51,13 +51,13 @@ def test_last_good_upsert_overwrites(db_init):
 def test_last_good_per_device_source_pair(db_init):
     """Two different sources on the same device are stored independently."""
     db_init.set_last_good("dev-1", "disk", {"wear_pct": 5.0}, "2026-01-01T00:00:00Z")
-    db_init.set_last_good("dev-1", "battery", {"charge_pct": 80.0}, "2026-01-01T00:00:00Z")
+    db_init.set_last_good("dev-1", "network", {"loss_pct": 0.0}, "2026-01-01T00:00:00Z")
 
     disk = db_init.get_last_good("dev-1", "disk")
-    battery = db_init.get_last_good("dev-1", "battery")
+    network = db_init.get_last_good("dev-1", "network")
 
     assert disk == {"wear_pct": 5.0}
-    assert battery == {"charge_pct": 80.0}
+    assert network == {"loss_pct": 0.0}
 
 
 def test_last_good_different_devices_no_collision(db_init):

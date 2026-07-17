@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from shared.schema import (
     CONTRACT_VERSION,
-    BatteryInfo,
     Envelope,
     EventBatchPayload,
     HeartbeatPayload,
     HistoricalPayload,
     InventoryPayload,
     SourceHealth,
+    StorageReliability,
     parse_payload,
 )
 from tests.conftest import degrading, healthy
@@ -57,8 +57,7 @@ def test_all_analytic_fields_optional():
 
 def test_nested_models_validate():
     parsed = parse_payload("historical", degrading("historical"))
-    assert isinstance(parsed.battery, BatteryInfo)
-    assert parsed.battery.present is True
+    assert isinstance(parsed.storage[0], StorageReliability)
     assert parsed.storage[0].wear_pct == 82.0
 
 

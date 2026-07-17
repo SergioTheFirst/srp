@@ -1,8 +1,8 @@
 """Historical: the day-1 scan -- the machine's own past is a free dataset.
 
 Pulls 30-day failure-event counts (Get-WinEvent), the latest Reliability
-Monitor stability index, SMART-ish storage counters (Get-StorageReliabilityCounter),
-and battery design-vs-full capacity. Every source is wrapped so a disabled log
+Monitor stability index, and SMART-ish storage counters
+(Get-StorageReliabilityCounter). Every source is wrapped so a disabled log
 or missing counter yields a neutral gap, not a crash.
 """
 
@@ -14,7 +14,6 @@ from client.collectors.printer_ports import collect_printer_ports
 from client.collectors.ps import as_list, run_ps
 from client.collectors.smart import collect_smart
 from client.collectors.sources import (
-    BATTERY,
     BOOT_TIME,
     CERTIFICATES,
     NETWORK,
@@ -76,22 +75,6 @@ try {
   }
 } catch {}
 
-$battery = [ordered]@{ present=$false }
-try {
-  $bs  = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue | Select-Object -First 1
-  $bf  = Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Select-Object -First 1
-  $bcc = Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($bs) {
-    $design = [double]$bs.DesignedCapacity
-    $full   = if ($bf) { [double]$bf.FullChargedCapacity } else { $null }
-    $wear   = if ($design -gt 0 -and $full) { [math]::Round((1 - ($full / $design)) * 100, 1) } else { $null }
-    $battery = [ordered]@{
-      present=$true; design_capacity_mwh=[int]$design;
-      full_charge_capacity_mwh= if ($full) { [int]$full } else { $null };
-      wear_pct=$wear; cycle_count= if ($bcc) { [int]$bcc.CycleCount } else { $null } }
-  }
-} catch {}
-
 [ordered]@{
   reliability_stability_index = $rsi
   kernel_power_41_30d = $kp
@@ -101,7 +84,6 @@ try {
   whea_errors_30d     = $whea
   avg_boot_ms         = $avgBoot
   storage             = $storage
-  battery             = $battery
   observation_days    = 30
 } | ConvertTo-Json -Depth 5 -Compress
 """
@@ -124,7 +106,7 @@ foreach ($store in 'Cert:\LocalMachine\My','Cert:\CurrentUser\My') {
 
 def collect_historical(active_scan: bool = False) -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=120)
-    owned = [STORAGE_RELIABILITY, BATTERY, RELIABILITY, BOOT_TIME, CERTIFICATES, NETWORK]
+    owned = [STORAGE_RELIABILITY, RELIABILITY, BOOT_TIME, CERTIFICATES, NETWORK]
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
         return CollectorResult(None, failed(owned, status))
@@ -135,9 +117,6 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
             # Raw serial hashed immediately -- it must never leave the agent
             # (see hash_serial; the hash is the disk_key, not the serial).
             row["serial_hash"] = hash_serial(row.pop("serial", None))
-    bat = raw.get("battery")
-    if not isinstance(bat, dict):
-        raw["battery"] = {"present": False}
 
     rsi = raw.get("reliability_stability_index")
     counts_present = any(
@@ -153,9 +132,6 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
     rel_status = "ok" if rsi is not None else ("partial" if counts_present else "empty")
     sh = {
         STORAGE_RELIABILITY: health(field_status(bool(raw["storage"]))),
-        BATTERY: health(
-            "ok"
-        ),  # collection ok; battery N/A (desktop) is derived from payload.battery.present at the trust layer
         RELIABILITY: health(rel_status),
         BOOT_TIME: health(field_status(raw.get("avg_boot_ms") is not None)),
     }

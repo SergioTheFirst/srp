@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Optional
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
 from server import db
-from server.analytics.battery import compute_battery_risk
 from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.errchain import analyze_events
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
@@ -34,6 +33,7 @@ from server.scoring import (
 from server.trust import (
     DOMAIN_SOURCES,
     GATE_PASS,
+    MATERIAL_SOURCES,
     CollectorStatus,
     SemanticStatus,
     SourceState,
@@ -42,6 +42,21 @@ from server.trust import (
     derive_state,
     resolve_domain_trust,
     validate_source,
+)
+
+# Sources the server actually knows how to gate/validate: every domain's required +
+# optional sources (server/trust/domains.py) plus the non-domain sources the pipeline
+# recognizes but that gate no domain (identity/events/certificates/print_jobs are real
+# client sources -- see client/collectors/sources.py; event_counts is validated but not
+# yet emitted by any collector, W0.1 wiring). evaluate_trust skips anything outside this
+# set -- a retired/legacy source a stale agent still sends, a forged name, whatever --
+# silently, no trust row. Keeps old-agent envelopes ingesting clean forever.
+_KNOWN_TRUST_SOURCES = (
+    frozenset(
+        src for spec in DOMAIN_SOURCES.values() for src in (*spec["required"], *spec["optional"])
+    )
+    | MATERIAL_SOURCES
+    | frozenset({"identity", "events", "certificates", "print_jobs"})
 )
 
 # W4.1: how much append-only history to feed the trend engine. Generous enough
@@ -151,8 +166,6 @@ def _extract_reading(source: str, payload: dict) -> dict:
         # v1: validates the first disk only; multi-disk coverage deferred.
         items = payload.get("storage") or [{}]
         return items[0] if items else {}
-    if source == "battery":
-        return payload.get("battery") or {}
     if source == "smart":
         # Deep-SMART decision-material slice (ssd3 Ф1): same first-disk row as
         # storage_reliability, narrowed to the fields validate_smart_item checks.
@@ -229,19 +242,22 @@ def evaluate_trust(
     safe_payload = payload or {}
 
     for source, health in source_health.items():
+        if source not in _KNOWN_TRUST_SOURCES:
+            # Unknown to this server -- a retired source a stale agent still sends,
+            # a forged name, whatever. Silently ignored: no trust row, no exception
+            # (contract: an old/odd envelope must still ingest clean).
+            continue
         collector_status = CollectorStatus(health["status"])
         reading = _extract_reading(source, safe_payload)
         last_good = db.get_last_good(device_id, source)
 
         semantic_status, reason = validate_source(source, reading, last_good)
 
-        applicable = not (source == "battery" and reading.get("present") is False)
         state = derive_state(
             collector_status,
             semantic_status,
             age_sec=None,
             stale_after_sec=None,
-            applicable=applicable,
         )
         weight = compute_weight(state)
 
@@ -498,7 +514,6 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
 # domains are tracked for lineage but gate no scoring class in v1 (no class maps).
 _CLASS_DOMAIN = {
     "storage": "storage",
-    "battery": "battery",
     "power_thermal": "thermal",
     "stability": "os_stability",
 }
@@ -589,7 +604,6 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         trends=trends,
         rule_stats=rule_stats,
     )
-    battery_risk = compute_battery_risk(hist, device_trust=device_trust)
     events = db.get_recent_events(device_id, limit=_TREND_HISTORY_LIMIT)
     disk_fill_risk = compute_disk_fill_risk(hb_series, events, device_trust=device_trust)
     os_degradation_risk = compute_os_degradation_risk(hist, device_trust=device_trust)
@@ -615,7 +629,6 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # trajectory_risk and fleet_anomaly_risk are not yet wired into any Bayesian class.
     domain_values: dict[str, Optional[float]] = {
         "storage_risk": storage_risk.value,
-        "battery_risk": battery_risk.value,
         "os_degradation_risk": os_degradation_risk.value,
         "disk_fill_risk": disk_fill_risk.value,
         "software_aging_risk": software_aging_risk.value,
@@ -657,7 +670,6 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     risk_block["score100"]["storage_risk"]["coords"] = storage_risk.source_lineage.get(
         "coords", {"damage": 0.0, "resilience_loss": 0.0, "flags": []}
     )
-    risk_block["score100"]["battery_risk"] = score_to_dict(battery_risk)
     risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
     risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)

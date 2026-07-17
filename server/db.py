@@ -3669,7 +3669,6 @@ def get_fleet_health(days: int = 7) -> list[dict]:
                    json_extract(risk, '$.score100.storage_risk.band') AS ax_storage,
                    json_extract(risk, '$.score100.software_aging_risk.band') AS ax_aging,
                    json_extract(risk, '$.score100.os_degradation_risk.band') AS ax_os,
-                   json_extract(risk, '$.score100.battery_risk.band') AS ax_battery,
                    json_extract(risk, '$.score100.disk_fill_risk.band') AS ax_disk_fill,
                    json_extract(risk, '$.score100.network_risk.band') AS ax_network,
                    json_extract(risk, '$.score100.trajectory_risk.band') AS ax_trajectory
@@ -3701,7 +3700,6 @@ def get_fleet_health(days: int = 7) -> list[dict]:
                 "storage": r["ax_storage"],
                 "aging": r["ax_aging"],
                 "os": r["ax_os"],
-                "battery": r["ax_battery"],
                 "disk_fill": r["ax_disk_fill"],
                 "network": r["ax_network"],
                 "trajectory": r["ax_trajectory"],

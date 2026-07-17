@@ -53,7 +53,6 @@ def _hrow(device_id: str, **over) -> dict:
             "storage": "good",
             "aging": "good",
             "os": "good",
-            "battery": "good",
             "disk_fill": "good",
             "network": "good",
             "trajectory": "good",
@@ -68,7 +67,7 @@ def _hrow(device_id: str, **over) -> dict:
 # --------------------------------------------------------------------------- #
 def test_action_for_maps_dominant_to_recommendation() -> None:
     assert health.action_for("storage") == health._ACTIONS["storage"]
-    assert health.action_for("battery") == health._ACTIONS["battery"]
+    assert health.action_for("network") == health._ACTIONS["network"]
 
 
 def test_action_for_none_and_unknown_fall_back_to_default() -> None:
@@ -163,16 +162,15 @@ def test_heatmap_z_is_discrete_band_ordinals_in_column_order() -> None:
             "storage": "bad",
             "aging": "good",
             "os": "watch",
-            "battery": "good",
             "disk_fill": "good",
             "network": "good",
             "trajectory": "unknown",
         },
     )
     hm = health_view._heatmap([row])
-    # cols: Состояние | D | R | O | storage | aging | os | battery | disk_fill | network | trajectory
-    assert hm["z"][0] == [1, 2, 0, 3, 2, 0, 1, 0, 0, 0, 3]
-    assert len(hm["cols"]) == 11
+    # cols: Состояние | D | R | O | storage | aging | os | disk_fill | network | trajectory
+    assert hm["z"][0] == [1, 2, 0, 3, 2, 0, 1, 0, 0, 3]
+    assert len(hm["cols"]) == 10
     assert hm["cols"][:4] == ["Состояние", "Повреждения (D)", "Устойчивость (R)", "Видимость (O)"]
 
 
@@ -301,7 +299,6 @@ def test_get_fleet_health_exposes_coord_and_axis_bands(client) -> None:
                 "storage_risk": {"band": "bad"},
                 "software_aging_risk": {"band": "good"},
                 "os_degradation_risk": {"band": "watch"},
-                "battery_risk": {"band": "good"},
                 "disk_fill_risk": {"band": "good"},
                 "network_risk": {"band": "good"},
                 "trajectory_risk": {"band": "bad"},

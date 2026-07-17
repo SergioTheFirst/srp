@@ -261,12 +261,12 @@ def test_hero_dominant_and_action_line_present(client) -> None:
     _seed(
         "hero-11",
         "HERO-11",
-        {"health": _real_health(dominant="battery", dominant_label="батарея")},
+        {"health": _real_health(dominant="network", dominant_label="сеть")},
     )
     body = client.get("/device/hero-11").text
     frag = _hero_fragment(body)
-    assert "батарея" in frag  # dominant_label
-    assert "заменить батарею" in frag  # action_for("battery")
+    assert "сеть" in frag  # dominant_label
+    assert "проверить линк/кабель/точку доступа" in frag  # action_for("network")
 
 
 def test_hero_delta_7d_none_renders_neutral_dash_not_broken(client) -> None:

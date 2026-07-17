@@ -194,12 +194,6 @@ def _wear(inv: Optional[dict], hist: Optional[dict]) -> tuple[float, list[Factor
         elif max_poh > 25000:
             hit(f"Drive power-on {max_poh / 1000:.0f}k h", -8)
 
-    bat = (hist or {}).get("battery")
-    if bat and bat.get("present") and bat.get("wear_pct") is not None:
-        bw = float(bat["wear_pct"])
-        if bw > 0:
-            hit(f"Battery wear {bw:.0f}%", -_clamp(bw * 0.6, 0, 40))
-
     age = device_age_years(inv)
     if age is not None:
         if age > 7:

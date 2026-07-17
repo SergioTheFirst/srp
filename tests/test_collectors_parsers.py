@@ -94,7 +94,7 @@ def test_heartbeat_read_absent_write_present_satisfies_latency(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Historical — as_list() quirk, battery, RSI, certificates
+# Historical — as_list() quirk, RSI, certificates
 # --------------------------------------------------------------------------- #
 
 _STORAGE_ITEM = {
@@ -118,23 +118,13 @@ _HIST_BASE = {
     "observation_days": 30,
 }
 
-_BAT_LAPTOP = {
-    "present": True,
-    "design_capacity_mwh": 45_000,
-    "full_charge_capacity_mwh": 38_250,
-    "wear_pct": 15.0,
-    "cycle_count": 312,
-}
-
-_BAT_DESKTOP = {"present": False}
-
 
 def test_historical_single_disk_dict_normalized_by_as_list(monkeypatch):
     """ConvertTo-Json can return a dict instead of a list for single-item storage.
 
     as_list() must wrap it so the parse layer always sees a list.
     """
-    raw = {**_HIST_BASE, "storage": _STORAGE_ITEM, "battery": _BAT_DESKTOP}
+    raw = {**_HIST_BASE, "storage": _STORAGE_ITEM}
     monkeypatch.setattr(historical, "run_ps", _hist_ps(raw))
     res = historical.collect_historical()
     assert res.payload is not None
@@ -149,36 +139,15 @@ def test_historical_multi_disk_list_passthrough(monkeypatch):
         _STORAGE_ITEM,
         {**_STORAGE_ITEM, "disk": "WD Blue 1TB", "media_type": "HDD"},
     ]
-    raw = {**_HIST_BASE, "storage": two_disks, "battery": _BAT_DESKTOP}
+    raw = {**_HIST_BASE, "storage": two_disks}
     monkeypatch.setattr(historical, "run_ps", _hist_ps(raw))
     res = historical.collect_historical()
     assert len(res.payload["storage"]) == 2
 
 
-def test_historical_laptop_battery_wear_pct_and_cycle_count(monkeypatch):
-    """Laptop battery: float wear_pct and int cycle_count survive the roundtrip."""
-    raw = {**_HIST_BASE, "storage": [], "battery": _BAT_LAPTOP}
-    monkeypatch.setattr(historical, "run_ps", _hist_ps(raw))
-    res = historical.collect_historical()
-    bat = res.payload["battery"]
-    assert bat["present"] is True
-    assert bat["wear_pct"] == 15.0
-    assert bat["cycle_count"] == 312
-    assert res.source_health["battery"]["status"] == "ok"
-
-
-def test_historical_desktop_battery_present_false(monkeypatch):
-    """Desktop: battery.present=false is stored verbatim; battery source still ok."""
-    raw = {**_HIST_BASE, "storage": [], "battery": _BAT_DESKTOP}
-    monkeypatch.setattr(historical, "run_ps", _hist_ps(raw))
-    res = historical.collect_historical()
-    assert res.payload["battery"]["present"] is False
-    assert res.source_health["battery"]["status"] == "ok"
-
-
 def test_historical_rsi_float_accepted(monkeypatch):
     """Win32_ReliabilityStabilityMetrics returns RSI as float; reliability source = ok."""
-    raw = {**_HIST_BASE, "reliability_stability_index": 6.8, "storage": [], "battery": _BAT_DESKTOP}
+    raw = {**_HIST_BASE, "reliability_stability_index": 6.8, "storage": []}
     monkeypatch.setattr(historical, "run_ps", _hist_ps(raw))
     res = historical.collect_historical()
     assert res.payload["reliability_stability_index"] == 6.8
@@ -198,7 +167,7 @@ def test_historical_cert_iso_timestamps_preserved(monkeypatch):
             }
         ]
     }
-    raw = {**_HIST_BASE, "storage": [], "battery": _BAT_DESKTOP}
+    raw = {**_HIST_BASE, "storage": []}
     monkeypatch.setattr(historical, "run_ps", _hist_ps(raw, cert_raw))
     res = historical.collect_historical()
     certs = res.payload["certificates"]

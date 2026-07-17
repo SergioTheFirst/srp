@@ -62,7 +62,6 @@ def test_historical_empty_storage_is_empty(monkeypatch):
                 "storage": [],
                 "reliability_stability_index": 9.0,
                 "avg_boot_ms": 20000,
-                "battery": {"present": False},
             }
         ),
     )
@@ -70,7 +69,6 @@ def test_historical_empty_storage_is_empty(monkeypatch):
     assert res.source_health["storage_reliability"]["status"] == "empty"
     assert res.source_health["reliability"]["status"] == "ok"
     assert res.source_health["boot_time"]["status"] == "ok"
-    assert res.source_health["battery"]["status"] == "ok"
 
 
 def test_historical_rsi_none_but_counts_is_partial(monkeypatch):
@@ -83,7 +81,6 @@ def test_historical_rsi_none_but_counts_is_partial(monkeypatch):
                 "reliability_stability_index": None,
                 "kernel_power_41_30d": 2,
                 "avg_boot_ms": None,
-                "battery": {"present": False},
             }
         ),
     )

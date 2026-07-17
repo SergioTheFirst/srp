@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import subprocess
+import subprocess  # nosec B404 -- фиксированный argv, shell=False; см. subprocess.run ниже
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional

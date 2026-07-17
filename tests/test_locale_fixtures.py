@@ -116,7 +116,6 @@ _HIST_RUSSIAN_LOCALE = {
             "temperature_c": 35,
         }
     ],
-    "battery": {"present": False},
     "observation_days": 30,
 }
 

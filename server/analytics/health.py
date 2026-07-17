@@ -94,7 +94,7 @@ _KEY_TRENDS = (
     "disk_tail_ratio",
 )
 # Depletion-domain trends feeding the horizon ETA rule.
-_DEPLETION_TRENDS = ("nvme_spare", "disk_fill", "battery_wear", "storage_wear")
+_DEPLETION_TRENDS = ("nvme_spare", "disk_fill", "storage_wear")
 # Damage counters whose flatness is ratchet-improvement evidence (197 / 5 / media).
 _FLAT_COUNTER_TRENDS = ("smart_pending", "smart_realloc", "smart_media_errors")
 
@@ -104,7 +104,6 @@ _AXIS_TO_DOMINANT = {
     "software_aging_risk": "aging",
     "os_degradation_risk": "os",
     "disk_fill_risk": "disk_fill",
-    "battery_risk": "battery",
     "network_risk": "network",
     "trajectory_risk": "trajectory",
 }
@@ -115,7 +114,6 @@ _ACTIONS: dict[Optional[str], str] = {
     "aging": "перезагрузить; если повторится — искать утечку в ПО",
     "os": "переустановка/восстановление ОС при повторении",
     "disk_fill": "освободить место — под угрозой обновления Windows",
-    "battery": "заменить батарею",
     "network": "проверить линк/кабель/точку доступа",
     "trajectory": "ресурс близок к исчерпанию — планировать обслуживание",
     "systemic": "искать общую причину: питание, перегрев, недавнее обновление, антивирусные сканы",
@@ -123,7 +121,6 @@ _ACTIONS: dict[Optional[str], str] = {
 }
 _DOMINANT_LABELS: dict[Optional[str], str] = {
     "storage": "накопитель",
-    "battery": "батарея",
     "disk_fill": "заполнение диска",
     "os": "операционная система",
     "network": "сеть",
@@ -278,11 +275,6 @@ def _damage(axes: dict) -> Coordinate:
                 st.get("factors") or [],
                 d_flags,
             )
-        )
-    bat = _ax(axes, "battery_risk")
-    if bat.get("value") is not None:
-        channels.append(
-            (float(bat["value"]), bat.get("confidence", "unknown"), bat.get("factors") or [], [])
         )
     os_ = _ax(axes, "os_degradation_risk")
     if os_.get("value") is not None:

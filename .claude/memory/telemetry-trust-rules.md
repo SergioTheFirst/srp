@@ -16,7 +16,7 @@ metadata:
   thermal-zone = свежая фейк-константа → collector HIGH, semantic LOW). collector ← агент
   (факты сбора), semantic ← сервер (суждение, эволюционирует — не в агенте).
 - **Materiality governor:** semantic-валидация ТОЛЬКО для decision-material сигналов
-  (SMART/battery/free_space/RSI/boot — да; CPU%/queue/raw perf — нет; thermal — только
+  (SMART/free_space/RSI/boot — да; CPU%/queue/raw perf — нет; thermal — только
   frozen-check). Иначе строим «оценку качества телеметрии», а не «систему деградации ПК».
 - **UNKNOWN — first-class исход** (HEALTHY/DEGRADED/AT RISK/UNKNOWN). required-источник
   деградировал → домен UNKNOWN, не «здоров», не сворачивается в оптимистичный агрегат.

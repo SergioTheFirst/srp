@@ -31,14 +31,12 @@ def _at(day: float) -> str:
     return (_BASE + timedelta(days=day)).isoformat()
 
 
-def _hist(day: float, *, wear=None, boot=None, battery_wear=None) -> dict:
+def _hist(day: float, *, wear=None, boot=None) -> dict:
     row: dict = {"received_at": _at(day), "ts": _at(day)}
     if wear is not None:
         row["storage"] = [{"wear_pct": wear}]
     if boot is not None:
         row["avg_boot_ms"] = boot
-    if battery_wear is not None:
-        row["battery"] = {"present": True, "wear_pct": battery_wear}
     return row
 
 
@@ -345,8 +343,8 @@ def test_disk_tail_ratio_trend_worsening_stays_out_of_trajectory_risk():
     t = trends["disk_tail_ratio"]
     assert t.direction == "worsening"
     assert t.eta_days is None  # direction-only: no failure boundary
-    # No depletion-domain telemetry at all (no storage/battery/disk_fill data
-    # in this fixture) -- trajectory_risk stays honestly UNKNOWN, not fabricated.
+    # No depletion-domain telemetry at all (no storage/disk_fill data in this
+    # fixture) -- trajectory_risk stays honestly UNKNOWN, not fabricated.
     assert trajectory_risk_score(trends).value is None
 
 

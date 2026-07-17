@@ -47,7 +47,7 @@ def test_degrading_machine_scores_drop():
     s = _scores(degrading)
     assert s["performance"] < 70
     assert s["reliability"] < 40
-    assert s["wear"] < 10  # 82% SSD wear + battery wear + old hardware
+    assert s["wear"] < 10  # 82% SSD wear + high power-on hours + old hardware
     assert s["risk_exposure"] > 30
 
 

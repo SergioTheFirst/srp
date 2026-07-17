@@ -57,7 +57,6 @@ def _net_env(did, loss=0.0):
     ]
     sh = {
         "storage_reliability": _sh("ok"),
-        "battery": _sh("ok"),
         "reliability": _sh("ok"),
         "boot_time": _sh("ok"),
         "network": _sh("ok"),
@@ -104,7 +103,6 @@ def test_old_agent_without_network_reads_no_data_and_lower_observability(client)
     payload = healthy("historical")
     sh = {
         "storage_reliability": _sh("ok"),
-        "battery": _sh("ok"),
         "reliability": _sh("ok"),
         "boot_time": _sh("ok"),
     }

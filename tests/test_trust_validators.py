@@ -4,7 +4,6 @@ import pytest
 from server.trust.states import SemanticStatus
 from server.trust.validators import (
     MATERIAL_SOURCES,
-    validate_battery,
     validate_frozen_constant,
     validate_scalar_range,
     validate_smart_item,
@@ -29,18 +28,6 @@ def test_storage_negative_counter_is_implausible():
 def test_storage_clean_item_is_plausible():
     status, _ = validate_storage_item({"wear_pct": 12.0, "power_on_hours": 5200}, last=None)
     assert status is SemanticStatus.PLAUSIBLE
-
-
-def test_battery_full_above_design_is_inconsistent():
-    status, _ = validate_battery(
-        {"present": True, "design_capacity_mwh": 50000, "full_charge_capacity_mwh": 60000}
-    )
-    assert status is SemanticStatus.INCONSISTENT
-
-
-def test_battery_present_without_design_is_inconsistent():
-    status, _ = validate_battery({"present": True, "design_capacity_mwh": None})
-    assert status is SemanticStatus.INCONSISTENT
 
 
 def test_scalar_out_of_range_is_implausible():
@@ -153,26 +140,6 @@ def test_storage_counter_reset_is_inconsistent():
     assert status is SemanticStatus.INCONSISTENT
     assert reason  # non-empty
     assert "power_on_hours" in reason or "drop" in reason.lower() or "reset" in reason.lower()
-
-
-# ---------------------------------------------------------------------------
-# validate_battery: additional branches
-# ---------------------------------------------------------------------------
-
-
-def test_battery_not_present_is_plausible():
-    status, _ = validate_battery({"present": False})
-    assert status is SemanticStatus.PLAUSIBLE
-
-
-def test_battery_wear_above_100_is_implausible():
-    status, _ = validate_battery({"present": True, "design_capacity_mwh": 50000, "wear_pct": 150})
-    assert status is SemanticStatus.IMPLAUSIBLE
-
-
-def test_battery_dispatch_no_design_is_inconsistent():
-    status, _ = validate_source("battery", {"present": True, "design_capacity_mwh": None}, None)
-    assert status is SemanticStatus.INCONSISTENT
 
 
 # ---------------------------------------------------------------------------
