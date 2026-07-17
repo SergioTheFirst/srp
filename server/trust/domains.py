@@ -4,7 +4,9 @@ Each scoring domain declares required + optional sources. A required source that
 fails the gate makes the whole domain UNKNOWN (never optimistic). An optional source
 that fails is simply dropped; the domain stays TRUSTED on its required sources, at a
 weight that reflects any degraded required source. A required NOT_APPLICABLE source
-(e.g. battery on a desktop) makes the domain NOT_APPLICABLE -- not a failure.
+(a sensor the hardware genuinely lacks) makes the domain NOT_APPLICABLE -- not a failure.
+No current production source reaches this branch (battery, its only real trigger, was
+removed); kept for a future genuinely-absent sensor rather than dead-code deleted.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from server.trust.states import SourceState, SourceTrust
 
 DOMAIN_SOURCES: Dict[str, Dict[str, List[str]]] = {
     "storage": {"required": ["storage_reliability"], "optional": ["disk_latency", "smart"]},
-    "battery": {"required": ["battery"], "optional": []},
     "disk_fill": {"required": ["free_space"], "optional": []},
     "os_stability": {"required": ["reliability"], "optional": []},
     "boot": {"required": ["boot_time"], "optional": []},

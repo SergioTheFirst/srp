@@ -472,9 +472,7 @@ def test_historical_merges_network(monkeypatch):
 
     def _hist_ps(script, timeout=30):
         if timeout == 120:
-            return _ok(
-                {"reliability_stability_index": 9.0, "storage": [], "battery": {"present": False}}
-            )
+            return _ok({"reliability_stability_index": 9.0, "storage": []})
         if timeout == 60:
             return _ok({"certificates": []})
         return PsResult("empty")
@@ -501,9 +499,7 @@ def test_historical_merges_network(monkeypatch):
 def test_historical_network_failure_sets_empty_fields(monkeypatch):
     def _hist_ps(script, timeout=30):
         if timeout == 120:
-            return _ok(
-                {"reliability_stability_index": 9.0, "storage": [], "battery": {"present": False}}
-            )
+            return _ok({"reliability_stability_index": 9.0, "storage": []})
         return _ok({"certificates": []})
 
     monkeypatch.setattr(historical, "run_ps", _hist_ps)

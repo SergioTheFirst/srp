@@ -10,6 +10,10 @@ from tests.conftest import envelope
 
 pytestmark = pytest.mark.integration
 
+# Вчерашняя метка, не хардкод даты: print-аналитика смотрит скользящее
+# окно (days=30) от текущего момента -- тот же приём, что job_ts в smoke.py.
+_JOB_TS = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+00:00")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,7 +27,7 @@ def _pj_envelope(device_id: str, jobs: list) -> dict:
 def _job(printer: str = "HP LaserJet", pages: int = 2, user: str = "alice") -> dict:
     return {
         "job_id": 42,
-        "ts": "2026-06-09T10:00:00+00:00",
+        "ts": _JOB_TS,
         "printer": printer,
         "pages": pages,
         "size_bytes": 12000,

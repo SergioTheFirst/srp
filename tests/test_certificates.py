@@ -52,7 +52,6 @@ _MAIN_PS_DATA = {
     "whea_errors_30d": 0,
     "avg_boot_ms": 20000,
     "storage": [],
-    "battery": {"present": False},
     "observation_days": 30,
 }
 

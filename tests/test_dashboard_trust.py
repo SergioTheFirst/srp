@@ -30,7 +30,6 @@ def _env(device_id: str, msg_type: str, payload: dict, source_health: dict) -> d
 def test_device_page_marks_unknown_domain(client):
     sh = {
         "storage_reliability": _sh("blocked"),
-        "battery": _sh("ok"),
         "reliability": _sh("ok"),
         "boot_time": _sh("ok"),
     }
@@ -54,7 +53,6 @@ def test_device_page_shows_untrusted_banner(client):
 def test_fleet_page_still_renders(client):
     sh = {
         "storage_reliability": _sh("ok"),
-        "battery": _sh("ok"),
         "reliability": _sh("ok"),
         "boot_time": _sh("ok"),
     }

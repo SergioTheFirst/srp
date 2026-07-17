@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -80,13 +81,6 @@ HISTORICAL = {
             "temperature_c": 51,
         }
     ],
-    "battery": {
-        "present": True,
-        "design_capacity_mwh": 60000,
-        "full_charge_capacity_mwh": 39000,
-        "wear_pct": 35.0,
-        "cycle_count": 820,
-    },
     "observation_days": 30,
 }
 
@@ -133,6 +127,11 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="srp_smoke_")) / "smoke.db"
     app = create_app(ServerConfig(db_path=str(tmp)))
     failures: list[str] = []
+    # Вчерашние метки, не хардкод даты: печать-аналитика смотрит скользящее 30-дневное
+    # окно, и зашитая дата со временем выпадала из него (ложное красное smoke).
+    job_ts = datetime.now(timezone.utc) - timedelta(days=1)
+    job_ts1 = job_ts.strftime("%Y-%m-%dT10:00:00Z")
+    job_ts2 = job_ts.strftime("%Y-%m-%dT10:05:00Z")
 
     with TestClient(app) as client:
         if client.get("/api/v1/health").json().get("status") != "ok":
@@ -149,7 +148,7 @@ def main() -> int:
                     "jobs": [
                         {
                             "job_id": 1,
-                            "ts": "2026-06-09T10:00:00Z",
+                            "ts": job_ts1,
                             "printer": "HP LaserJet",
                             "pages": 4,
                             "size_bytes": 8000,
@@ -157,7 +156,7 @@ def main() -> int:
                         },
                         {
                             "job_id": 2,
-                            "ts": "2026-06-09T10:05:00Z",
+                            "ts": job_ts2,
                             "printer": "HP LaserJet",
                             "pages": 2,
                             "size_bytes": 4000,

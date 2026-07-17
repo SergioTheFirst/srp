@@ -32,13 +32,7 @@
 {% macro render_axis(key, name, tip, na_tip) %}
   {% set ax = (s.risk.score100 or {}).get(key) %}
   {% if ax %}
-    {% if key == "battery_risk" %}
-      {% set no_bat = (ax.value is none and ax.source_lineage is defined and ax.source_lineage and ax.source_lineage.battery_present == false) %}
-      {{ axis_card(ax, name, tip,
-                   ("Устройство без батареи" if no_bat else na_tip),
-                   reason=("нет батареи (десктоп)" if no_bat else ((ax.reason or "нет данных о батарее") if ax.value is none else (ax.reason or ""))),
-                   na_chip_text=("—" if no_bat else "НЕИЗВЕСТНО")) }}
-    {% elif key == "network_risk" %}
+    {% if key == "network_risk" %}
       {{ axis_card(ax, name, tip, na_tip, reason=(ax.reason or ""), extra_note=net_subnet_note) }}
     {% elif key == "trajectory_risk" %}
       {{ axis_card(ax, name, tip, na_tip, reason=(ax.reason or "совокупный риск выхода за пределы")) }}

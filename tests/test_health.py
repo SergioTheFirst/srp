@@ -111,11 +111,10 @@ def _call(score100_axes, *, bayes=None, trends=None, errchain=None, cohort=None,
 def test_damage_is_max_of_channels() -> None:
     axes = {
         "storage_risk": _axis(20, coords=_st_coords(damage=20)),
-        "battery_risk": _axis(30),
         "os_degradation_risk": _axis(50),  # *0.6 -> 30
     }
     v = _call(axes, trends=_mature_key_trend())
-    assert v.damage.value == 30  # max(20, 30, 30)
+    assert v.damage.value == 30  # max(20, 30)
 
 
 def test_damage_os_multiplier_is_0_6() -> None:
@@ -141,10 +140,10 @@ def test_rloss_max_plus_spare_and_tail_surcharges() -> None:
 def test_none_channels_excluded_from_max() -> None:
     axes = {
         "storage_risk": _axis(None),  # dead source -> excluded even if coords exist
-        "battery_risk": _axis(40),
+        "os_degradation_risk": _axis(40),  # *0.6 -> 24
     }
     v = _call(axes, trends=_mature_key_trend())
-    assert v.damage.value == 40
+    assert v.damage.value == 24
 
 
 def test_zero_coords_from_dead_axis_excluded_k5() -> None:
@@ -155,7 +154,7 @@ def test_zero_coords_from_dead_axis_excluded_k5() -> None:
 
 
 def test_all_none_channels_give_none_coordinate() -> None:
-    axes = {"storage_risk": _axis(None), "battery_risk": _axis(None)}
+    axes = {"storage_risk": _axis(None), "os_degradation_risk": _axis(None)}
     v = _call(axes, trends=_mature_key_trend())
     assert v.damage.value is None
 
@@ -165,10 +164,10 @@ def test_all_none_channels_give_none_coordinate() -> None:
 # --------------------------------------------------------------------------- #
 def test_k1_same_coordinates_same_state_despite_raw_axis_swap() -> None:
     a = {"storage_risk": _axis(50, coords=_st_coords(damage=50))}
-    # b reduces to the same D/R/O but via a different raw axis mix (extra low battery)
+    # b reduces to the same D/R/O but via a different raw axis mix (extra os reading)
     b = {
         "storage_risk": _axis(50, coords=_st_coords(damage=50)),
-        "battery_risk": _axis(30),  # < 50, does not change D
+        "os_degradation_risk": _axis(60),  # *0.6=36 < 50, does not change D
     }
     va = _call(a, trends=_mature_key_trend())
     vb = _call(b, trends=_mature_key_trend())
@@ -395,7 +394,7 @@ def test_h0_with_bad_band_never_happens() -> None:
 def test_systemic_three_watch_axes() -> None:
     axes = {
         "storage_risk": _axis(20, coords=_st_coords(damage=20)),
-        "battery_risk": _axis(20),
+        "disk_fill_risk": _axis(20),
         "os_degradation_risk": _axis(20),
     }
     v = _call(axes, trends=_mature_key_trend())
@@ -408,7 +407,7 @@ def test_systemic_never_overrides_blind_zone() -> None:
     # >=3 watch/bad axes would normally floor state at h2, but K5 (blind device
     # can never read as healthier than "unknown") outranks the systemic floor.
     axes = {
-        "battery_risk": _axis(20),
+        "network_risk": _axis(20),
         "os_degradation_risk": _axis(20),
         "disk_fill_risk": _axis(20),
     }
@@ -434,13 +433,12 @@ def test_horizon_nvme_spare_eta_under_30() -> None:
 
 
 def test_actions_cover_every_dominant_key() -> None:
-    # the closed action map must cover exactly the 9 documented keys (8 + None)
+    # the closed action map must cover exactly the 8 documented keys (7 + None)
     assert set(_ACTIONS) == {
         "storage",
         "aging",
         "os",
         "disk_fill",
-        "battery",
         "network",
         "trajectory",
         "systemic",
@@ -451,7 +449,6 @@ def test_actions_cover_every_dominant_key() -> None:
         "aging": {"software_aging_risk": _axis(50, coords={"flags": []})},
         "os": {"os_degradation_risk": _axis(50)},
         "disk_fill": {"disk_fill_risk": _axis(50)},
-        "battery": {"battery_risk": _axis(50)},
         "network": {"network_risk": _axis(50)},
         "trajectory": {"trajectory_risk": _axis(50)},
     }
@@ -475,7 +472,7 @@ def test_actions_cover_every_dominant_key() -> None:
     sysv = _call(
         {
             "storage_risk": _axis(20, coords=_st_coords(damage=20)),
-            "battery_risk": _axis(20),
+            "disk_fill_risk": _axis(20),
             "os_degradation_risk": _axis(20),
         },
         trends=_mature_key_trend(),
@@ -577,13 +574,15 @@ def test_blind_zone_empties_state_evidence_but_keeps_factors() -> None:
     # (evidence for the firing *criterion*) is emptied, because in the blind
     # branch the firing criterion is O<40 itself, not a D/R criterion.
     axes = {
-        "battery_risk": _axis(70, factors=[{"label": "износ батареи критический", "delta": 70}]),
+        "os_degradation_risk": _axis(
+            70, factors=[{"label": "критическая деградация ОС", "delta": 70}]
+        ),
     }
     v = _call(axes, trends={}, errchain=None)
     assert v.observability.value is not None and v.observability.value < 40
     assert v.state == "unknown"
     assert v.state_evidence == []
-    assert any(f.get("label") == "износ батареи критический" for f in v.factors)
+    assert any(f.get("label") == "критическая деградация ОС" for f in v.factors)
 
 
 # --------------------------------------------------------------------------- #

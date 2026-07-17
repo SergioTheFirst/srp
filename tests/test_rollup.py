@@ -8,10 +8,16 @@ Pure SQLite; no network, no FastAPI.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 pytestmark = pytest.mark.unit
+
+# Тесты фолдят один UTC-день и читают его назад через 7-дневное окно
+# get_*_rollups -- хардкод даты рано или поздно из него выпадает (тот же
+# приём, что job_ts в smoke.py). "Вчера" относительно текущего момента.
+_DAY = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
 
 @pytest.fixture
@@ -48,8 +54,8 @@ def test_percentiles_on_known_sample(db_init):
     db = db_init
     # cpu_pct 10,20,...,100 (10 points, nearest-rank): p50 -> 5th smallest (50), p95 -> 10th (100)
     for i, cpu in enumerate(range(10, 101, 10)):
-        _seed_heartbeat(db, "dev-1", f"2026-07-08T00:00:{i:02d}+00:00", cpu_pct=float(cpu))
-    n = db.rollup_heartbeats_daily("2026-07-08")
+        _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:{i:02d}+00:00", cpu_pct=float(cpu))
+    n = db.rollup_heartbeats_daily(_DAY.isoformat())
     assert n == 1
     rows = db.get_heartbeat_rollups("dev-1", 7)
     assert len(rows) == 1
@@ -60,10 +66,10 @@ def test_percentiles_on_known_sample(db_init):
 
 def test_disk_ms_prefers_f4_field_falls_back_to_legacy_sec(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", disk_read_ms_p95=12.5)
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:00+00:00", disk_read_ms_p95=12.5)
     # Old (pre-Ф4) agent: no disk_read_ms_p95, only the legacy per-op seconds field.
-    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", disk_read_sec=0.02)
-    db.rollup_heartbeats_daily("2026-07-08")
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T01:00:00+00:00", disk_read_sec=0.02)
+    db.rollup_heartbeats_daily(_DAY.isoformat())
     row = db.get_heartbeat_rollups("dev-1", 7)[0]
     # folded values: [12.5, 20.0 (0.02s*1000)] -> p95 of 2 points is the larger one
     assert row["disk_read_ms_p95"] == 20.0
@@ -74,7 +80,7 @@ def test_min_max_aggregates(db_init):
     _seed_heartbeat(
         db,
         "dev-1",
-        "2026-07-08T00:00:00+00:00",
+        f"{_DAY}T00:00:00+00:00",
         mem_avail_mb=500.0,
         free_space_pct=40.0,
         handle_count_total=1000,
@@ -83,13 +89,13 @@ def test_min_max_aggregates(db_init):
     _seed_heartbeat(
         db,
         "dev-1",
-        "2026-07-08T01:00:00+00:00",
+        f"{_DAY}T01:00:00+00:00",
         mem_avail_mb=200.0,
         free_space_pct=10.0,
         handle_count_total=2000,
         uptime_hours=10.0,
     )
-    db.rollup_heartbeats_daily("2026-07-08")
+    db.rollup_heartbeats_daily(_DAY.isoformat())
     row = db.get_heartbeat_rollups("dev-1", 7)[0]
     assert row["mem_avail_min"] == 200.0
     assert row["free_space_min"] == 10.0
@@ -99,9 +105,9 @@ def test_min_max_aggregates(db_init):
 
 def test_rollup_scoped_per_device(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", cpu_pct=10.0)
-    _seed_heartbeat(db, "dev-2", "2026-07-08T00:00:00+00:00", cpu_pct=90.0)
-    n = db.rollup_heartbeats_daily("2026-07-08")
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:00+00:00", cpu_pct=10.0)
+    _seed_heartbeat(db, "dev-2", f"{_DAY}T00:00:00+00:00", cpu_pct=90.0)
+    n = db.rollup_heartbeats_daily(_DAY.isoformat())
     assert n == 2
     assert db.get_heartbeat_rollups("dev-1", 7)[0]["cpu_p50"] == 10.0
     assert db.get_heartbeat_rollups("dev-2", 7)[0]["cpu_p50"] == 90.0
@@ -125,9 +131,9 @@ def test_oversized_int_is_skipped_not_fatal(db_init):
     db = db_init
     # An int this large raises OverflowError from float() -- HeartbeatPayload's
     # numeric fields have no upper bound in the wire contract.
-    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", handle_count_total=10**400)
-    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", handle_count_total=500)
-    n = db.rollup_heartbeats_daily("2026-07-08")  # must not raise
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:00+00:00", handle_count_total=10**400)
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T01:00:00+00:00", handle_count_total=500)
+    n = db.rollup_heartbeats_daily(_DAY.isoformat())  # must not raise
     assert n == 1
     row = db.get_heartbeat_rollups("dev-1", 7)[0]
     assert row["handles_max"] == 500  # huge value dropped, valid one survived
@@ -135,18 +141,18 @@ def test_oversized_int_is_skipped_not_fatal(db_init):
 
 def test_non_finite_float_is_skipped(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", cpu_pct=float("inf"))
-    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", cpu_pct=42.0)
-    db.rollup_heartbeats_daily("2026-07-08")
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:00+00:00", cpu_pct=float("inf"))
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T01:00:00+00:00", cpu_pct=42.0)
+    db.rollup_heartbeats_daily(_DAY.isoformat())
     row = db.get_heartbeat_rollups("dev-1", 7)[0]
     assert row["cpu_p95"] == 42.0  # inf excluded, not propagated into the rollup
 
 
 def test_one_poisoned_device_does_not_abort_others_in_the_same_call(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-bad", "2026-07-08T00:00:00+00:00", handle_count_total=10**400)
-    _seed_heartbeat(db, "dev-good", "2026-07-08T00:00:00+00:00", cpu_pct=10.0)
-    n = db.rollup_heartbeats_daily("2026-07-08")
+    _seed_heartbeat(db, "dev-bad", f"{_DAY}T00:00:00+00:00", handle_count_total=10**400)
+    _seed_heartbeat(db, "dev-good", f"{_DAY}T00:00:00+00:00", cpu_pct=10.0)
+    n = db.rollup_heartbeats_daily(_DAY.isoformat())
     assert n == 2  # both devices rolled up
     assert db.get_heartbeat_rollups("dev-good", 7)[0]["cpu_p50"] == 10.0
 
@@ -161,8 +167,8 @@ def test_one_poisoned_device_does_not_abort_others_in_the_same_call(db_init):
 
 def test_event_key_source_is_length_clamped(db_init):
     db = db_init
-    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "x" * 500, 153)
-    db.rollup_events_daily("2026-07-08")
+    _seed_event(db, "dev-1", f"{_DAY}T00:00:00+00:00", "x" * 500, 153)
+    db.rollup_events_daily(_DAY.isoformat())
     rows = db.get_event_rollups("dev-1", 7)
     assert len(rows) == 1
     assert len(rows[0]["event_key"]) <= db._EVENT_SOURCE_MAX_LEN + len(":153")
@@ -172,10 +178,10 @@ def test_event_keys_per_device_day_are_capped_keeping_highest_count(db_init, mon
     db = db_init
     monkeypatch.setattr(db, "_MAX_EVENT_KEYS_PER_DEVICE_DAY", 2)
     for i in range(5):  # 5 distinct low-count keys
-        _seed_event(db, "dev-1", f"2026-07-08T00:0{i}:00+00:00", f"fake{i}", 153)
+        _seed_event(db, "dev-1", f"{_DAY}T00:0{i}:00+00:00", f"fake{i}", 153)
     for _ in range(3):  # one clearly-loudest key
-        _seed_event(db, "dev-1", "2026-07-08T01:00:00+00:00", "loud", 153)
-    n = db.rollup_events_daily("2026-07-08")
+        _seed_event(db, "dev-1", f"{_DAY}T01:00:00+00:00", "loud", 153)
+    n = db.rollup_events_daily(_DAY.isoformat())
     assert n == 2  # capped from 6 distinct keys down to 2
     rows = {r["event_key"]: r["n"] for r in db.get_event_rollups("dev-1", 7)}
     assert rows.get("loud:153") == 3  # the highest-count key always survives the cap
@@ -184,10 +190,10 @@ def test_event_keys_per_device_day_are_capped_keeping_highest_count(db_init, mon
 def test_event_key_cap_is_independent_per_device(db_init, monkeypatch):
     db = db_init
     monkeypatch.setattr(db, "_MAX_EVENT_KEYS_PER_DEVICE_DAY", 1)
-    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "disk", 153)
-    _seed_event(db, "dev-1", "2026-07-08T00:01:00+00:00", "Ntfs", 55)
-    _seed_event(db, "dev-2", "2026-07-08T00:00:00+00:00", "disk", 153)
-    db.rollup_events_daily("2026-07-08")
+    _seed_event(db, "dev-1", f"{_DAY}T00:00:00+00:00", "disk", 153)
+    _seed_event(db, "dev-1", f"{_DAY}T00:01:00+00:00", "Ntfs", 55)
+    _seed_event(db, "dev-2", f"{_DAY}T00:00:00+00:00", "disk", 153)
+    db.rollup_events_daily(_DAY.isoformat())
     assert len(db.get_event_rollups("dev-1", 7)) == 1  # capped to 1
     assert len(db.get_event_rollups("dev-2", 7)) == 1  # dev-2's own cap, unaffected
 
@@ -199,13 +205,15 @@ def test_event_key_cap_is_independent_per_device(db_init, monkeypatch):
 
 def test_day_boundary_is_utc_calendar_date(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-1", "2026-07-08T23:59:59+00:00", cpu_pct=1.0)
-    _seed_heartbeat(db, "dev-1", "2026-07-09T00:00:00+00:00", cpu_pct=2.0)
-    assert db.rollup_heartbeats_daily("2026-07-08") == 1
-    assert db.rollup_heartbeats_daily("2026-07-09") == 1
+    day1 = _DAY - timedelta(days=1)  # two consecutive UTC days, both inside the 7d window
+    day2 = _DAY
+    _seed_heartbeat(db, "dev-1", f"{day1}T23:59:59+00:00", cpu_pct=1.0)
+    _seed_heartbeat(db, "dev-1", f"{day2}T00:00:00+00:00", cpu_pct=2.0)
+    assert db.rollup_heartbeats_daily(day1.isoformat()) == 1
+    assert db.rollup_heartbeats_daily(day2.isoformat()) == 1
     rows = db.get_heartbeat_rollups("dev-1", 7)
-    assert rows[0]["day"] == "2026-07-09"  # newest first
-    assert rows[1]["day"] == "2026-07-08"
+    assert rows[0]["day"] == day2.isoformat()  # newest first
+    assert rows[1]["day"] == day1.isoformat()
 
 
 # --------------------------------------------------------------------------- #
@@ -215,10 +223,10 @@ def test_day_boundary_is_utc_calendar_date(db_init):
 
 def test_rerolling_a_day_replaces_not_duplicates(db_init):
     db = db_init
-    _seed_heartbeat(db, "dev-1", "2026-07-08T00:00:00+00:00", cpu_pct=10.0)
-    db.rollup_heartbeats_daily("2026-07-08")
-    _seed_heartbeat(db, "dev-1", "2026-07-08T01:00:00+00:00", cpu_pct=90.0)
-    db.rollup_heartbeats_daily("2026-07-08")  # re-fold the same day
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T00:00:00+00:00", cpu_pct=10.0)
+    db.rollup_heartbeats_daily(_DAY.isoformat())
+    _seed_heartbeat(db, "dev-1", f"{_DAY}T01:00:00+00:00", cpu_pct=90.0)
+    db.rollup_heartbeats_daily(_DAY.isoformat())  # re-fold the same day
     rows = db.get_heartbeat_rollups("dev-1", 7)
     assert len(rows) == 1  # PRIMARY KEY (device_id, day) -- replaced, not appended
     assert rows[0]["n"] == 2  # picked up both heartbeats on the re-fold
@@ -231,10 +239,10 @@ def test_rerolling_a_day_replaces_not_duplicates(db_init):
 
 def test_event_rollup_counts_by_source_and_id(db_init):
     db = db_init
-    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "disk", 153)
-    _seed_event(db, "dev-1", "2026-07-08T01:00:00+00:00", "disk", 153)
-    _seed_event(db, "dev-1", "2026-07-08T02:00:00+00:00", "Ntfs", 55)
-    n = db.rollup_events_daily("2026-07-08")
+    _seed_event(db, "dev-1", f"{_DAY}T00:00:00+00:00", "disk", 153)
+    _seed_event(db, "dev-1", f"{_DAY}T01:00:00+00:00", "disk", 153)
+    _seed_event(db, "dev-1", f"{_DAY}T02:00:00+00:00", "Ntfs", 55)
+    n = db.rollup_events_daily(_DAY.isoformat())
     assert n == 2  # two distinct (device, event_key) pairs
     rows = {r["event_key"]: r["n"] for r in db.get_event_rollups("dev-1", 7)}
     assert rows == {"disk:153": 2, "Ntfs:55": 1}
@@ -242,9 +250,9 @@ def test_event_rollup_counts_by_source_and_id(db_init):
 
 def test_event_rollup_scoped_per_device(db_init):
     db = db_init
-    _seed_event(db, "dev-1", "2026-07-08T00:00:00+00:00", "disk", 153)
-    _seed_event(db, "dev-2", "2026-07-08T00:00:00+00:00", "disk", 153)
-    db.rollup_events_daily("2026-07-08")
+    _seed_event(db, "dev-1", f"{_DAY}T00:00:00+00:00", "disk", 153)
+    _seed_event(db, "dev-2", f"{_DAY}T00:00:00+00:00", "disk", 153)
+    db.rollup_events_daily(_DAY.isoformat())
     assert len(db.get_event_rollups("dev-1", 7)) == 1
     assert len(db.get_event_rollups("dev-2", 7)) == 1
 

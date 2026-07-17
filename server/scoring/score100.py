@@ -227,14 +227,6 @@ def _gate_axis(
     )
 
 
-def _wear_optional(trust: Optional[dict[str, Any]]) -> list[str]:
-    """Battery counts toward wear only when applicable (a laptop with a battery)."""
-    if not trust:
-        return []
-    state = _domain_state(trust.get("domains", {}), "battery")
-    return ["battery"] if state and state != "not_applicable" else []
-
-
 # --------------------------------------------------------------------------- #
 # Public: observability + the day-1 Score100 map
 # --------------------------------------------------------------------------- #
@@ -374,7 +366,7 @@ def compute_day1_score100(
         presence_ok=(historical is not None or inventory is not None),
         presence_missing=["historical/inventory (wear evidence) missing"],
         required=["storage"],
-        optional=_wear_optional(trust),
+        optional=[],
     )
     risk_exposure = _gate_axis(
         numeric=day1["risk_exposure"],

@@ -26,7 +26,7 @@
     <div class="lab" style="margin-top:6px">история 30д</div>
   </div>
   <div class="scorecard {{ c3 }}"
-       title="Остаток ресурса: износ оборудования 0–100 (выше = лучше). Учитывает износ SSD, батареи и возраст BIOS">
+       title="Остаток ресурса: износ оборудования 0–100 (выше = лучше). Учитывает износ SSD и возраст BIOS">
     <div class="lab">Остаток ресурса</div>
     <div class="val {{ c3 }}">{{ "%.0f"|format(s.wear) if s.wear is not none else "—" }}</div>
     <div class="bar"><i style="width:{{ s.wear if s.wear is not none else 0 }}%"></i></div>

@@ -115,9 +115,9 @@ def eta_days_to_threshold(
 
 
 # A step opposite the worsening direction larger than this (in metric units) is a
-# hardware reset, not a trend: a drive swap drops wear% ~85->~5, a battery swap
-# resets FCC. Wear/power-on counters are physically monotonic, so any real drop is
-# a new part -- we anchor on the most recent segment rather than averaging across it.
+# hardware reset, not a trend: a drive swap drops wear% ~85->~5. Wear/power-on
+# counters are physically monotonic, so any real drop is a new part -- we anchor on
+# the most recent segment rather than averaging across it.
 _RESET_STEP = 10.0
 
 
@@ -313,14 +313,6 @@ def _disk_nvme_spare_pct(row: dict[str, Any]) -> Optional[float]:
     return float(v) if v is not None else None
 
 
-def _battery_wear(row: dict[str, Any]) -> Optional[float]:
-    bat = row.get("battery")
-    if not isinstance(bat, dict) or not bat.get("present"):
-        return None
-    w = bat.get("wear_pct")
-    return float(w) if w is not None else None
-
-
 def _boot_ms(row: dict[str, Any]) -> Optional[float]:
     v = row.get("avg_boot_ms")
     return float(v) if v is not None else None
@@ -401,15 +393,6 @@ def compute_trends(
             worsening_sign=1,
             threshold=100.0,
             anchor_resets=True,  # drive replacement resets wear%
-            now=now,
-        ),
-        "battery_wear": build_trend(
-            historical_series,
-            "battery_wear",
-            _battery_wear,
-            worsening_sign=1,
-            threshold=100.0,
-            anchor_resets=True,  # battery replacement resets FCC/wear%
             now=now,
         ),
         "disk_fill": build_trend(
@@ -497,7 +480,7 @@ def compute_trends(
 # ETA); boot/throttle are surfaced as direction only and do not invent risk.
 # Ф2: nvme_spare joins them -- its threshold is a genuine compensation-collapse
 # boundary (K7), unlike the direction-only attribute counters above.
-_DEPLETION_DOMAINS = ("storage_wear", "battery_wear", "disk_fill", "nvme_spare")
+_DEPLETION_DOMAINS = ("storage_wear", "disk_fill", "nvme_spare")
 
 
 def trajectory_risk_score(

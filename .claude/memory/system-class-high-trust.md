@@ -9,7 +9,7 @@ metadata:
 предсказывает отказы ПК». Это смена класса, не маркетинг.
 
 **Why:** предсказуемость отказов доменно-ограничена — реально прогнозируемо: износ
-накопителя, батарея, заполнение диска, тренд boot-time, fleet-anomaly, throttle, driver-
+накопителя, заполнение диска, тренд boot-time, fleet-anomaly, throttle, driver-
 regression; остальное (random BSOD, VRM/PSU/мать, intermittent, док) — постфактум. Главный
 риск проекта — строить ML поверх недостоверной телеметрии. Поэтому telemetry-trust — P0 до
 любой аналитики (см. [[telemetry-trust-rules]]), а ML/survival/петля меток — гейтованные

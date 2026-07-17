@@ -146,14 +146,6 @@ class StorageReliability(_Base):
     nvme_power_cycles: Optional[int] = None
 
 
-class BatteryInfo(_Base):
-    present: bool = False
-    design_capacity_mwh: Optional[int] = None
-    full_charge_capacity_mwh: Optional[int] = None
-    wear_pct: Optional[float] = None  # 1 - full/design, in %
-    cycle_count: Optional[int] = None
-
-
 class CertInfo(_Base):
     # max_length backstops the agent-side clips for a direct (token-authed) poster;
     # generous so a real machine-cert DN is never rejected -- only absurd bloat.
@@ -281,7 +273,6 @@ class HistoricalPayload(_Base):
     whea_errors_30d: Optional[int] = None  # WHEA-Logger (corrected HW err)
     avg_boot_ms: Optional[int] = None  # Diagnostics-Performance 100
     storage: list[StorageReliability] = Field(default_factory=list, max_length=STORAGE_DISKS_MAX)
-    battery: Optional[BatteryInfo] = None
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)
     user_certificates: list[CertInfo] = Field(default_factory=list, max_length=USER_CERTS_MAX)

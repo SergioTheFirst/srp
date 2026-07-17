@@ -106,21 +106,6 @@ def validate_smart_item(item: dict, last: Optional[dict]) -> Result:
     return _OK
 
 
-def validate_battery(bat: dict) -> Result:
-    if not bat.get("present"):
-        return _OK
-    design = _num(bat.get("design_capacity_mwh"))
-    full = _num(bat.get("full_charge_capacity_mwh"))
-    wear = _num(bat.get("wear_pct"))
-    if design is None:
-        return SemanticStatus.INCONSISTENT, "battery present without design capacity"
-    if full is not None and design > 0 and full > design * 1.05:  # 5% slack for sensor noise
-        return SemanticStatus.INCONSISTENT, f"full({full})>design({design})"
-    if wear is not None and (wear < 0 or wear > 100):
-        return SemanticStatus.IMPLAUSIBLE, f"battery wear_pct={wear}"
-    return _OK
-
-
 def validate_frozen_constant(source: str, value: Any, last_value: Any) -> Result:
     """Flag a should-vary metric that is byte-identical to its previous sample.
 
@@ -141,7 +126,6 @@ def validate_frozen_constant(source: str, value: Any, last_value: Any) -> Result
 MATERIAL_SOURCES = frozenset(
     {
         "storage_reliability",
-        "battery",
         "free_space",
         "reliability",
         "boot_time",
@@ -199,8 +183,6 @@ def validate_source(source: str, reading: dict, last: Optional[dict]) -> Result:
         if kb[0] is not SemanticStatus.PLAUSIBLE:
             return kb
         return validate_storage_item(reading, last)
-    if source == "battery":
-        return validate_battery(reading)
     if source == "smart":
         return validate_smart_item(reading, last)
     if source == "free_space":

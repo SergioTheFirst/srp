@@ -63,14 +63,6 @@ def test_healthy_machine_low_risk():
     assert all(c["level"] == "low" for c in r["classes"])
 
 
-def test_desktop_has_no_battery_class():
-    """Battery risk is not applicable to a machine with no battery present."""
-    r = _risk(healthy)
-    names = {c["name"] for c in r["classes"]}
-    assert "battery" not in names
-    assert len(r["classes"]) == 4
-
-
 # --------------------------------------------------------------------------- #
 # Degrading machine — D6 fix verification
 # --------------------------------------------------------------------------- #
@@ -86,13 +78,6 @@ def test_degrading_top_class_is_genuine_not_power_thermal():
     )
     assert r["overall"] >= 50.0  # critical-band signal on the 0..100 scale
     assert r["classes"][0]["level"] == "critical"
-
-
-def test_laptop_adds_battery_class():
-    r = _risk(degrading)
-    names = {c["name"] for c in r["classes"]}
-    assert "battery" in names
-    assert len(r["classes"]) == 5
 
 
 def test_storage_risk_reflects_ssd_wear():
@@ -189,4 +174,4 @@ def test_no_data_yields_priors_only():
     r = compute_risk(None, None, None)
     assert r["overall"] < 10.0  # W4.3: 0..100 scale; was < 0.10
     assert r["top"] is not None
-    assert len(r["classes"]) == 4  # no battery without a battery payload
+    assert len(r["classes"]) == 4  # fixed closed set: storage/power_thermal/memory/stability

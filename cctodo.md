@@ -17,11 +17,11 @@
 раньше любой аналитики.**
 
 Второй тезис: **предсказуемость доменно-ограничена.** Реально прогнозируемо — износ
-накопителя, батарея, заполнение диска, тренд boot-time, fleet-anomaly, throttle-trend,
+накопителя, заполнение диска, тренд boot-time, fleet-anomaly, throttle-trend,
 driver-regression. Остальное (random BSOD, VRM/PSU/мать, intermittent, док) — постфактум.
 Строить «оракул отказов» поверх непрогнозируемого = дорогой noise amplifier.
 
-Третий тезис: **в прогнозируемых деплеция-доменах ML не нужен.** SSD %used / battery FCC /
+Третий тезис: **в прогнозируемых деплеция-доменах ML не нужен.** SSD %used /
 disk-fill — это детерминированная арифметика (порог + slope + ETA), а не survival и не
 классификатор. ML/survival/петля меток — **отложенные гейтованные фазы**, строятся только
 на доказанной необходимости, не как центр системы.
@@ -72,7 +72,7 @@ disk-fill — это детерминированная арифметика (п
 
 ### W0.3 — Telemetry trust layer (ядро P0)
 > Контракт: `telemetry-trust-contract.md` · имплемент-план (Plan 1 Trust Core): `telemetry-trust-plan.md`.
-- [x] **Capability matrix per device:** какие источники реально доступны (SMART/StorageReliabilityCounter/battery/thermal/RSI/perf-классы). Источник недоступен ≠ «всё ок». *(server/trust/ + sources.py)*
+- [x] **Capability matrix per device:** какие источники реально доступны (SMART/StorageReliabilityCounter/thermal/RSI/perf-классы). Источник недоступен ≠ «всё ок». *(server/trust/ + sources.py)*
 - [x] **Collector self-diagnostics:** каждый коллектор возвращает статус `ok | blocked | empty | partial | stale` + причину, а не молчаливый `None` (`ps.py`, все `collectors/*`). Контракт расширить полем здоровья источников в конверте (`shared/schema.py`, `extra="allow"` это позволяет forward-compat). *(server/trust/ + sources.py)*
 - [x] **Per-source confidence/freshness:** возраст и полнота каждого сигнала; пробрасывается в скоринг. *(server/trust/ + sources.py)*
 - [x] **Surface на дашборде:** строка «датчик X недоступен / устарел» (`device.html`). Оператор обязан отличать «здоров» от «данных нет». *(server/trust/ + sources.py)*
@@ -109,11 +109,11 @@ disk-fill — это детерминированная арифметика (п
 - [x] **Развязать ingest и scoring:** писать быстро, пересчитывать async (сначала in-process очередь) — снимает дефект «store+rescore под глобальным `threading.Lock`» (`pipeline.py:50`, `db.py:21`) и заодно scaling-предпосылка. Убрать бессмысленный rescore на `events` (события скорингом не читаются). *(RescoreQueue, T4)*
 
 ### W4.1 — Тренд-движок (теперь возможен — история есть)
-- [x] Slopes + ETA по деплеция-доменам: **SSD wear→ETA**, **disk-fill→дата заполнения**, **battery FCC→ETA**, **boot-time trend**, **throttle-residency trend**. Это D4 — арифметика, не ML. *(trends.py Theil-Sen+ETA)*
+- [x] Slopes + ETA по деплеция-доменам: **SSD wear→ETA**, **disk-fill→дата заполнения**, **boot-time trend**, **throttle-residency trend**. Это D4 — арифметика, не ML. *(trends.py Theil-Sen+ETA)*
 
 ### W4.2 — Независимые доменные движки
 - [x] **Storage health** (детерминированный + тренд): SMART/StorageReliabilityCounter ведущий; latency — только **подтверждение** к SMART, не самостоятельный сигнал (causal confounding: Defender/OneDrive/BitLocker/low-RAM/thermal). *(analytics/\*; когорта=model — задокументированное решение, сайтовый KP41 сделан)*
-- [x] **Battery** (детерминированный): FCC/Design тренд + циклы + charge-residency (риск swelling ≠ возраст). *(analytics/\*; когорта=model — задокументированное решение, сайтовый KP41 сделан)*
+- [x] ~~Battery~~ — движок удалён 2026-07-17 вместе со всем мониторингом батарей; индексы считаются без него (см. CHANGELOG).
 - [x] **Disk-fill / servicing collapse** (детерминированный forecast): free-space slope → upstream WU-сбоев. *(analytics/\*; когорта=model — задокументированное решение, сайтовый KP41 сделан)*
 - [x] **OS-degradation** (эвристический): RSI тренд, crash-rate, boot-rot, pending-reboot как множитель. *(analytics/\*; когорта=model — задокументированное решение, сайтовый KP41 сделан)*
 - [x] **Fleet-anomaly** (статистический): когорта по model+build; детект bad-patch/driver-rollout, site-wide power (кластер KP41 по локации/окну = электрика здания, не отказ ПК). Снимает массовые ложные «железные» тревоги. *(analytics/\*; когорта=model — задокументированное решение, сайтовый KP41 сделан)*

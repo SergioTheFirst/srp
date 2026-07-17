@@ -42,7 +42,6 @@ Factor = dict[str, Any]  # {"label": str, "weight": float}
 
 _CLASS_LABELS = {
     "storage": "Накопитель (SSD/HDD)",
-    "battery": "Батарея ноутбука",
     "power_thermal": "Питание / перегрев",
     "memory": "Память (RAM)",
     "stability": "Стабильность ОС/ПО",
@@ -50,7 +49,6 @@ _CLASS_LABELS = {
 
 _BASE_PRIOR = {
     "storage": 0.05,
-    "battery": 0.04,
     "power_thermal": 0.03,
     "memory": 0.02,
     "stability": 0.05,
@@ -172,39 +170,6 @@ def _storage(
     if lat is not None and lat > 0.03:
         f.append({"label": f"Высокая задержка чтения ({lat * 1000:.0f} мс)", "weight": 0.9})
     return _finish("storage", _BASE_PRIOR["storage"], f)
-
-
-def _battery(
-    hist: Optional[dict],
-    age: Optional[float],
-    domain_values: Optional[dict[str, Optional[float]]] = None,
-) -> Optional[dict[str, Any]]:
-    bat = (hist or {}).get("battery")
-    if not bat or not bat.get("present"):
-        return None  # desktop: class not applicable
-    f: list[Factor] = []
-    if age:
-        f.append({"label": f"Возраст ~{age:.0f} лет", "weight": min(age * 0.04, 0.6)})
-
-    # Supplementary from W4.2 battery engine (capacity-fade with rounding guard).
-    lo = _domain_lo(domain_values, "battery_risk", 0.8)
-    if lo > 0.01 and domain_values:
-        v_raw = domain_values.get("battery_risk", 0.0)
-        f.append({"label": f"Battery engine (FCC): {v_raw:.0f}/100", "weight": round(lo, 2)})
-
-    bw = bat.get("wear_pct")
-    if bw is not None:
-        bw = float(bw)
-        if bw > 40:
-            f.append({"label": f"Износ батареи {bw:.0f}% (риск вздутия)", "weight": 2.8})
-        elif bw > 25:
-            f.append({"label": f"Износ батареи {bw:.0f}%", "weight": 1.6})
-        elif bw > 15:
-            f.append({"label": f"Износ батареи {bw:.0f}%", "weight": 0.7})
-    cyc = bat.get("cycle_count")
-    if cyc is not None and float(cyc) > 800:
-        f.append({"label": f"Циклов заряда: {int(cyc)}", "weight": 0.8})
-    return _finish("battery", _BASE_PRIOR["battery"], f)
 
 
 def _power_thermal(
@@ -372,9 +337,6 @@ def compute_risk(
         _memory(historical, heartbeat),
         _stability(inventory, historical, domain_values, app_hang_count_30d),
     ]
-    battery = _battery(historical, age, domain_values)
-    if battery is not None:
-        classes.append(battery)
 
     classes.sort(key=lambda c: c["probability"], reverse=True)
     top_prob = classes[0]["probability"] if classes else 0.0

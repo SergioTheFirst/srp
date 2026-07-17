@@ -34,7 +34,6 @@ def _classes(dev: dict) -> dict:
 
 _HIST_OK = {
     "storage_reliability": _sh("ok"),
-    "battery": _sh("ok"),
     "reliability": _sh("ok"),
     "boot_time": _sh("ok"),
 }

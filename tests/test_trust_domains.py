@@ -23,9 +23,9 @@ def test_required_source_missing_makes_domain_unknown():
     assert d.state is DomainTrustState.UNKNOWN
 
 
-def test_battery_not_applicable_propagates():
-    sources = {"battery": _src("battery", SourceState.NOT_APPLICABLE, 0.0)}
-    d = resolve_domain_trust("battery", sources)
+def test_required_source_not_applicable_propagates():
+    sources = {"throttle": _src("throttle", SourceState.NOT_APPLICABLE, 0.0)}
+    d = resolve_domain_trust("thermal", sources)
     assert d.state is DomainTrustState.NOT_APPLICABLE
 
 

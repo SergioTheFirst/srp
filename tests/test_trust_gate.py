@@ -34,13 +34,14 @@ def test_gate_pass_only_for_ok_and_degraded():
 
 
 def test_source_trust_is_immutable():
-    t = SourceTrust("battery", SourceState.OK, 1.0, CollectorStatus.OK, SemanticStatus.PLAUSIBLE)
+    t = SourceTrust("throttle", SourceState.OK, 1.0, CollectorStatus.OK, SemanticStatus.PLAUSIBLE)
     with pytest.raises(dataclasses.FrozenInstanceError):
         t.weight = 0.9  # frozen dataclass -> FrozenInstanceError
 
 
 def test_not_applicable_wins_over_everything():
-    # Battery on a desktop: not a degradation, the domain simply does not exist.
+    # A sensor genuinely absent from this hardware: not a degradation, the
+    # capability simply does not exist on this machine.
     s = _state(CollectorStatus.ABSENT, SemanticStatus.UNCHECKED, applicable=False)
     assert s is SourceState.NOT_APPLICABLE
 

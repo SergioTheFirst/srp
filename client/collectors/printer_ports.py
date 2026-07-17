@@ -23,7 +23,7 @@ from client.collectors.sources import CollectorResult
 # Stay <= the contract caps (shared/schema.py PRINTER_PORTS_MAX and the
 # PrinterPortHint.name max_length): a compliant agent can never be 422'd by its
 # own server -- a single pathological printer name must not reject the whole
-# historical envelope (which would drop that sweep's storage/battery/network too).
+# historical envelope (which would drop that sweep's storage/network too).
 _MAX_HINTS = 256
 _MAX_NAME_LEN = 256
 

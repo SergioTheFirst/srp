@@ -28,7 +28,7 @@ def _s(inv=None, hist=None, hb=None):
 
 
 def _hist(**kw):
-    """Minimal historical dict: zeroed event counts, empty storage, no battery."""
+    """Minimal historical dict: zeroed event counts, empty storage."""
     base = {
         "reliability_stability_index": None,
         "kernel_power_41_30d": 0,
@@ -38,7 +38,6 @@ def _hist(**kw):
         "whea_errors_30d": 0,
         "avg_boot_ms": None,
         "storage": [],
-        "battery": None,
         "observation_days": 30,
     }
     base.update(kw)
@@ -352,7 +351,6 @@ def test_extreme_degrading_inputs_clamped_to_range():
                 "write_errors_total": 999,
             }
         ],
-        battery={"present": True, "wear_pct": 100.0},
     )
     extreme_hb = _hb(
         cpu_perf_pct=10.0,
