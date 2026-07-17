@@ -34,6 +34,8 @@ def derive_state(
     semantic_status: SemanticStatus,
     age_sec: Optional[float],
     stale_after_sec: Optional[float],
+    # No current production source calls this with False (battery, its only
+    # real trigger, was removed) -- kept for a future genuinely-absent sensor.
     applicable: bool = True,
 ) -> SourceState:
     if not applicable:

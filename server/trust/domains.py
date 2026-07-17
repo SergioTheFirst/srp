@@ -5,6 +5,8 @@ fails the gate makes the whole domain UNKNOWN (never optimistic). An optional so
 that fails is simply dropped; the domain stays TRUSTED on its required sources, at a
 weight that reflects any degraded required source. A required NOT_APPLICABLE source
 (a sensor the hardware genuinely lacks) makes the domain NOT_APPLICABLE -- not a failure.
+No current production source reaches this branch (battery, its only real trigger, was
+removed); kept for a future genuinely-absent sensor rather than dead-code deleted.
 """
 
 from __future__ import annotations
