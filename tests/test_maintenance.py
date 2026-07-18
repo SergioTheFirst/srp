@@ -120,6 +120,66 @@ def test_prune_aged_writes_maintenance_log_only_when_something_deleted(db_init):
 
 
 # --------------------------------------------------------------------------- #
+# P0-7: hb_cutoff/ev_cutoff must match _now_iso()'s T-separated format exactly.
+# SQLite compares TEXT lexicographically, and a space-separated cutoff sorts
+# *after* a same-date T-separated received_at ('T' 0x54 > ' ' 0x20) regardless
+# of actual time-of-day, so a row genuinely past the retention window was
+# silently kept whenever it shared the cutoff's calendar date. Frozen clock
+# (monkeypatch db.datetime) makes this deterministic -- no real-clock races.
+# --------------------------------------------------------------------------- #
+
+
+def test_prune_aged_deletes_a_row_sharing_the_cutoffs_calendar_date(db_init, monkeypatch):
+    db = db_init
+
+    class _FrozenDatetime(datetime):
+        frozen = datetime(2026, 1, 5, 14, 30, 0, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.frozen
+
+    monkeypatch.setattr(db, "datetime", _FrozenDatetime)
+
+    # heartbeat_raw_days=1 -> cutoff = 2026-01-04T14:30:00+00:00. This row is
+    # from earlier the same calendar day as the cutoff (2026-01-04 03:00),
+    # genuinely ~35.5h old -- well past the 24h window.
+    same_day_old = datetime(2026, 1, 4, 3, 0, 0, tzinfo=timezone.utc).isoformat()
+    _seed_heartbeat(db, "dev-1", same_day_old)
+
+    deleted = db.prune_aged(heartbeat_raw_days=1, events_raw_days=90, rollup_days=730)
+    assert deleted["heartbeats"] == 1
+    with db._connect() as conn:
+        (remaining,) = conn.execute("SELECT COUNT(*) FROM heartbeats").fetchone()
+    assert remaining == 0
+
+
+def test_prune_aged_deletes_a_row_when_the_cutoff_lands_just_after_midnight(db_init, monkeypatch):
+    db = db_init
+
+    class _FrozenDatetime(datetime):
+        frozen = datetime(2026, 1, 2, 0, 30, 0, tzinfo=timezone.utc)  # 30min after midnight
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.frozen
+
+    monkeypatch.setattr(db, "datetime", _FrozenDatetime)
+
+    # heartbeat_raw_days=1 -> cutoff = 2026-01-01T00:30:00+00:00. This row sits
+    # earlier the same calendar day as the cutoff (2026-01-01 00:10), genuinely
+    # ~24h20m old -- past the 24h window.
+    same_day_old = datetime(2026, 1, 1, 0, 10, 0, tzinfo=timezone.utc).isoformat()
+    _seed_heartbeat(db, "dev-1", same_day_old)
+
+    deleted = db.prune_aged(heartbeat_raw_days=1, events_raw_days=90, rollup_days=730)
+    assert deleted["heartbeats"] == 1
+    with db._connect() as conn:
+        (remaining,) = conn.execute("SELECT COUNT(*) FROM heartbeats").fetchone()
+    assert remaining == 0
+
+
+# --------------------------------------------------------------------------- #
 # run_maintenance: PRAGMA optimize always logs; VACUUM is guarded
 # --------------------------------------------------------------------------- #
 
