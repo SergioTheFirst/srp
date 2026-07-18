@@ -8,6 +8,14 @@ from tests.conftest import envelope, healthy
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture
+def db_init(tmp_path):
+    from server import db
+
+    db.init_db(tmp_path / "t.db")
+    return db
+
+
 def _env(device_id: str, msg_type: str, payload: dict) -> dict:
     return dict(envelope(device_id, msg_type, payload))
 
@@ -103,6 +111,38 @@ def test_rate_limit_reject_is_counted(client, monkeypatch) -> None:
     )
     assert r.status_code == 429
     assert ingest_guards.REJECT_COUNTS["rate_limit"] == 1
+
+
+# ── P0-7: get_pipeline_metrics same-calendar-day cutoff format ────────────── #
+
+
+@pytest.mark.unit
+def test_pipeline_metrics_stale_detects_a_device_silent_past_the_threshold_today(db_init):
+    from datetime import datetime, timedelta, timezone
+
+    # 61 minutes silent (well past the default 600s stale threshold), same
+    # calendar date as "now" for almost the entire day. Before the fix,
+    # SQLite's space-separated `datetime('now', ...)` cutoff sorted *after*
+    # the T-separated stored last_seen whenever dates matched, so a same-day
+    # stale device was silently never counted (server/db.py::_cutoff_iso, P0-7).
+    silent_since = (datetime.now(timezone.utc) - timedelta(minutes=61)).isoformat()
+    db_init.touch_device("dev-stale", silent_since, "0.1.0", received_at=silent_since)
+    metrics = db_init.get_pipeline_metrics()
+    assert metrics["fleet"]["stale"] == 1
+
+
+@pytest.mark.unit
+def test_pipeline_metrics_hb_1h_excludes_a_heartbeat_older_than_an_hour_today(db_init):
+    from datetime import datetime, timedelta, timezone
+
+    # Received 3 hours ago today -- must NOT count in the "last hour"/"last 5
+    # minutes" buckets. Before the fix the same-day T-vs-space collision made
+    # hb_1h/hb_5m count the device's entire day regardless of actual age.
+    old_receipt = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    db_init.store_heartbeat("dev-old-hb", old_receipt, {"cpu_pct": 1.0}, received_at=old_receipt)
+    metrics = db_init.get_pipeline_metrics()
+    assert metrics["ingest"]["heartbeats_1h"] == 0
+    assert metrics["ingest"]["heartbeats_5m"] == 0
 
 
 # ── /pipeline HTML page ───────────────────────────────────────────────────── #

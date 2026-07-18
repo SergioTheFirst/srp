@@ -81,6 +81,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _cutoff_iso(**delta: float) -> str:
+    """`_now_iso()`-format cutoff N units ago (P0-7).
+
+    Must stay format-identical to stored `received_at`/`last_seen` values.
+    SQLite compares TEXT lexicographically; a space-separated
+    `datetime('now', ...)` cutoff and a `T`-separated stored value sort
+    incorrectly against each other whenever they share the same calendar
+    date (`'T'` 0x54 > `' '` 0x20), silently breaking same-day
+    staleness/retention windows regardless of actual time-of-day.
+    """
+    return (datetime.now(timezone.utc) - timedelta(**delta)).isoformat()
+
+
 # --------------------------------------------------------------------------- #
 # Printer-IP resolution (printview): map a print queue NAME to its printer IP.
 # print_jobs stores only the spooler queue name; the agent separately ships
@@ -1280,9 +1293,7 @@ def prune_aged(
     deleted: dict[str, int] = {}
     with _lock, _connect() as conn:
         if heartbeat_raw_days > 0:
-            hb_cutoff = (datetime.now(timezone.utc) - timedelta(days=heartbeat_raw_days)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            hb_cutoff = _cutoff_iso(days=heartbeat_raw_days)
             deleted["raw_archived_heartbeats"] = _archive_aged_rows(conn, "heartbeats", hb_cutoff)
             cur = conn.execute(
                 "DELETE FROM heartbeats WHERE received_at < ?",
@@ -1290,9 +1301,7 @@ def prune_aged(
             )
             deleted["heartbeats"] = cur.rowcount
         if events_raw_days > 0:
-            ev_cutoff = (datetime.now(timezone.utc) - timedelta(days=events_raw_days)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            ev_cutoff = _cutoff_iso(days=events_raw_days)
             deleted["raw_archived_events"] = _archive_aged_rows(conn, "events", ev_cutoff)
             cur = conn.execute(
                 "DELETE FROM events WHERE received_at < ?",
@@ -3966,8 +3975,8 @@ def get_pipeline_metrics() -> dict[str, Any]:
     with _connect() as conn:
         total = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
         stale = conn.execute(
-            "SELECT COUNT(*) FROM devices WHERE last_seen < datetime('now', ?)",
-            (f"-{_STALE_AFTER_SEC} seconds",),
+            "SELECT COUNT(*) FROM devices WHERE last_seen < ?",
+            (_cutoff_iso(seconds=_STALE_AFTER_SEC),),
         ).fetchone()[0]
 
         score_row = conn.execute("SELECT COUNT(DISTINCT device_id), MAX(ts) FROM scores").fetchone()
@@ -3985,17 +3994,19 @@ def get_pipeline_metrics() -> dict[str, Any]:
         ).fetchone()[0]
 
         # Ingest activity via server-stamped received_at (W0.2)
+        cutoff_5m = _cutoff_iso(minutes=5)
+        cutoff_1h = _cutoff_iso(hours=1)
         hb_5m = conn.execute(
-            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= datetime('now', '-5 minutes')"
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= ?", (cutoff_5m,)
         ).fetchone()[0]
         hb_1h = conn.execute(
-            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= datetime('now', '-1 hour')"
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= ?", (cutoff_1h,)
         ).fetchone()[0]
         hist_5m = conn.execute(
-            "SELECT COUNT(*) FROM historical WHERE received_at >= datetime('now', '-5 minutes')"
+            "SELECT COUNT(*) FROM historical WHERE received_at >= ?", (cutoff_5m,)
         ).fetchone()[0]
         hist_1h = conn.execute(
-            "SELECT COUNT(*) FROM historical WHERE received_at >= datetime('now', '-1 hour')"
+            "SELECT COUNT(*) FROM historical WHERE received_at >= ?", (cutoff_1h,)
         ).fetchone()[0]
 
         # Source health breakdown from per-(device, source) trust table
