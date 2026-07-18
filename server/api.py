@@ -642,11 +642,15 @@ def _require_update_auth(request: Request) -> str:
 
 
 def _get_update_info_or_404(request: Request) -> dict:
-    expected = _require_update_auth(request)
+    _require_update_auth(request)
     if not check_rate_limit("endpoint:agent_update"):
         raise HTTPException(status_code=429, detail="rate limit exceeded")
     updates_dir = getattr(request.app.state, "updates_dir", None)
-    info = updates.get_update_info(Path(updates_dir), expected) if updates_dir else None
+    # P0-4: sign with update_hmac_secret (falls back to ingest_token server-side
+    # in main.py::create_app), NOT the bearer token used to reach this endpoint --
+    # keeping the two separate is the whole point of this fix.
+    hmac_secret = getattr(request.app.state, "update_hmac_secret", "")
+    info = updates.get_update_info(Path(updates_dir), hmac_secret) if updates_dir else None
     if info is None:
         raise HTTPException(status_code=404, detail="no update package")
     return info

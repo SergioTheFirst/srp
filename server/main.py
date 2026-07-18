@@ -425,6 +425,16 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             "административные запросы (delete/purge/update) БЕЗ аутентификации. "
             "Задайте ingest_token в server/config.json, чтобы включить проверку."
         )
+    # P0-4 (stoperrors.md): a dedicated signing key for update manifests, separate
+    # from ingest_token -- ingest_token also rides a plaintext bearer header on
+    # every request, so reusing it as the HMAC key let a passive LAN eavesdropper
+    # forge a signed update. Falls back to ingest_token (less safe) when unset.
+    app.state.update_hmac_secret = cfg.update_hmac_secret or cfg.ingest_token
+    if not cfg.update_hmac_secret and cfg.ingest_token:
+        _authlog.warning(
+            "update_hmac_secret не задан, используется ingest_token — менее "
+            "безопасно, т.к. этот токен также передаётся как bearer-заголовок."
+        )
     app.state.updates_dir = cfg.resolved_updates_dir()  # agent auto-update package drop
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button

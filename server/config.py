@@ -44,6 +44,7 @@ class ServerConfig:
     retain_disk_readings: int = 2000
     # B105: not a secret literal -- empty = ingest auth OFF; real token set via config.json/env.
     ingest_token: str = ""  # nosec B105
+    update_hmac_secret: str = ""  # nosec B105 -- empty = fall back to ingest_token
     # Org/department directory (tray spec §7); relative -> resolved against root.
     # Names are decoded render-time; nothing here is a secret.
     org_directory_path: str = "org_directory.json"

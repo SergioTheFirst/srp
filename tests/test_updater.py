@@ -481,3 +481,88 @@ def test_reconcile_fresh_stage_returns_none(tmp_path) -> None:
         json.dumps({"target_version": "0.2.0", "attempts": 1, "staged_at": time.time()})
     )
     assert u.reconcile_after_restart("0.1.0") is None
+
+
+# --------------------------------------------------------------------------- #
+# P0-4 (stoperrors.md): update_hmac_secret must be a separate key from
+# ingest_token -- ingest_token also rides a plaintext bearer header on every
+# ordinary request, so reusing it as the update-signing key let a passive LAN
+# eavesdropper forge a valid manifest.
+# --------------------------------------------------------------------------- #
+def test_signing_secret_prefers_update_hmac_secret(tmp_path) -> None:
+    u = Updater(_cfg(tmp_path, ingest_token="tok", update_hmac_secret="secret2"))
+    assert u._signing_secret() == "secret2"
+
+
+def test_signing_secret_falls_back_to_ingest_token(tmp_path) -> None:
+    u = Updater(_cfg(tmp_path, ingest_token="tok"))  # no update_hmac_secret
+    assert u._signing_secret() == "tok"
+
+
+def test_check_frozen_verifies_against_update_hmac_secret_not_ingest_token(
+    tmp_path, monkeypatch
+) -> None:
+    """Compromising ingest_token alone must no longer be enough to forge a
+    manifest once update_hmac_secret is configured."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cfg = _cfg(tmp_path, ingest_token="tok", update_hmac_secret="secret2")
+    u = Updater(cfg)
+    zip_bytes = _zip_bytes(_good_members())
+    digest = hashlib.sha256(zip_bytes).hexdigest()
+    # Signed with the OLD key (ingest_token) -- must be rejected now.
+    manifest = json.dumps(
+        {
+            "version": "9.9.9",
+            "sha256": digest,
+            "size": len(zip_bytes),
+            "hmac": compute_hmac("tok", "9.9.9", digest),
+        }
+    ).encode()
+    monkeypatch.setattr(
+        updater_mod.urllib.request,
+        "urlopen",
+        _urlopen_routed({_manifest_url(cfg): manifest, _package_url(cfg): zip_bytes}),
+    )
+    monkeypatch.setattr(
+        updater_mod.subprocess,
+        "run",
+        lambda argv, **kw: (_ for _ in ()).throw(AssertionError("schtasks must not run")),
+    )
+
+    payload, restart = u.check("0.1.0")
+
+    assert restart is False
+    assert payload is not None and payload["state"] == "failed"
+
+
+def test_check_frozen_happy_path_with_update_hmac_secret(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cfg = _cfg(tmp_path, ingest_token="tok", update_hmac_secret="secret2")
+    u = Updater(cfg)
+    zip_bytes = _zip_bytes(_good_members())
+    digest = hashlib.sha256(zip_bytes).hexdigest()
+    manifest = json.dumps(
+        {
+            "version": "9.9.9",
+            "sha256": digest,
+            "size": len(zip_bytes),
+            "hmac": compute_hmac("secret2", "9.9.9", digest),
+        }
+    ).encode()
+    monkeypatch.setattr(
+        updater_mod.urllib.request,
+        "urlopen",
+        _urlopen_routed({_manifest_url(cfg): manifest, _package_url(cfg): zip_bytes}),
+    )
+    calls = []
+    monkeypatch.setattr(
+        updater_mod.subprocess,
+        "run",
+        lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0),
+    )
+
+    payload, restart = u.check("0.1.0")
+
+    assert payload is not None and payload["state"] == "updating"
+    assert restart is True
+    assert len(calls) == 2

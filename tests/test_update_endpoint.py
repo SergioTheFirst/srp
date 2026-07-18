@@ -62,12 +62,13 @@ def updates_dir(tmp_path: Path) -> Path:
     return d
 
 
-def _app(updates_dir: Path, token: str = "") -> FastAPI:
+def _app(updates_dir: Path, token: str = "", update_hmac_secret: str = "") -> FastAPI:
     return create_app(
         ServerConfig(
             db_path=str(updates_dir.parent / "t.db"),
             updates_dir=str(updates_dir),
             ingest_token=token,
+            update_hmac_secret=update_hmac_secret,
         )
     )
 
@@ -122,6 +123,34 @@ def test_token_required_when_configured(updates_dir: Path) -> None:
 
         r = c.get("/api/v1/agent/update", headers={"X-SRP-Token": "s3cret"})
         assert r.status_code == 200, r.text
+        body = r.json()
+        material = f"{body['version']}|{body['sha256']}".encode()
+        expected = hmac.new(b"s3cret", material, hashlib.sha256).hexdigest()
+        assert body["hmac"] == expected
+
+
+def test_update_hmac_secret_used_over_ingest_token_when_both_set(updates_dir: Path) -> None:
+    """P0-4: the manifest is signed with update_hmac_secret, not the bearer token
+    -- compromising ingest_token (which rides plaintext on every request) must
+    no longer be enough to forge a valid manifest signature."""
+    _make_zip(updates_dir / _ZIP_NAME)
+    _write_manifest(updates_dir)
+    with TestClient(_app(updates_dir, token="s3cret", update_hmac_secret="sign2")) as c:
+        r = c.get("/api/v1/agent/update", headers={"X-SRP-Token": "s3cret"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        material = f"{body['version']}|{body['sha256']}".encode()
+        signed_with_signing_secret = hmac.new(b"sign2", material, hashlib.sha256).hexdigest()
+        signed_with_bearer_token = hmac.new(b"s3cret", material, hashlib.sha256).hexdigest()
+        assert body["hmac"] == signed_with_signing_secret
+        assert body["hmac"] != signed_with_bearer_token
+
+
+def test_update_hmac_secret_falls_back_to_ingest_token_when_unset(updates_dir: Path) -> None:
+    _make_zip(updates_dir / _ZIP_NAME)
+    _write_manifest(updates_dir)
+    with TestClient(_app(updates_dir, token="s3cret")) as c:  # no update_hmac_secret
+        r = c.get("/api/v1/agent/update", headers={"X-SRP-Token": "s3cret"})
         body = r.json()
         material = f"{body['version']}|{body['sha256']}".encode()
         expected = hmac.new(b"s3cret", material, hashlib.sha256).hexdigest()
