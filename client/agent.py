@@ -130,7 +130,11 @@ class Agent:
         if result.payload is None and not result.source_health:
             log.warning("%s: collector produced nothing (source blocked?)", msg_type)
             return
-        delivered = self._transport.send(msg_type, result.payload, result.source_health)
+        try:
+            delivered = self._transport.send(msg_type, result.payload, result.source_health)
+        except Exception:  # noqa: BLE001 -- a broken send must not kill the loop
+            log.exception("send %s raised", msg_type)
+            return
         log.info("%s: %s", msg_type, "sent" if delivered else "buffered (offline)")
 
     def _reconcile_update(self) -> None:
@@ -141,7 +145,10 @@ class Agent:
             log.exception("update reconcile raised")
             return
         if rec:
-            self._transport.send("update_status", rec)
+            try:
+                self._transport.send("update_status", rec)
+            except Exception:  # noqa: BLE001 -- a broken send must not kill the loop
+                log.exception("update reconcile send raised")
 
     def _run_update_check(self) -> bool:
         """Run one update check/apply cycle. Returns True if a restart is pending."""
@@ -151,7 +158,10 @@ class Agent:
             log.exception("update check raised")
             return False
         if payload:
-            self._transport.send("update_status", payload)
+            try:
+                self._transport.send("update_status", payload)
+            except Exception:  # noqa: BLE001 -- a broken send must not kill the loop
+                log.exception("update check send raised")
         if restart:
             log.info("update staged -- exiting so the update task can take over")
         return restart
