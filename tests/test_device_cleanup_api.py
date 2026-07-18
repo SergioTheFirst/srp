@@ -11,6 +11,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
+from server.config import ServerConfig
+from server.main import create_app
 from tests.conftest import envelope, healthy
 
 pytestmark = pytest.mark.integration
@@ -22,6 +25,11 @@ def _ids(client) -> set[str]:
 
 def _iso_days_ago(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _token_client(tmp_path) -> TestClient:
+    app = create_app(ServerConfig(db_path=str(tmp_path / "t.db"), ingest_token="secret"))
+    return TestClient(app)
 
 
 def test_delete_endpoint_removes_device(client):
@@ -91,3 +99,69 @@ def test_fleet_page_exposes_cleanup_controls(client):
     client.post("/api/v1/ingest", json=envelope("dC", "inventory", healthy("inventory")))
     assert 'id="purgebtn"' in client.get("/").text
     assert "delbtn" in client.get("/fleet/fragment").text
+
+
+# --------------------------------------------------------------------------- #
+# P0-1: delete/purge must honour the same shared-token check as /ingest and
+# /agent/update -- an unauthenticated LAN host must not be able to wipe the
+# fleet. Empty ingest_token (test default via the `client` fixture) stays a
+# no-op, matched by every test above this point.
+# --------------------------------------------------------------------------- #
+def test_delete_endpoint_rejects_without_or_wrong_token(tmp_path):
+    with _token_client(tmp_path) as c:
+        c.post(
+            "/api/v1/ingest",
+            json=envelope("dtok", "heartbeat", healthy("heartbeat")),
+            headers={"X-SRP-Token": "secret"},
+        )
+        assert c.post("/api/v1/devices/dtok/delete").status_code == 401
+        assert (
+            c.post("/api/v1/devices/dtok/delete", headers={"X-SRP-Token": "wrong"}).status_code
+            == 401
+        )
+        assert "dtok" in _ids(c)  # neither attempt actually deleted anything
+
+
+def test_delete_endpoint_accepts_correct_token(tmp_path):
+    with _token_client(tmp_path) as c:
+        c.post(
+            "/api/v1/ingest",
+            json=envelope("dtok2", "heartbeat", healthy("heartbeat")),
+            headers={"X-SRP-Token": "secret"},
+        )
+        resp = c.post("/api/v1/devices/dtok2/delete", headers={"X-SRP-Token": "secret"})
+        assert resp.status_code == 200, resp.text
+        assert "dtok2" not in _ids(c)
+
+
+def test_purge_endpoint_rejects_without_or_wrong_token(tmp_path):
+    with _token_client(tmp_path) as c:
+        assert c.post("/api/v1/devices/purge", json={"days": 30}).status_code == 401
+        assert (
+            c.post(
+                "/api/v1/devices/purge",
+                json={"days": 30},
+                headers={"X-SRP-Token": "wrong"},
+            ).status_code
+            == 401
+        )
+
+
+def test_purge_endpoint_accepts_correct_token(tmp_path):
+    with _token_client(tmp_path) as c:
+        resp = c.post("/api/v1/devices/purge", json={"days": 30}, headers={"X-SRP-Token": "secret"})
+        assert resp.status_code == 200, resp.text
+
+
+def test_delete_endpoint_is_rate_limited_after_a_burst(client):
+    client.post("/api/v1/ingest", json=envelope("dR", "heartbeat", healthy("heartbeat")))
+    statuses = {client.post("/api/v1/devices/dR/delete").status_code for _ in range(40)}
+    assert 429 in statuses  # the flood is throttled, same as poll_discovery/poll_topology
+
+
+def test_purge_endpoint_is_rate_limited_after_a_burst(client):
+    statuses = {
+        client.post("/api/v1/devices/purge", json={"days": 30, "dry_run": True}).status_code
+        for _ in range(40)
+    }
+    assert 429 in statuses
