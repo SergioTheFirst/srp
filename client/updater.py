@@ -15,18 +15,22 @@ it is trying to replace. A second, independent task has its own job and
 survives this process exiting.
 
 Integrity + authenticity: the manifest's sha256 is mandatory; when the
-deployment has an ``ingest_token`` the manifest must also carry
-``hmac = HMAC-SHA256(token, "<version>|<sha256>")`` so a man-in-the-middle
-without the token cannot forge a package -- an agent WITH a token refuses a
+deployment has a signing secret (``update_hmac_secret``, falling back to
+``ingest_token`` -- see ``_signing_secret``, P0-4) the manifest must also carry
+``hmac = HMAC-SHA256(secret, "<version>|<sha256>")`` so a man-in-the-middle
+without the secret cannot forge a package -- an agent WITH a secret refuses a
 manifest that lacks one (fail-closed). Only a strictly newer version is ever
 applied, which closes off downgrade/replay of an old, once-valid manifest.
 
-Security-review finding (2026-07-03): without a token, sha256 alone is only an
+Security-review finding (2026-07-03): without a secret, sha256 alone is only an
 integrity check, not an authenticity one -- a LAN MITM impersonating the server
-could self-sign a malicious package. An agent with NO ``ingest_token`` therefore
+could self-sign a malicious package. An agent with NO signing secret therefore
 never downloads/applies at all (``check()`` reports availability only); auto-
-*apply* is only reachable once both sides share a token, so HMAC verification
-is unconditional wherever code actually runs.
+*apply* is only reachable once both sides share a secret, so HMAC verification
+is unconditional wherever code actually runs. P0-4 (stoperrors.md): the secret
+defaults to ``ingest_token`` but SHOULD be ``update_hmac_secret`` -- reusing
+ingest_token (which also rides a plaintext bearer header on every request) as
+the signing key let a passive LAN eavesdropper forge a valid manifest.
 """
 
 from __future__ import annotations
@@ -194,6 +198,12 @@ class Updater:
         # good news every cycle; a "failed" always gets through (see _gate).
         self._last_status: Optional[tuple[str, Optional[str]]] = None
 
+    def _signing_secret(self) -> str:
+        """P0-4: dedicated update-HMAC key, falling back to ingest_token (which
+        also rides a plaintext bearer header on every request -- less safe, kept
+        for deployments that haven't set update_hmac_secret yet)."""
+        return self._cfg.update_hmac_secret or self._cfg.ingest_token
+
     # -- public API ---------------------------------------------------------- #
     def reconcile_after_restart(self, current_version: str) -> Optional[dict]:
         """Called once at agent startup to close the loop on a staged update.
@@ -231,7 +241,7 @@ class Updater:
         if outcome == "not_found":
             return (self._gate({"checked_at": _now_iso(), "state": "ok"}), False)
 
-        update = select_update(manifest or {}, current_version, bool(self._cfg.ingest_token))
+        update = select_update(manifest or {}, current_version, bool(self._signing_secret()))
         if update is None:
             return (self._gate({"checked_at": _now_iso(), "state": "ok"}), False)
 
@@ -241,13 +251,15 @@ class Updater:
             payload = {"checked_at": _now_iso(), "state": "ok", "available_version": remote}
             return (self._gate(payload), False)
 
-        if not self._cfg.ingest_token:
+        if not self._signing_secret():
             # No shared secret -> the manifest/package carry sha256 only, no HMAC.
             # A LAN MITM impersonating the server could self-consistently sign a
             # malicious zip and reach setup.exe --update as SYSTEM. Refuse to
             # download/apply without a token; still report availability so the
             # dashboard shows the pending update (security-review finding 1).
-            log.warning("update %s available but not applied -- no ingest_token configured", remote)
+            log.warning(
+                "update %s available but not applied -- no signing secret configured", remote
+            )
             payload = {"checked_at": _now_iso(), "state": "ok", "available_version": remote}
             return (self._gate(payload), False)
 
@@ -270,7 +282,7 @@ class Updater:
         self._write_state(
             {"target_version": remote, "attempts": attempts + 1, "staged_at": time.time()}
         )
-        token = self._cfg.ingest_token
+        token = self._signing_secret()
         if token:
             expected = compute_hmac(token, remote, manifest["sha256"])
             if not hmac.compare_digest(expected, str(manifest.get("hmac", ""))):

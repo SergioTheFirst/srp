@@ -68,6 +68,7 @@ class ClientConfig:
     tray_notify_hours: int = 4  # balloon cadence while in the warning window
     tray_require_cert: bool = False  # nag daily when no signing cert is present at all
     ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
+    update_hmac_secret: str = ""  # nosec B105 -- empty = fall back to ingest_token
     # Operating mode: when True the agent collects but does NOT attempt server calls.
     offline_mode: bool = False
     # Самолечение журнала печати (PrintService/Operational): SYSTEM-агент включает
