@@ -94,6 +94,12 @@ def decode_tlv(data: bytes, pos: int) -> Tuple[int, bytes, int]:
     tag = data[pos]
     length, lsize = decode_length(data, pos + 1)
     start = pos + 1 + lsize
+    if start + length > len(data):
+        # Заявленная длина больше фактического остатка буфера -- Python-слайс
+        # молча обрезал бы value до укороченного "мусора" вместо отбраковки
+        # (P0-8). Тот же UNKNOWN-путь, что и decode_length: caller (snmp.py)
+        # уже перехватывает ошибки парсинга недоверенного сетевого ввода.
+        raise ValueError("truncated BER TLV")
     return tag, data[start : start + length], start + length
 
 

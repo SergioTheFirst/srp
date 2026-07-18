@@ -61,3 +61,15 @@ def test_decode_oid_rejects_oversized_and_empty_body():
 def test_decode_length_raises_on_truncated_long_form():
     with pytest.raises(ValueError):
         ber.decode_length(b"\x82\x01", 0)  # объявлено 2 байта длины, присутствует 1
+
+
+def test_decode_tlv_raises_on_length_exceeding_remaining_buffer():
+    # Заявлено 10 байт значения, но после заголовка TLV осталось только 3 (P0-8).
+    with pytest.raises(ValueError):
+        ber.decode_tlv(b"\x04\x0aabc", 0)
+
+
+def test_decode_tlv_accepts_length_exactly_matching_buffer_end():
+    # Граница: заявленная длина == фактический остаток -- НЕ должно бросать.
+    tag, value, nxt = ber.decode_tlv(b"\x04\x03abc", 0)
+    assert tag == 0x04 and value == b"abc" and nxt == 5

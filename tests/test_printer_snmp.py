@@ -238,6 +238,16 @@ def test_snmp_get_rejects_mismatched_request_id():
         srv.close()
 
 
+def test_parse_response_truncated_datagram_returns_empty():
+    # Датаграмма оборвалась до конца тела -- заявленная длина внешнего
+    # SEQUENCE больше фактически пришедших байт (P0-8). Раньше decode_tlv
+    # молча обрезал bytes-срез и парсер продолжал на укороченном "мусоре".
+    name = "1.3.6.1.2.1.1.5.0"
+    vb = ber.encode_tlv(0x30, ber.encode_oid(name) + ber.encode_octet_string(b"PRN-1"))
+    truncated = _build_response(vb)[:-5]
+    assert snmp.parse_response(truncated) == {}
+
+
 def test_parse_response_fuzz_never_raises():
     # Внешняя сетевая граница: любой случайный мусор → dict, без исключений/зависаний.
     for n in range(0, 80):
