@@ -599,6 +599,12 @@ window.srpEsc = function (s) {
   </nav>
 </header>
 <main>
+{% if not request.app.state.ingest_token %}
+<div class="alert-banner alert-warn" role="alert" style="margin-bottom:16px">
+  ingest_token не задан — сервер принимает телеметрию и запросы на удаление/обновление
+  БЕЗ аутентификации. Задайте <code>ingest_token</code> в <code>server/config.json</code>.
+</div>
+{% endif %}
 {% block body %}{% endblock %}
 </main>
 <script>
