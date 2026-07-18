@@ -307,3 +307,64 @@ def test_config_template_is_policy_only() -> None:
     # policy only: no machine identity, no secrets baked into the shared template
     for forbidden in ("device_id", "ingest_token", "config_password_hash"):
         assert forbidden not in data or data[forbidden] == ""
+
+
+# --------------------------------------------------------------------------- #
+# P0-3 (stoperrors.md): ACL must land BEFORE any file does. NTFS ACEs inherit
+# copy-on-create, not live -- a file copied in before icacls runs keeps C:\'s
+# permissive Users:WRITE forever, regardless of what icacls does afterwards.
+# --------------------------------------------------------------------------- #
+
+
+def test_icacls_cmd_recurses_existing_children() -> None:
+    """/T: defense-in-depth re-lock for an update running over a pre-fix install
+    where files already landed before icacls ever ran once."""
+    assert "/T" in su.icacls_cmd(r"C:\SRP")
+
+
+def _track_call_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    order: list[str] = []
+    real_icacls_cmd, real_robocopy_cmd = su.icacls_cmd, su.robocopy_cmd
+
+    def _icacls_cmd(dest: str = su.DEST) -> list[str]:
+        order.append("icacls")
+        return real_icacls_cmd(dest)
+
+    def _robocopy_cmd(payload: str, dest: str = su.DEST) -> list[str]:
+        order.append("robocopy")
+        return real_robocopy_cmd(payload, dest)
+
+    monkeypatch.setattr(su, "icacls_cmd", _icacls_cmd)
+    monkeypatch.setattr(su, "robocopy_cmd", _robocopy_cmd)
+    monkeypatch.setattr(su, "_run", lambda cmd, **kw: 0)  # no real process ever runs
+    return order
+
+
+def test_run_install_applies_acl_before_robocopy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order = _track_call_order(monkeypatch)
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    opts = su.SetupOptions(
+        server="http://192.168.1.10:8000", org="ORG1", allow_offline=True, no_tray=True
+    )
+
+    su.run_install(opts, payload=payload, dest=str(tmp_path / "SRP"))
+
+    assert order == ["icacls", "robocopy"]
+
+
+def test_run_update_applies_acl_before_robocopy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order = _track_call_order(monkeypatch)
+    dest = tmp_path / "SRP"
+    dest.mkdir()  # run_update targets an existing install, unlike run_install
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    opts = su.SetupOptions(update=True)
+
+    su.run_update(opts, payload=payload, dest=str(dest))
+
+    assert order == ["icacls", "robocopy"]
