@@ -82,7 +82,10 @@ def test_device_untrusted_when_identity_fails(client):
     # P0-5: identity-untrusted is a superset gate -- every mapped bayesian
     # class withholds too, regardless of its own domain's individual state.
     classes = _classes(dev)
-    for name in ("storage", "power_thermal", "stability"):
+    # memory has no trust domain of its own (test_memory_class_is_ungated) --
+    # device_untrusted is the one thing that must still withhold it, since it
+    # is the identity-level superset gate, not a domain lookup.
+    for name in ("storage", "power_thermal", "stability", "memory"):
         assert classes[name]["probability"] is None, name
         assert classes[name]["level"] == "unknown", name
 

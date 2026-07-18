@@ -561,18 +561,14 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # P0-5 (stoperrors.md): compute_risk needs the REAL gate, not a postfactum
     # label -- a gate-failed domain must never produce a number in the first
     # place. Keyed by bayesian CLASS name via _CLASS_DOMAIN (bayesian.py stays
-    # domain-vocabulary-agnostic). Identity-untrusted is a superset gate: every
-    # mapped class withholds regardless of its own domain's state, mirroring
-    # the existing cosmetic override a few lines below.
+    # domain-vocabulary-agnostic). The identity-level superset gate (below)
+    # is passed to compute_risk separately as device_untrusted=... -- it
+    # covers EVERY class including memory, which has no domain of its own.
     class_trust: Optional[dict[str, str]] = None
     if trust:
         domains_raw = trust.get("domains", {})
         class_trust = {
-            cls: (
-                "unknown"
-                if device_trust == "untrusted"
-                else domains_raw.get(dom, {}).get("state", "unknown")
-            )
+            cls: domains_raw.get(dom, {}).get("state", "unknown")
             for cls, dom in _CLASS_DOMAIN.items()
         }
 
@@ -658,6 +654,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         domain_values=domain_values,
         app_hang_count_30d=chain.counts.get("app_hang", 0),
         domain_trust=class_trust,
+        device_untrusted=device_trust == "untrusted",
     )
 
     risk_block: dict[str, Any] = {

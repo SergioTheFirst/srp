@@ -344,6 +344,9 @@ def _stability(
     return _finish("stability", _BASE_PRIOR["stability"], f)
 
 
+_ALL_CLASS_NAMES = ("storage", "power_thermal", "memory", "stability")
+
+
 def compute_risk(
     inventory: Optional[dict],
     historical: Optional[dict],
@@ -352,6 +355,7 @@ def compute_risk(
     domain_values: Optional[dict[str, Optional[float]]] = None,
     app_hang_count_30d: Optional[int] = None,
     domain_trust: Optional[dict[str, str]] = None,
+    device_untrusted: bool = False,
 ) -> dict[str, Any]:
     """Return per-class posteriors with explanations, sorted by probability.
 
@@ -361,15 +365,28 @@ def compute_risk(
     domain layer rather than a standalone signal processor (D5).
 
     domain_trust (P0-5, stoperrors.md) is keyed by CLASS name (storage/
-    power_thermal/stability -- "memory" is intentionally ungated, see
+    power_thermal/stability -- "memory" has no trust domain in v1, see
     pipeline._CLASS_DOMAIN) and gates the corresponding class to
     probability=None/level="unknown" unless its state is exactly "trusted".
     None (not a dict) means no trust info was available -- ungated, matching
     pre-P0-5 behaviour for an old agent with no source_health.
 
+    device_untrusted (P0-5 review follow-up) is the identity-level gate -- a
+    strict superset of domain_trust: when true, EVERY class withholds,
+    including memory (which has no domain to gate it individually). Without
+    this, an untrusted-identity device still leaked a confident memory
+    probability/overall/top -- the same "number beside trust:unknown" bug
+    domain_trust exists to close, just one class over.
+
     overall is on the same 0..100 scale as risk_exposure and all W4.2 axes;
     class-level "probability" stays in 0..1 for the dashboard progress bars.
+    overall/top are None when every class is withheld (never a fabricated
+    0.0 read as "confirmed zero risk").
     """
+    if device_untrusted:
+        classes = [_withheld(name) for name in _ALL_CLASS_NAMES]
+        return {"classes": classes, "top": None, "overall": None}
+
     age = device_age_years(inventory)
     classes = [
         _storage(inventory, historical, heartbeat, age, domain_values, domain_trust),
@@ -381,14 +398,11 @@ def compute_risk(
     # Withheld (probability=None) classes sort last -- never crash on None vs
     # float, never surface as "top" with a fabricated number (P0-5).
     classes.sort(key=lambda c: (c["probability"] is None, -(c["probability"] or 0.0)))
-    top_prob = (
-        classes[0]["probability"] if classes and classes[0]["probability"] is not None else 0.0
-    )
     top_class = classes[0] if classes and classes[0]["probability"] is not None else None
     return {
         "classes": classes,
         "top": top_class["name"] if top_class else None,
         # W4.3: 0..100 to match risk_exposure and all W4.2 domain axes.
         # class-level "probability" stays 0..1 for dashboard percentage bars.
-        "overall": round(top_prob * 100, 1),
+        "overall": round(top_class["probability"] * 100, 1) if top_class else None,
     }
