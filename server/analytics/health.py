@@ -234,17 +234,28 @@ def _observability(
         (trends.get(t) or {}).get("n_points", 0) >= _MATURE_POINTS for t in _KEY_TRENDS
     )
     cohort_live = cohort is not None and (cohort.get("cohort_size") or 0) >= _COHORT_MIN
+    # P0-9: reflect DATA presence, not container presence. In prod `errchain` is
+    # always a non-None asdict(chain) whose `counts` is a fixed 4-key dict (all
+    # zero when no events), and `axes` always carries every engine's key -- so
+    # `bool(errchain)`/`bool(axes)` are always truthy. Require real content: some
+    # counted event (or factor), and at least one non-None axis value.
+    counts = errchain.get("counts") if isinstance(errchain, dict) else None
+    errchain_live = bool(
+        errchain
+        and ((isinstance(counts, dict) and any(counts.values())) or errchain.get("factors"))
+    )
+    axes_live = any(isinstance(v, dict) and v.get("value") is not None for v in axes.values())
     # (weight, is_live, russian blind-spot string)
     channels = [
         (0.35, _ax_val(axes, "storage_risk") is not None, "SMART недоступен"),
-        (0.15, bool(errchain), "нет анализа событий"),
+        (0.15, errchain_live, "нет анализа событий"),
         (
             0.15,
             _ax_val(axes, "software_aging_risk") is not None,
             "нет телеметрии производительности",
         ),
         (0.15, depth_live, "нет истории трендов"),
-        (0.10, bool(axes), "нет инвентаризации/идентификации"),
+        (0.10, axes_live, "нет инвентаризации/идентификации"),
         (0.10, cohort_live, "нет когорты для сравнения"),
     ]
     value = round(sum(w for w, live, _ in channels if live) * 100, 1)
@@ -367,7 +378,11 @@ def _resilience(axes: dict, trends: dict) -> tuple[Coordinate, list, bool]:
 # --------------------------------------------------------------------------- #
 def _state(d: Coordinate, r: Coordinate, o_val: float, flags: set) -> tuple[str, str, list]:
     ev = _top(list(d.evidence) + list(r.evidence), 5)
-    if o_val < 40:
+    # Two independent unknown-gates (K5, "UNKNOWN over false confidence"): low
+    # observability, OR zero D/R signal (both coords None) regardless of o_val.
+    # The latter is defense-in-depth (P0-9) against any observability channel that
+    # counts container-presence as data and phantom-inflates o_val past 40.
+    if o_val < 40 or (d.value is None and r.value is None):
         return "unknown", _STATE_LABELS["unknown"], []
     rv = r.value
     if flags & _H4_FLAGS:
