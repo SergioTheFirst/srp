@@ -52,6 +52,7 @@ class _IngestBodySizeMiddleware(BaseHTTPMiddleware):
 
 
 _log = logging.getLogger("srp.retention")
+_authlog = logging.getLogger("srp.auth")
 
 
 def _run_retention_sweep(cfg: ServerConfig) -> None:
@@ -414,6 +415,16 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.ingest_token = cfg.ingest_token  # "" = ingest auth disabled (MVP default)
+    if not cfg.ingest_token:
+        # P0-2 (stoperrors.md): loud, not silent -- the deployed default accepts
+        # telemetry AND honours delete/purge/update from anyone on the LAN. This
+        # does not change the default itself (would break already-deployed fleets
+        # whose client/config.json has no token); it only makes the gap visible.
+        _authlog.warning(
+            "ingest_token не задан — сервер принимает телеметрию и "
+            "административные запросы (delete/purge/update) БЕЗ аутентификации. "
+            "Задайте ingest_token в server/config.json, чтобы включить проверку."
+        )
     app.state.updates_dir = cfg.resolved_updates_dir()  # agent auto-update package drop
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
