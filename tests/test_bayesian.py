@@ -175,3 +175,59 @@ def test_no_data_yields_priors_only():
     assert r["overall"] < 10.0  # W4.3: 0..100 scale; was < 0.10
     assert r["top"] is not None
     assert len(r["classes"]) == 4  # fixed closed set: storage/power_thermal/memory/stability
+
+
+# --------------------------------------------------------------------------- #
+# P0-5 (stoperrors.md): a gate-failed domain must withhold its number, not
+# just cosmetically label it after the fact.
+# --------------------------------------------------------------------------- #
+_HIGH_RISK_HIST = {
+    "storage": [{"disk": "d0", "wear_pct": 90, "reallocated_sectors": 500}],
+    "reliability_stability_index": 2.0,
+    "bugchecks_30d": 8,
+}
+
+
+def _class(r, name):
+    return next(c for c in r["classes"] if c["name"] == name)
+
+
+def test_gated_class_withheld_when_domain_not_trusted():
+    trusted = _class(
+        compute_risk(None, _HIGH_RISK_HIST, None, domain_trust={"storage": "trusted"}), "storage"
+    )
+    assert trusted["probability"] is not None
+    assert trusted["probability"] > 0.3  # genuinely elevated on this fixture
+
+    untrusted = _class(
+        compute_risk(None, _HIGH_RISK_HIST, None, domain_trust={"storage": "untrusted"}), "storage"
+    )
+    assert untrusted["probability"] is None
+    assert untrusted["level"] == "unknown"
+    assert untrusted["factors"] == []
+
+
+def test_gated_class_ungated_when_domain_trust_not_provided():
+    """domain_trust=None (old agent, no source_health) keeps pre-P0-5 behaviour."""
+    r = compute_risk(None, _HIGH_RISK_HIST, None)
+    assert _class(r, "storage")["probability"] is not None
+
+
+def test_memory_class_never_gated_by_domain_trust():
+    """memory has no trust domain in v1 (pipeline._CLASS_DOMAIN) -- passing an
+    unrelated domain_trust key must not touch it."""
+    r = compute_risk(None, _HIGH_RISK_HIST, None, domain_trust={"storage": "untrusted"})
+    assert _class(r, "memory")["probability"] is not None
+
+
+def test_withheld_class_never_becomes_top_or_crashes_sort():
+    """All three gate-able classes withheld -- memory (always ungated) must
+    still be found and reported as top without a None-vs-float crash."""
+    r = compute_risk(
+        None,
+        _HIGH_RISK_HIST,
+        None,
+        domain_trust={"storage": "unknown", "power_thermal": "unknown", "stability": "unknown"},
+    )
+    assert r["top"] == "memory"
+    assert r["overall"] >= 0.0  # did not crash computing top_prob

@@ -128,6 +128,29 @@ def _finish(name: str, prior_p: float, factors: list[Factor]) -> dict[str, Any]:
     }
 
 
+def _withheld(name: str) -> dict[str, Any]:
+    """P0-5 (stoperrors.md): a gate-failed domain must never report a number --
+    trust was previously attached only cosmetically, after a full probability
+    was already computed on the same (untrusted) telemetry."""
+    return {
+        "name": name,
+        "label": _CLASS_LABELS.get(name, name),
+        "probability": None,
+        "level": "unknown",
+        "factors": [],
+    }
+
+
+def _domain_gated(name: str, domain_trust: Optional[dict[str, str]]) -> bool:
+    """True iff *name*'s mapped domain is present and explicitly untrusted.
+
+    domain_trust=None means no trust info was available to the caller at all
+    (e.g. an old agent with no source_health) -- ungated, unchanged legacy
+    behaviour. Once provided, anything other than "trusted" withholds.
+    """
+    return domain_trust is not None and domain_trust.get(name) != "trusted"
+
+
 # --------------------------------------------------------------------------- #
 def _storage(
     inv: Optional[dict],
@@ -135,7 +158,10 @@ def _storage(
     hb: Optional[dict],
     age: Optional[float],
     domain_values: Optional[dict[str, Optional[float]]] = None,
+    domain_trust: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
+    if _domain_gated("storage", domain_trust):
+        return _withheld("storage")
     f: list[Factor] = []
     if age:
         f.append({"label": f"Возраст оборудования ~{age:.0f} лет", "weight": min(age * 0.05, 0.8)})
@@ -176,6 +202,7 @@ def _power_thermal(
     hist: Optional[dict],
     hb: Optional[dict],
     domain_values: Optional[dict[str, Optional[float]]] = None,
+    domain_trust: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """Power / thermal risk class.
 
@@ -188,6 +215,8 @@ def _power_thermal(
     firmware / ASPM / PCIe link-training noise, not early-warning of VRM or PSU
     failure.  Keeping WHEA here produced systematic false-positive alerts.
     """
+    if _domain_gated("power_thermal", domain_trust):
+        return _withheld("power_thermal")
     f: list[Factor] = []
 
     perf = _num(hb, "cpu_perf_pct")
@@ -243,7 +272,10 @@ def _stability(
     hist: Optional[dict],
     domain_values: Optional[dict[str, Optional[float]]] = None,
     app_hang_count_30d: Optional[int] = None,
+    domain_trust: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
+    if _domain_gated("stability", domain_trust):
+        return _withheld("stability")
     f: list[Factor] = []
     rsi = _num(hist, "reliability_stability_index")
     if rsi is not None:
@@ -319,6 +351,7 @@ def compute_risk(
     *,
     domain_values: Optional[dict[str, Optional[float]]] = None,
     app_hang_count_30d: Optional[int] = None,
+    domain_trust: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """Return per-class posteriors with explanations, sorted by probability.
 
@@ -327,22 +360,34 @@ def compute_risk(
     corresponding domain engine — making this a thin prioritizer over the
     domain layer rather than a standalone signal processor (D5).
 
+    domain_trust (P0-5, stoperrors.md) is keyed by CLASS name (storage/
+    power_thermal/stability -- "memory" is intentionally ungated, see
+    pipeline._CLASS_DOMAIN) and gates the corresponding class to
+    probability=None/level="unknown" unless its state is exactly "trusted".
+    None (not a dict) means no trust info was available -- ungated, matching
+    pre-P0-5 behaviour for an old agent with no source_health.
+
     overall is on the same 0..100 scale as risk_exposure and all W4.2 axes;
     class-level "probability" stays in 0..1 for the dashboard progress bars.
     """
     age = device_age_years(inventory)
     classes = [
-        _storage(inventory, historical, heartbeat, age, domain_values),
-        _power_thermal(historical, heartbeat, domain_values),
+        _storage(inventory, historical, heartbeat, age, domain_values, domain_trust),
+        _power_thermal(historical, heartbeat, domain_values, domain_trust),
         _memory(historical, heartbeat),
-        _stability(inventory, historical, domain_values, app_hang_count_30d),
+        _stability(inventory, historical, domain_values, app_hang_count_30d, domain_trust),
     ]
 
-    classes.sort(key=lambda c: c["probability"], reverse=True)
-    top_prob = classes[0]["probability"] if classes else 0.0
+    # Withheld (probability=None) classes sort last -- never crash on None vs
+    # float, never surface as "top" with a fabricated number (P0-5).
+    classes.sort(key=lambda c: (c["probability"] is None, -(c["probability"] or 0.0)))
+    top_prob = (
+        classes[0]["probability"] if classes and classes[0]["probability"] is not None else 0.0
+    )
+    top_class = classes[0] if classes and classes[0]["probability"] is not None else None
     return {
         "classes": classes,
-        "top": classes[0]["name"] if classes else None,
+        "top": top_class["name"] if top_class else None,
         # W4.3: 0..100 to match risk_exposure and all W4.2 domain axes.
         # class-level "probability" stays 0..1 for dashboard percentage bars.
         "overall": round(top_prob * 100, 1),

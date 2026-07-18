@@ -2692,10 +2692,16 @@ def get_devices() -> list[dict[str, Any]]:
 
 
 def _top_risk(risk: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """P0-5 (stoperrors.md): a gate-failed class carries probability=None --
+    max() over that mixed with real floats crashes (`>` unsupported), and a
+    withheld class must never be picked as "top" (no number to report)."""
     classes = risk.get("classes") if isinstance(risk, dict) else None
     if not classes:
         return None
-    top = max(classes, key=lambda c: c.get("probability", 0))
+    scored = [c for c in classes if c.get("probability") is not None]
+    if not scored:
+        return None
+    top = max(scored, key=lambda c: c["probability"])
     return {"name": top.get("name"), "probability": top.get("probability")}
 
 

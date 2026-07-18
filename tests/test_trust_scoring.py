@@ -45,6 +45,11 @@ def test_storage_class_unknown_when_domain_untrusted(client):
     dev = client.get("/api/v1/devices/dev-st").json()
     assert _classes(dev)["storage"]["trust"] == "unknown"
     assert dev["scores"]["risk"]["domains"]["storage"]["state"] == "unknown"
+    # P0-5 (stoperrors.md): a gate-failed domain must not leak a confident
+    # number over the wire -- "trust":"unknown" used to sit right next to a
+    # real probability/level in this exact response.
+    assert _classes(dev)["storage"]["probability"] is None
+    assert _classes(dev)["storage"]["level"] == "unknown"
 
 
 def test_storage_class_trusted_when_source_ok(client):
@@ -53,6 +58,7 @@ def test_storage_class_trusted_when_source_ok(client):
     )
     dev = client.get("/api/v1/devices/dev-ok").json()
     assert _classes(dev)["storage"]["trust"] == "trusted"
+    assert _classes(dev)["storage"]["probability"] is not None
 
 
 def test_memory_class_is_ungated(client):
@@ -73,6 +79,12 @@ def test_device_untrusted_when_identity_fails(client):
     # contract §7: untrusted identity -> day-1 scores withheld (None), not shown
     assert dev["scores"]["performance"] is None
     assert dev["scores"]["risk_exposure"] is None
+    # P0-5: identity-untrusted is a superset gate -- every mapped bayesian
+    # class withholds too, regardless of its own domain's individual state.
+    classes = _classes(dev)
+    for name in ("storage", "power_thermal", "stability"):
+        assert classes[name]["probability"] is None, name
+        assert classes[name]["level"] == "unknown", name
 
 
 def test_no_source_health_low_confidence_score100(client):

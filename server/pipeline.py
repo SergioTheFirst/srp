@@ -558,6 +558,24 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     if trust:
         device_trust = _device_trust(trust)
 
+    # P0-5 (stoperrors.md): compute_risk needs the REAL gate, not a postfactum
+    # label -- a gate-failed domain must never produce a number in the first
+    # place. Keyed by bayesian CLASS name via _CLASS_DOMAIN (bayesian.py stays
+    # domain-vocabulary-agnostic). Identity-untrusted is a superset gate: every
+    # mapped class withholds regardless of its own domain's state, mirroring
+    # the existing cosmetic override a few lines below.
+    class_trust: Optional[dict[str, str]] = None
+    if trust:
+        domains_raw = trust.get("domains", {})
+        class_trust = {
+            cls: (
+                "unknown"
+                if device_trust == "untrusted"
+                else domains_raw.get(dom, {}).get("state", "unknown")
+            )
+            for cls, dom in _CLASS_DOMAIN.items()
+        }
+
     # W0.5: wrap the day-1 numbers in the confidence-gated Score100 envelope.
     # Missing/untrusted telemetry must not read as healthy (contract: UNKNOWN over
     # false confidence). Legacy numeric columns are derived from the envelope via
@@ -639,6 +657,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         hb,
         domain_values=domain_values,
         app_hang_count_30d=chain.counts.get("app_hang", 0),
+        domain_trust=class_trust,
     )
 
     risk_block: dict[str, Any] = {
