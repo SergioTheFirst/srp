@@ -28,7 +28,13 @@ def _iso_days_ago(days: int) -> str:
 
 
 def _token_client(tmp_path) -> TestClient:
-    app = create_app(ServerConfig(db_path=str(tmp_path / "t.db"), ingest_token="secret"))
+    app = create_app(
+        ServerConfig(
+            db_path=str(tmp_path / "t.db"),
+            ingest_token="secret",
+            org_directory_path=str(tmp_path / "org_directory.json"),
+        )
+    )
     return TestClient(app)
 
 
