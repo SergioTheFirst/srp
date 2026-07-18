@@ -254,6 +254,26 @@ def test_check_update_channel_none_short_circuits(tmp_path, monkeypatch) -> None
     assert u.check("0.1.0") == (None, False)
 
 
+def test_check_offline_mode_short_circuits(tmp_path, monkeypatch) -> None:
+    u = Updater(_cfg(tmp_path, offline_mode=True))
+
+    def _urlopen(req, timeout=None):
+        raise AssertionError("must not be called when offline_mode is true")
+
+    monkeypatch.setattr(updater_mod.urllib.request, "urlopen", _urlopen)
+    assert u.check("0.1.0") == (None, False)
+
+
+def test_check_offline_mode_does_not_raise_on_empty_server_url(tmp_path) -> None:
+    # P1-1: the documented offline setup (server_url="", offline_mode=True) used
+    # to raise ValueError building the manifest request (urllib.request.Request()
+    # on a schemeless relative URL) -- outside _fetch_manifest()'s own try/except,
+    # same shape as the transport.py bug this ticket started with. Real Updater,
+    # no urlopen mocking -- this must not raise.
+    u = Updater(_cfg(tmp_path, server_url="", offline_mode=True))
+    assert u.check("0.1.0") == (None, False)
+
+
 def test_check_not_found_then_no_repeat_until_state_changes(tmp_path, monkeypatch) -> None:
     cfg = _cfg(tmp_path)
     u = Updater(cfg)
