@@ -568,16 +568,22 @@ class PurgeBody(BaseModel):
 
 
 @router.post("/devices/{device_id}/delete")
-def delete_device(device_id: str) -> dict:
+def delete_device(device_id: str, request: Request) -> dict:
     """Remove a device and ALL its data. POST-only so a stray GET never deletes."""
+    _require_ingest_token(request)
+    if not check_rate_limit("endpoint:delete_device"):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
     if not db.delete_device(device_id):
         raise HTTPException(status_code=404, detail="device not found")
     return {"status": "ok", "deleted": True}
 
 
 @router.post("/devices/purge")
-def purge_devices(body: PurgeBody) -> dict:
+def purge_devices(body: PurgeBody, request: Request) -> dict:
     """Bulk-clear ghosts: delete (or, with dry_run, preview) devices silent past *days*."""
+    _require_ingest_token(request)
+    if not check_rate_limit("endpoint:purge_devices"):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
     return db.purge_devices_silent_for(body.days, dry_run=body.dry_run)
 
 
@@ -618,15 +624,21 @@ def poll_printers(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 # Agent auto-update (T4)
 # ---------------------------------------------------------------------------
-def _require_update_auth(request: Request) -> str:
+def _require_ingest_token(request: Request) -> str:
     """Same shared-token check as ``/ingest`` (hmac.compare_digest + 401). Returns
     the expected token (possibly "") so callers can also feed it into
-    ``updates.get_update_info`` for the hmac field."""
+    ``updates.get_update_info`` for the hmac field. Empty ``expected`` (no token
+    configured) is a no-op -- unchanged default behaviour, see stoperrors P0-2."""
     expected = getattr(request.app.state, "ingest_token", "")
     provided = request.headers.get("x-srp-token") or ""
     if expected and not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid or missing ingest token")
     return expected
+
+
+def _require_update_auth(request: Request) -> str:
+    """Thin alias kept for call-site clarity at the update endpoints."""
+    return _require_ingest_token(request)
 
 
 def _get_update_info_or_404(request: Request) -> dict:
