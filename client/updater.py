@@ -232,7 +232,11 @@ class Updater:
 
         Returns (payload-to-send-or-None, restart_pending).
         """
-        if self._cfg.update_channel == "none":
+        # P1-1: offline_mode must never attempt a server call -- server_url may be
+        # empty, and urllib.request.Request() raises ValueError building a request
+        # for a schemeless relative URL, outside _fetch_manifest()'s own try/except
+        # (that block only wraps urlopen(), not the Request() call a line above it).
+        if self._cfg.offline_mode or self._cfg.update_channel == "none":
             return (None, False)
 
         outcome, manifest = self._fetch_manifest()

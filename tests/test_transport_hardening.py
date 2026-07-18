@@ -190,6 +190,7 @@ def test_oversized_payload_dropped_not_buffered(tmp_path) -> None:
 
     cfg = SimpleNamespace(
         server_url="http://127.0.0.1:9",  # discard-порт: сеть не должна понадобиться
+        offline_mode=False,
         device_id="d1",
         hostname="h",
         site_code="",

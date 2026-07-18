@@ -139,6 +139,12 @@ class Transport:
 
     def _deliver(self, envelope: dict[str, Any]) -> bool:
         """True if handled (delivered or 4xx-rejected); False if it should buffer."""
+        if self._cfg.offline_mode:
+            # P1-1: never attempt a network call in offline mode -- server_url may
+            # be empty, and urlopen() raises ValueError (not caught below) on a
+            # schemeless relative URL, crashing the caller. Buffer instead; a later
+            # run with offline_mode off and a real server_url flushes the backlog.
+            return False
         for attempt in range(1, _SEND_ATTEMPTS + 1):
             outcome = self._attempt(envelope)
             if outcome in ("ok", "drop"):

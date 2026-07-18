@@ -142,3 +142,52 @@ def test_send_payload_none_with_health_is_delivered(tmp_path, monkeypatch):
     assert t.send("heartbeat", None, {"throttle": {"status": "timeout"}}) is True
     assert sent["payload"] == {}
     assert sent["source_health"]["throttle"]["status"] == "timeout"
+
+
+# --------------------------------------------------------------------------- #
+# P1-1: offline_mode must actually prevent network calls, not just skip the
+# server_url validation. With server_url="" (the documented offline setup),
+# urllib.request.Request(self._ingest_url, ...) raises ValueError('unknown url
+# type') building a request for a schemeless relative URL -- outside the
+# try/except in _attempt(), so it used to propagate and crash the caller.
+# --------------------------------------------------------------------------- #
+def _make_offline(tmp_path):
+    cfg = ClientConfig(
+        server_url="",  # documented offline setup -- no server configured at all
+        offline_mode=True,
+        device_id="t-dev",
+        buffer_path=str(tmp_path / "buffer.jsonl"),
+    )
+    return Transport(cfg), cfg
+
+
+def test_offline_mode_send_does_not_raise_on_empty_server_url(tmp_path):
+    t, _ = _make_offline(tmp_path)
+    assert t._ingest_url == "/api/v1/ingest"  # the malformed relative URL
+    # Real Transport, real urllib -- no monkeypatching. This must not raise.
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    lines = t._read_buffer()
+    assert len(lines) == 1  # buffered, not discarded -- flushes once online
+    assert json.loads(lines[0])["msg_type"] == "heartbeat"
+
+
+def test_offline_mode_flush_does_not_raise_on_a_preexisting_backlog(tmp_path):
+    """offline_mode flipped on later with envelopes already buffered from a
+    prior (online) run must not crash flush_buffer() either -- same _attempt()
+    path, reached from flush_buffer -> _deliver instead of send -> _deliver."""
+    t, _ = _make_offline(tmp_path)
+    t._append_buffer(t._envelope("heartbeat", {"n": 0}))
+    assert t.flush_buffer() == 0  # nothing delivered while offline
+    assert len(t._read_buffer()) == 1  # still queued, untouched
+
+
+def test_offline_mode_never_reaches_urlopen(tmp_path, monkeypatch):
+    """Belt-and-suspenders: prove the network layer itself is never touched,
+    not just that no exception happens to surface."""
+    t, _ = _make_offline(tmp_path)
+    called = {"n": 0}
+    monkeypatch.setattr(
+        transport_mod.urllib.request, "urlopen", lambda *a, **k: called.__setitem__("n", 1)
+    )
+    t.send("heartbeat", {"cpu_pct": 1.0})
+    assert called["n"] == 0
