@@ -209,6 +209,11 @@ def icacls_cmd(dest: str = DEST) -> list[str]:
     # "Administrators"/"Users" don't resolve and icacls fails (-> exit 4). SIDs are
     # language-independent. SYSTEM=S-1-5-18, Administrators=S-1-5-32-544,
     # Users=S-1-5-32-545.
+    # /T: reapply recursively to any existing children too -- defense-in-depth for
+    # an update running over a pre-fix install where files were copied BEFORE this
+    # ACL ever ran (NTFS ACEs inherit copy-on-create, not live; those files would
+    # otherwise keep Users:WRITE from C:\ forever). Not a substitute for calling
+    # this BEFORE robocopy on a fresh install -- see run_install/run_update order.
     return [
         "icacls",
         dest,
@@ -217,6 +222,7 @@ def icacls_cmd(dest: str = DEST) -> list[str]:
         "*S-1-5-18:(OI)(CI)F",
         "*S-1-5-32-544:(OI)(CI)F",
         "*S-1-5-32-545:(OI)(CI)RX",
+        "/T",
     ]
 
 
@@ -395,11 +401,15 @@ def run_install(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
     destp.mkdir(parents=True, exist_ok=True)
     _log(dest, f"install start org={opts.org} dept={opts.dept or '-'} no_tray={opts.no_tray}")
 
-    if _run(robocopy_cmd(str(payload), dest)) > _ROBOCOPY_OK_MAX:
-        _log(dest, "robocopy failed")
-        return EXIT_COPY_ACL
+    # ACL BEFORE robocopy: NTFS inherits ACEs copy-on-create, not live -- a file
+    # copied in before icacls runs keeps C:\'s permissive Users:WRITE forever
+    # (P0-3, stoperrors.md). destp already exists (mkdir above), so icacls has a
+    # target; robocopy then populates it under the already-locked-down ACL.
     if _run(icacls_cmd(dest)) != 0:
         _log(dest, "icacls failed")
+        return EXIT_COPY_ACL
+    if _run(robocopy_cmd(str(payload), dest)) > _ROBOCOPY_OK_MAX:
+        _log(dest, "robocopy failed")
         return EXIT_COPY_ACL
 
     # Stage 8 spool dir: best-effort (supplementary feature must not fail the install).
@@ -500,11 +510,13 @@ def run_update(opts: SetupOptions, *, payload: Path, dest: str = DEST) -> int:
         return EXIT_COPY_ACL
     _log(dest, "трей не перезапущен из SYSTEM -- поднимется при следующем входе пользователя")
 
-    if _run(robocopy_cmd(str(payload), dest)) > _ROBOCOPY_OK_MAX:
-        _log(dest, "update: robocopy failed")
-        return EXIT_COPY_ACL
+    # ACL BEFORE robocopy -- same P0-3 ordering as run_install; /T (icacls_cmd)
+    # also re-locks any files left over from a pre-fix install.
     if _run(icacls_cmd(dest)) != 0:
         _log(dest, "update: icacls failed")
+        return EXIT_COPY_ACL
+    if _run(robocopy_cmd(str(payload), dest)) > _ROBOCOPY_OK_MAX:
+        _log(dest, "update: robocopy failed")
         return EXIT_COPY_ACL
 
     try:
