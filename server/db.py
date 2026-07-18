@@ -3568,17 +3568,35 @@ def get_fleet_cohort_stats(
                 """
                 SELECT
                     COUNT(*) AS cohort_size,
-                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.bugchecks_30d') AS REAL) >= 1
-                             THEN 1.0 ELSE 0.0 END) AS bsod_pct,
-                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
-                             THEN 1.0 ELSE 0.0 END) AS kp41_pct,
+                    -- P0-6 (stoperrors.md): NO final ELSE -- a device that never
+                    -- reports this field must be excluded from AVG's denominator,
+                    -- not counted as "healthy". A trailing ELSE 0.0 is a no-op
+                    -- here (CASE WHEN <NULL-cond> already falls through to ELSE
+                    -- on its own, three-valued-logic-wise) and was verified to
+                    -- NOT change the result; omitting ELSE makes CASE itself
+                    -- return SQL NULL for a missing field, which AVG() then
+                    -- genuinely skips.
                     AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.bugchecks_30d') AS REAL) >= 1
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.bugchecks_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS bsod_pct,
+                    AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.kernel_power_41_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS kp41_pct,
+                    AVG(CASE
+                        WHEN CAST(
+                               json_extract(h.payload,'$.reliability_stability_index')
+                             AS REAL) < 5.0
+                          THEN 1.0
                         WHEN json_extract(h.payload,'$.reliability_stability_index')
                              IS NOT NULL
-                         AND CAST(json_extract(
-                               h.payload,'$.reliability_stability_index'
-                             ) AS REAL) < 5.0
-                        THEN 1.0 ELSE 0.0 END) AS rsi_low_pct
+                          THEN 0.0
+                        END) AS rsi_low_pct
                 FROM devices d
                 JOIN (SELECT device_id, MAX(id) AS lid FROM historical GROUP BY device_id) lh
                   ON lh.device_id = d.device_id
@@ -3599,8 +3617,13 @@ def get_fleet_cohort_stats(
                 """
                 SELECT
                     COUNT(*) AS site_size,
-                    AVG(CASE WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
-                             THEN 1.0 ELSE 0.0 END) AS kp41_pct
+                    -- P0-6: same no-final-ELSE pattern as the cohort query above.
+                    AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.kernel_power_41_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS kp41_pct
                 FROM devices d
                 JOIN (SELECT device_id, MAX(id) AS lid FROM historical GROUP BY device_id) lh
                   ON lh.device_id = d.device_id
