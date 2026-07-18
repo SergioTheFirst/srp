@@ -16,7 +16,10 @@ import pytest
 from server.analytics.health import (
     _ACTIONS,
     _BLIND_ACTION,
+    Coordinate,
     HealthVerdict,
+    _observability,
+    _state,
     apply_health_staleness,
     compute_health,
     health_staleness,
@@ -692,3 +695,72 @@ def test_apply_staleness_matches_health_staleness_thresholds_exactly() -> None:
     out_stale = apply_health_staleness(_real_health(), just_over_3, now)
     assert out_fresh["confidence"] == "high"  # untouched at exactly 3 days
     assert out_stale["confidence"] == "low"
+
+
+# --------------------------------------------------------------------------- #
+# P0-9: observability channels must reflect DATA presence, not container
+# presence, and _state must never read "healthy" with zero D/R signal.
+# --------------------------------------------------------------------------- #
+# production-shaped errchain: asdict(chain) with ZERO events is a non-None dict
+# whose `counts` is a fixed 4-key dict of zeros and `factors` is empty (NOT the
+# `counts={}` the audit's repro used -- pipeline never produces an empty counts).
+_HOLLOW_ERRCHAIN = {
+    "stage": 0,
+    "burstiness": None,
+    "recurrent_weeks": 0,
+    "counts": {"early": 0, "damage": 0, "crash": 0, "app_hang": 0},
+    "factors": [],
+}
+
+
+def test_observability_hollow_errchain_not_live() -> None:
+    # container present (bool(errchain) True, counts a truthy 4-key dict) but zero
+    # counted content -> the 0.15 event channel must NOT count as live.
+    _o, blind = _observability({}, {}, _HOLLOW_ERRCHAIN, None)
+    assert "нет анализа событий" in blind
+    # a real errchain (>=1 counted event) IS live
+    real = {**_HOLLOW_ERRCHAIN, "counts": {"early": 3, "damage": 0, "crash": 0, "app_hang": 0}}
+    _o2, blind2 = _observability({}, {}, real, None)
+    assert "нет анализа событий" not in blind2
+
+
+def test_observability_all_none_axes_not_live() -> None:
+    # axes dict present with every value None -> the 0.10 inventory channel must
+    # NOT count as live (bool(axes) was always True in prod regardless of values).
+    dead = {"storage_risk": _axis(None), "os_degradation_risk": _axis(None)}
+    _o, blind = _observability(dead, {}, None, None)
+    assert "нет инвентаризации/идентификации" in blind
+    # one non-None axis value flips it back to live
+    live = {"storage_risk": _axis(None), "disk_fill_risk": _axis(5.0)}
+    _o2, blind2 = _observability(live, {}, None, None)
+    assert "нет инвентаризации/идентификации" not in blind2
+
+
+def test_state_both_coords_none_is_unknown_regardless_of_o_val() -> None:
+    # defensive gate (P0-9): zero D/R signal -> unknown even with o_val well above
+    # its own 40 threshold, proving this gate is independent of o_val calibration.
+    none_coord = Coordinate(None, "unknown", "unknown", [], [])
+    state, label, _ev = _state(none_coord, none_coord, 90.0, set())
+    assert state == "unknown"
+    assert label == "нет видимости"
+
+
+def test_phantom_observability_zero_dr_signal_is_unknown_not_h0() -> None:
+    # end-to-end repro: no SMART/aging/os/trajectory telemetry (D=None, R=None),
+    # a present-but-hollow errchain + unrelated live axes (disk_fill etc.) + a live
+    # trend series previously summed o_val to exactly 40 and fell through to h0.
+    axes = {
+        "storage_risk": _axis(None),
+        "os_degradation_risk": _axis(None),
+        "software_aging_risk": _axis(None),
+        "trajectory_risk": _axis(None),
+        "disk_fill_risk": _axis(5.0),
+        "fleet_anomaly_risk": _axis(3.0),
+        "network_risk": _axis(0.0),
+    }
+    trends = {"nvme_spare": _trend(direction="stable", n_points=8, slope_per_day=0.0)}
+    v = _call(axes, trends=trends, errchain=_HOLLOW_ERRCHAIN)
+    assert v.damage.value is None
+    assert v.resilience.value is None
+    assert v.state == "unknown"
+    assert v.state != "h0"
