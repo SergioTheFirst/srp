@@ -605,6 +605,13 @@ window.srpEsc = function (s) {
   БЕЗ аутентификации. Задайте <code>ingest_token</code> в <code>server/config.json</code>.
 </div>
 {% endif %}
+{% if request.app.state.update_hmac_fallback %}
+<div class="alert-banner alert-warn" role="alert" style="margin-bottom:16px">
+  update_hmac_secret не задан — подпись пакетов обновления использует ingest_token
+  (тот же токен, что летает в заголовке каждого запроса). Задайте отдельный
+  <code>update_hmac_secret</code> в <code>server/config.json</code> и в конфиге агентов.
+</div>
+{% endif %}
 {% block body %}{% endblock %}
 </main>
 <script>

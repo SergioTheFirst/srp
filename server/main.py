@@ -430,7 +430,11 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     # every request, so reusing it as the HMAC key let a passive LAN eavesdropper
     # forge a signed update. Falls back to ingest_token (less safe) when unset.
     app.state.update_hmac_secret = cfg.update_hmac_secret or cfg.ingest_token
-    if not cfg.update_hmac_secret and cfg.ingest_token:
+    # Separate flag (not "not app.state.update_hmac_secret" -- the fallback already
+    # collapsed it to a non-empty value): the dashboard banner needs to know WHY a
+    # secret is present, same visibility parity as P0-2's ingest_token banner.
+    app.state.update_hmac_fallback = not cfg.update_hmac_secret and bool(cfg.ingest_token)
+    if app.state.update_hmac_fallback:
         _authlog.warning(
             "update_hmac_secret не задан, используется ingest_token — менее "
             "безопасно, т.к. этот токен также передаётся как bearer-заголовок."

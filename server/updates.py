@@ -100,8 +100,9 @@ def get_update_info(updates_dir: Path, token: str = "") -> Optional[dict]:  # no
     A missing/unparsable manifest is the normal "no package staged" state (logged
     at debug). With a non-empty ``token``, the result carries an ``hmac`` field --
     HMAC-SHA256(token, "<version>|<sha256>") -- proving authenticity against a LAN
-    MITM (both sides already hold the shared ingest token; binding the version into
-    the signed material cuts off a replay/downgrade swap).
+    MITM (caller passes update_hmac_secret, falling back to ingest_token when
+    unset -- P0-4, stoperrors.md; binding the version into the signed material
+    cuts off a replay/downgrade swap).
     """
     manifest_path = updates_dir / "manifest.json"
     if not manifest_path.is_file():
