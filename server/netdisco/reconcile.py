@@ -179,13 +179,22 @@ def run_topology_cycle(
             evidence.extend(dev_ev)
             # Ф7: real wireless client<->AP edges (only walked when this device's
             # sysObjectID is a confirmed WLC root -- the collector self-gates).
-            evidence.extend(collect_wireless_fn(session, sys_object_id=dev.get("sys_object_id")))
+            wireless_ev = collect_wireless_fn(session, sys_object_id=dev.get("sys_object_id"))
+            evidence.extend(wireless_ev)
             _enrich_med_subtypes(
                 dev_ev, collect_med_fn(netdev.nid, session), known_nids, upsert, now
             )
             probed_nids.add(netdev.nid)
             probed += 1
-            upsert({"device_nid": netdev.nid, "status": "up"}, now)  # advance last_seen
+            # stoperrors P1-4: assert status="up" only when a collector actually
+            # returned evidence this cycle -- an SNMP timeout must not overwrite a
+            # real "down" set by run_reachability_cycle. Omitting the field (rather
+            # than passing None) lets upsert_net_device's COALESCE keep whatever
+            # status is already stored.
+            upsert_fields: dict[str, Any] = {"device_nid": netdev.nid}
+            if dev_ev or wireless_ev:
+                upsert_fields["status"] = "up"
+            upsert(upsert_fields, now)  # advance last_seen regardless of response
         links = fuse(evidence)
         new_graph = _graph(devices, links)
         prev_graph = (get_prev_snapshot() or {}).get("graph") or {"nodes": [], "links": []}
