@@ -278,20 +278,29 @@ class Updater:
     def _apply(self, manifest: dict, remote: str, attempts: int) -> tuple[Optional[dict], bool]:
         """Download, verify, stage and hand off *manifest* (known to be newer).
 
-        state.json is written for this attempt BEFORE anything else so a
-        failure at ANY step -- including a network failure during download --
-        still counts against the 3-attempt ceiling; otherwise a permanently
-        broken package would be re-downloaded forever, every check cycle.
+        A pure signature failure does NOT burn an attempt (P1-7): the manifest
+        fetch itself is unauthenticated, so a MITM able to tamper with it could
+        otherwise fail HMAC 3 times running -- no download ever attempted --
+        and permanently block this legitimate version until an operator clears
+        update/state.json by hand. That path can't be looped to bypass this: a
+        check only runs once per _UPDATE_CHECK_MIN_INTERVAL_SEC (agent.py), a
+        hardcoded floor the caller cannot configure below.
+
+        state.json is written for this attempt right after the signature check
+        passes, BEFORE anything else, so a failure at any step FROM HERE ON --
+        including a network failure during download -- still counts against
+        the 3-attempt ceiling; otherwise a permanently broken package would be
+        re-downloaded forever, every check cycle.
         """
-        self._write_state(
-            {"target_version": remote, "attempts": attempts + 1, "staged_at": time.time()}
-        )
         token = self._signing_secret()
         if token:
             expected = compute_hmac(token, remote, manifest["sha256"])
             if not hmac.compare_digest(expected, str(manifest.get("hmac", ""))):
                 return (self._gate(self._failed(remote, "подпись пакета не сошлась")), False)
 
+        self._write_state(
+            {"target_version": remote, "attempts": attempts + 1, "staged_at": time.time()}
+        )
         pkg_url = self._cfg.server_url.rstrip("/") + "/api/v1/agent/update/package"
         pkg_path = self._download(pkg_url, manifest["sha256"], int(manifest["size"]))
         if pkg_path is None:

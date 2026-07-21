@@ -455,6 +455,66 @@ def test_check_attempts_exhausted_skips_download(tmp_path, monkeypatch) -> None:
     assert restart is False
 
 
+def test_check_hmac_mismatch_does_not_burn_attempt(tmp_path, monkeypatch) -> None:
+    """P1-7: a pure signature failure (forged/corrupted hmac field, no real
+    package ever fetched) must not count against _MAX_ATTEMPTS. Otherwise a
+    MITM able to tamper with the manifest could fail HMAC 3 times running and
+    permanently block a legitimate version until an operator manually clears
+    update/state.json."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cfg = _cfg(tmp_path, ingest_token="tok")
+    u = Updater(cfg)
+    bad_manifest = json.dumps(
+        {"version": "9.9.9", "sha256": "a" * 64, "size": 10, "hmac": "0" * 64}
+    ).encode()
+    monkeypatch.setattr(
+        updater_mod.urllib.request,
+        "urlopen",
+        _urlopen_routed({_manifest_url(cfg): bad_manifest}),
+    )
+    monkeypatch.setattr(
+        updater_mod.subprocess,
+        "run",
+        lambda argv, **kw: (_ for _ in ()).throw(
+            AssertionError("must not download/schtasks on a signature failure")
+        ),
+    )
+
+    for _ in range(updater_mod._MAX_ATTEMPTS):
+        payload, restart = u.check("0.1.0")
+        assert restart is False
+        assert payload["state"] == "failed"
+
+    assert u._attempts_for("9.9.9") == 0  # pure signature failures never burned an attempt
+    assert not u._state_path.exists()  # no state was ever written, not just a zeroed counter
+
+    # A genuine manifest for the same version must still be applicable afterwards --
+    # the version was never permanently blocked by the earlier forged manifests.
+    zip_bytes = _zip_bytes(_good_members())
+    digest = hashlib.sha256(zip_bytes).hexdigest()
+    good_manifest = json.dumps(
+        {
+            "version": "9.9.9",
+            "sha256": digest,
+            "size": len(zip_bytes),
+            "hmac": compute_hmac("tok", "9.9.9", digest),
+        }
+    ).encode()
+    monkeypatch.setattr(
+        updater_mod.urllib.request,
+        "urlopen",
+        _urlopen_routed({_manifest_url(cfg): good_manifest, _package_url(cfg): zip_bytes}),
+    )
+    monkeypatch.setattr(
+        updater_mod.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0)
+    )
+
+    payload, restart = u.check("0.1.0")
+
+    assert restart is True
+    assert payload["state"] == "updating"
+
+
 # --------------------------------------------------------------------------- #
 # Updater.reconcile_after_restart
 # --------------------------------------------------------------------------- #
