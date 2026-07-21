@@ -145,6 +145,29 @@ def test_pipeline_metrics_hb_1h_excludes_a_heartbeat_older_than_an_hour_today(db
     assert metrics["ingest"]["heartbeats_5m"] == 0
 
 
+# ── P1-6 follow-up: at_risk floor must match band_for_risk_score's "bad" ─── #
+
+
+@pytest.mark.unit
+def test_pipeline_metrics_at_risk_matches_band_for_risk_score_bad_floor(db_init):
+    """40 mirrors score100.py's band_for_risk_score "bad" floor. This raw-SQL
+    threshold used to be 50, silently disagreeing with the /fleet page's
+    corrected at_risk count (P1-6) for the exact same risk_exposure value."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    db_init.touch_device("dev-at-risk", now, "0.1.0", received_at=now)
+    db_init.store_scores("dev-at-risk", now, {"risk_exposure": 42.0})
+    db_init.touch_device("dev-not-at-risk", now, "0.1.0", received_at=now)
+    db_init.store_scores("dev-not-at-risk", now, {"risk_exposure": 39.9})
+    db_init.touch_device("dev-exactly-bad-floor", now, "0.1.0", received_at=now)
+    db_init.store_scores("dev-exactly-bad-floor", now, {"risk_exposure": 40.0})
+    metrics = db_init.get_pipeline_metrics()
+    # 40.0 must count too (band_for_risk_score's "bad" is >=40, not >40) -- pins
+    # the >= vs > boundary itself, not just values that straddle it either way.
+    assert metrics["fleet"]["at_risk"] == 2
+
+
 # ── /pipeline HTML page ───────────────────────────────────────────────────── #
 
 
