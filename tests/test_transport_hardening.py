@@ -9,6 +9,8 @@ Unit tests (pure Python, no HTTP):
 
 Integration tests (FastAPI TestClient):
   - Duplicate envelope (same idempotency_key) returns 200 with duplicate:true.
+  - A business-validation failure (422) does not burn the idempotency key --
+    retry with corrected content is processed, not dropped as a duplicate.
   - Rate-limited device returns 429 after _RATE_MAX_PER_WINDOW requests.
   - Request body exceeding the size limit returns 413.
 """
@@ -118,29 +120,31 @@ def test_jitter_constant_is_positive():
 # --------------------------------------------------------------------------- #
 
 
-def test_idempotency_new_key_is_accepted():
-    from server.ingest_guards import check_idempotency, reset_guards
+def test_idempotency_new_key_is_not_seen():
+    from server.ingest_guards import has_seen, reset_guards
 
     reset_guards()
-    assert check_idempotency("aabbccdd" * 4) is True
+    assert has_seen("aabbccdd" * 4) is False
 
 
-def test_idempotency_same_key_is_rejected():
-    from server.ingest_guards import check_idempotency, reset_guards
+def test_idempotency_marked_key_is_seen():
+    from server.ingest_guards import has_seen, mark_seen, reset_guards
 
     reset_guards()
     key = "deadbeef" * 4
-    assert check_idempotency(key) is True
-    assert check_idempotency(key) is False  # duplicate
+    assert has_seen(key) is False
+    mark_seen(key)
+    assert has_seen(key) is True  # duplicate
 
 
-def test_idempotency_none_key_always_passes():
+def test_idempotency_none_key_never_marks():
     """Agents that don't send a key (old agents) must never be blocked."""
-    from server.ingest_guards import check_idempotency, reset_guards
+    from server.ingest_guards import has_seen, mark_seen, reset_guards
 
     reset_guards()
-    assert check_idempotency(None) is True
-    assert check_idempotency(None) is True  # None never deduplicates
+    assert has_seen(None) is False
+    mark_seen(None)
+    assert has_seen(None) is False  # None never deduplicates
 
 
 def test_rate_limit_allows_within_window(monkeypatch):
@@ -231,6 +235,28 @@ def test_duplicate_envelope_returns_200_with_flag(tmp_path):
         r2 = c.post("/api/v1/ingest", json=env)
         assert r2.status_code == 200
         assert r2.json().get("duplicate") is True  # second is a dup
+
+
+@pytest.mark.integration
+def test_422_does_not_burn_idempotency_key(tmp_path):
+    """stoperrors P1-3: a business-validation failure (422) must not permanently
+    mark the key as seen -- retrying with corrected content must be processed,
+    not silently dropped as a false duplicate (permanent data loss)."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        key = "0badf00d" * 4
+        bad = envelope("p13-dev", "heartbeat", {"cpu_pct": "not-a-number"})
+        bad["idempotency_key"] = key
+        r1 = c.post("/api/v1/ingest", json=bad)
+        assert r1.status_code == 422
+
+        good = envelope("p13-dev", "heartbeat", healthy("heartbeat"))
+        good["idempotency_key"] = key
+        r2 = c.post("/api/v1/ingest", json=good)
+        assert r2.status_code == 200, r2.text
+        assert r2.json().get("duplicate") is not True
 
 
 @pytest.mark.integration

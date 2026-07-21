@@ -2,11 +2,23 @@
 
 Both use process-lifetime in-memory state.
 
-Idempotency: a client-generated UUID4 key is stored on first receipt; a retry
-within the TTL window is recognised as a duplicate and the envelope is not
-re-processed. State does not survive server restarts (a retry after restart
-re-processes — acceptable because the append-only store is idempotent within
-any given second via the autoincrement PK).
+Idempotency: a client-generated UUID4 key is checked read-only (``has_seen``)
+before an envelope is processed, and recorded (``mark_seen``) only after
+ingest succeeds. A business-validation failure (422) therefore never burns the
+key, so a client retry with corrected content is processed instead of being
+silently dropped as a false duplicate (stoperrors P1-3 — marking on receipt
+made every 422 a permanent data loss). Accepted race: two requests carrying
+the same key can both be processed if the second arrives before the first
+finishes — the window is the full ingest_envelope() duration (DB writes +
+rescore), not instant: milliseconds under the shipped async-rescore config
+(server/config.json sets async_rescore=true), up to the O(n^2) synchronous
+trend pass (pipeline.py) if a deployment runs the code default
+(async_rescore=False, server/config.py). Either way the result is a benign
+duplicate row — the store is append-only and scoring reads latest-wins — still
+strictly better than the prior guaranteed permanent loss on any 422 retry.
+State does not survive server restarts (a retry after restart re-processes —
+acceptable because the append-only store is idempotent within any given
+second via the autoincrement PK).
 
 Rate-limit: sliding-window counter per device_id. Protects against a single
 device flooding the server and monopolising the synchronous rescore lock.
@@ -46,17 +58,28 @@ def count_reject(reason: str) -> None:
     REJECT_COUNTS[reason] = REJECT_COUNTS.get(reason, 0) + 1
 
 
-def check_idempotency(key: Optional[str]) -> bool:
-    """True → new envelope (process it).  False → duplicate (already processed).
+def has_seen(key: Optional[str]) -> bool:
+    """True → this key was already recorded as successfully processed (duplicate).
 
-    None key (old agent without idempotency support) always returns True.
+    Read-only (no mutation) — safe to call before an envelope is processed.
+    None key (old agent without idempotency support) always returns False.
     """
     if not key:
-        return True
+        return False
+    with _dedup_lock:
+        return key in _seen_keys
+
+
+def mark_seen(key: Optional[str]) -> None:
+    """Record key as successfully processed.  No-op for a falsy key.
+
+    Call ONLY after the envelope has been durably ingested — see module
+    docstring (stoperrors P1-3) for why marking before processing is wrong.
+    """
+    if not key:
+        return
     now = time.monotonic()
     with _dedup_lock:
-        if key in _seen_keys:
-            return False
         # Opportunistic trim so the dict doesn't grow unbounded.
         if len(_seen_keys) > 50_000:
             cutoff = now - _DEDUP_TTL_SEC
@@ -64,7 +87,6 @@ def check_idempotency(key: Optional[str]) -> bool:
             for k in stale:
                 del _seen_keys[k]
         _seen_keys[key] = now
-        return True
 
 
 def check_rate_limit(device_id: str) -> bool:

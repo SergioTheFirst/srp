@@ -18,7 +18,7 @@ from shared.schema import Envelope, utcnow_iso
 from server import db, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.health import apply_health_staleness
-from server.ingest_guards import check_idempotency, check_rate_limit, count_reject
+from server.ingest_guards import check_rate_limit, count_reject, has_seen, mark_seen
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.netdisco.cache import GraphCache
@@ -44,14 +44,16 @@ def ingest(env: Envelope, request: Request) -> dict:
     if not check_rate_limit(env.device_id):
         count_reject("rate_limit")
         raise HTTPException(status_code=429, detail="rate limit exceeded")
-    if not check_idempotency(env.idempotency_key):
+    if has_seen(env.idempotency_key):
         count_reject("duplicate")
         return {"device_id": env.device_id, "msg_type": env.msg_type, "duplicate": True}
     try:
-        return ingest_envelope(env)
+        result = ingest_envelope(env)
     except ValueError as exc:
         count_reject("invalid")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    mark_seen(env.idempotency_key)
+    return result
 
 
 @router.get("/devices")
