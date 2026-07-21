@@ -87,6 +87,29 @@ def test_storage_risk_reflects_ssd_wear():
     assert "Износ SSD" in labels
 
 
+def test_storage_risk_ignores_unvalidated_disks_beyond_first():
+    """P2-1: semantic validation (validate_storage_item, via
+    pipeline._extract_reading) only ever checks storage[0]. bayesian._storage's
+    OWN direct max()/sum() aggregation over historical.storage must not be
+    influenced by a garbage/malicious reading on any disk past the first --
+    it was never trust-gated, unlike disk[0]. (Scoped to this direct-aggregation
+    path only: domain_values=None here means the W4.2 storage_risk ENGINE
+    supplement -- server/analytics/storage.py, which legitimately aggregates
+    over ALL disks for its own "worst disk wins" purpose -- is untouched by this
+    fix and is a separate, still-open residual for a future option-(b) pass;
+    see stoperrors.md P2-1 addendum.)"""
+    hist = {
+        "storage": [
+            {"disk": "SSD0", "wear_pct": 0, "reallocated_sectors": 0, "power_on_hours": 100},
+            {"disk": "HDD1", "reallocated_sectors": 999999},  # unvalidated -- must be ignored
+        ]
+    }
+    r = compute_risk(None, hist, None)
+    storage = next(c for c in r["classes"] if c["name"] == "storage")
+    labels = " ".join(f["label"] for f in storage["factors"])
+    assert "Переназначено секторов" not in labels
+
+
 # --------------------------------------------------------------------------- #
 # D6 enforcement: KP41 and WHEA must not drive risk independently
 # --------------------------------------------------------------------------- #

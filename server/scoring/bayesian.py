@@ -173,7 +173,12 @@ def _storage(
         v_raw = domain_values.get("storage_risk", 0.0)
         f.append({"label": f"Storage engine (SMART): {v_raw:.0f}/100", "weight": round(lo, 2)})
 
-    storage = (hist or {}).get("storage") or []
+    # P2-1: trust validation (validate_storage_item via pipeline._extract_reading)
+    # only ever checks storage[0] -- aggregating raw values from disk[1+], which
+    # are never trust-gated, would let a garbage/malicious reading on any disk
+    # past the first influence risk without ever being validated. Limit
+    # aggregation to the one disk that is actually validated.
+    storage = ((hist or {}).get("storage") or [])[:1]
     max_wear = max((s.get("wear_pct") or 0 for s in storage), default=0)
     max_realloc = max((s.get("reallocated_sectors") or 0 for s in storage), default=0)
     max_poh = max((s.get("power_on_hours") or 0 for s in storage), default=0)
