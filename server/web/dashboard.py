@@ -27,6 +27,7 @@ from server.analytics.health import (
 from server.analytics.netmap import subnet_context_for, subnet_hint
 from server.netdisco.cache import GraphCache
 from server.netdisco.unified import historical_graph_from_snapshot
+from server.scoring.score100 import band_for_health_score, band_for_risk_score
 from server.updates import get_update_info
 from server.web.health_view import router as _health_router
 
@@ -70,23 +71,15 @@ def _fleet_available_version(request: Request) -> Optional[str]:
 
 
 def health_color(v: Optional[float]) -> str:
-    if v is None:
-        return "na"
-    if v >= 75:
-        return "good"
-    if v >= 50:
-        return "warn"
-    return "bad"
+    """CSS class for a raw 0..100 health-style score, via score100.py's single
+    source of truth for the good/watch/bad thresholds (see band_class)."""
+    return band_class(band_for_health_score(v))
 
 
 def risk_color(v: Optional[float]) -> str:
-    if v is None:
-        return "na"
-    if v < 25:
-        return "good"
-    if v < 50:
-        return "warn"
-    return "bad"
+    """CSS class for a raw 0..100 risk-style score (higher = worse), via
+    score100.py's single source of truth for the good/watch/bad thresholds."""
+    return band_class(band_for_risk_score(v))
 
 
 def level_color(level: Optional[str]) -> str:
@@ -259,7 +252,7 @@ def _printer_kpis(printers: list) -> dict:
 def _device_flags(d: dict) -> list[str]:
     """Filterable status flags for one device (drive the dashboard search/KPIs)."""
     flags = []
-    if (d.get("risk_exposure") or 0) >= 50:
+    if band_for_risk_score(d.get("risk_exposure")) == "bad":
         flags.append("at_risk")
     if d.get("worsening_count"):
         flags.append("worsening")
@@ -283,7 +276,7 @@ def _device_flags(d: dict) -> list[str]:
 def _fleet_summary(devices: list) -> dict:
     return {
         "total": len(devices),
-        "at_risk": sum(1 for d in devices if (d.get("risk_exposure") or 0) >= 50),
+        "at_risk": sum(1 for d in devices if band_for_risk_score(d.get("risk_exposure")) == "bad"),
         "worsening": sum(1 for d in devices if d.get("worsening_count")),
         "unknown": sum(1 for d in devices if d.get("unknown_domains")),
         "regressed": sum(1 for d in devices if d.get("regressed_count")),
