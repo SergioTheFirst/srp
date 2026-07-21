@@ -36,6 +36,7 @@ _RFC1918 = (
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
 )
+_LINK_LOCAL_V4 = ipaddress.ip_network("169.254.0.0/16")
 
 # Get-NetAdapter TransmitLinkSpeed "speed unknown" driver sentinels: exact
 # 32-bit all-ones, or anything implausibly large (covers the 64-bit all-ones
@@ -129,6 +130,26 @@ def _is_internal(ip: Optional[str]) -> bool:
     return any(a in net for net in _RFC1918)
 
 
+def _is_own_ipv4(ip: Optional[str]) -> bool:
+    """RFC1918 OR link-local (APIPA): for the adapter's *own* address only.
+
+    Unlike a peer/neighbor/route address, the adapter's own IP legitimately
+    carries a third case ``_is_internal`` deliberately excludes: 169.254.x is
+    never routable and identifies nothing, but ``server/analytics/network_risk.py``
+    reads it as the "DHCP never answered" signal (one of its heaviest single
+    factors) -- silently RFC1918-only filtering this field would kill that
+    detection for zero privacy gain.
+    """
+    if _is_internal(ip):
+        return True
+    if not ip:
+        return False
+    try:
+        return ipaddress.ip_address(ip) in _LINK_LOCAL_V4
+    except ValueError:
+        return False
+
+
 def _is_rfc1918_cidr(cidr: Any) -> bool:
     """True only for an IPv4 network fully contained in an RFC1918 block.
 
@@ -157,8 +178,6 @@ def _clean_strs(value: Any) -> list[str]:
 
 
 def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
-    # The adapter's own ipv4/ipv6/gateway/dns are intentionally NOT privacy-
-    # filtered: this is the machine reporting its own NIC config (spec §4).
     if not isinstance(raw, dict):
         return None
     bps = _i(raw.get("link_bps"))
@@ -166,6 +185,7 @@ def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
         bps = None
     kind = _kind(raw.get("iftype"))
     role, tunnel = _adapter_role(raw.get("name"), raw.get("desc"), kind)
+    gateway = raw.get("gateway")
     return {
         "name": (raw.get("name") or None),
         "desc": (raw.get("desc") or None),
@@ -175,10 +195,10 @@ def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
         "tunnel": tunnel,
         "up": (bool(raw.get("up")) if raw.get("up") is not None else None),
         "link_mbps": (round(bps / 1_000_000, 1) if bps else None),
-        "ipv4": _clean_strs(raw.get("ipv4")),
-        "ipv6": _clean_strs(raw.get("ipv6")),
-        "gateway": (raw.get("gateway") or None),
-        "dns": _clean_strs(raw.get("dns")),
+        "ipv4": [ip for ip in _clean_strs(raw.get("ipv4")) if _is_own_ipv4(ip)],
+        "ipv6": [ip for ip in _clean_strs(raw.get("ipv6")) if _is_internal(ip)],
+        "gateway": (gateway if _is_internal(gateway) else None),
+        "dns": [ip for ip in _clean_strs(raw.get("dns")) if _is_internal(ip)],
         "dhcp": (bool(raw.get("dhcp")) if raw.get("dhcp") is not None else None),
         "ssid": (raw.get("ssid") or None),
         "signal_pct": _i(raw.get("signal_pct")),
@@ -206,6 +226,8 @@ def _parse_connection(raw: Any) -> Optional[dict[str, Any]]:
         return None
     if not _is_internal(raw.get("remote_ip")):  # privacy: only internal peers
         return None
+    if not _is_internal(raw.get("local_ip")):  # privacy: symmetric on our own side
+        return None
     return {
         "local_ip": (raw.get("local_ip") or None),
         "local_port": _i(raw.get("local_port")),
@@ -217,6 +239,8 @@ def _parse_connection(raw: Any) -> Optional[dict[str, Any]]:
 
 def _parse_quality(raw: Any) -> Optional[dict[str, Any]]:
     if not isinstance(raw, dict):
+        return None
+    if not _is_internal(raw.get("target")):  # privacy: only internal ping targets
         return None
     return {
         "target_kind": (raw.get("target_kind") or None),

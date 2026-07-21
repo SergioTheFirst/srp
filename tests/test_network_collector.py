@@ -112,6 +112,40 @@ def test_parse_adapter_numeric_and_kind():
     assert a["dns"] == ["192.168.1.1"]  # empty string dropped
 
 
+def test_parse_adapter_drops_external_ipv4_ipv6_gateway_dns():
+    """P1-5.3: the adapter's own ipv4/ipv6/gateway/dns are no longer exempt from
+    the RFC1918-only privacy contract -- CLAUDE.md's invariant has no carve-out
+    for "it's the machine's own config". ipv6 always empties out here: _is_internal
+    only accepts IPv4-mapped IPv6, same as every other field in this file
+    (neighbors/connections/routes) -- not a new gap introduced by this fix."""
+    a = network._parse_adapter(
+        {
+            "name": "Ethernet",
+            "iftype": 6,
+            "ipv4": ["192.168.1.5", "8.8.8.8"],
+            "ipv6": ["2001:db8::1"],
+            "gateway": "8.8.4.4",
+            "dns": ["192.168.1.1", "1.1.1.1"],
+        }
+    )
+    assert a["ipv4"] == ["192.168.1.5"]
+    assert a["ipv6"] == []
+    assert a["gateway"] is None
+    assert a["dns"] == ["192.168.1.1"]
+
+
+def test_parse_adapter_keeps_apipa_ipv4():
+    """Regression guard (security-review finding on P1-5.3): APIPA (169.254.x)
+    is link-local, never routable/identifying -- privacy-filtering it out of the
+    adapter's own ipv4 would silently kill network_risk.py's APIPA "no DHCP"
+    detection (server/analytics/network_risk.py, one of its heaviest factors)
+    for zero privacy benefit. A public address on the same adapter still drops."""
+    a = network._parse_adapter(
+        {"name": "Ethernet", "iftype": 6, "up": True, "ipv4": ["169.254.10.20", "8.8.8.8"]}
+    )
+    assert a["ipv4"] == ["169.254.10.20"]
+
+
 def test_parse_adapter_wifi_iftype():
     a = network._parse_adapter({"name": "Wi-Fi", "iftype": 71, "up": False})
     assert a["kind"] == "wifi"
@@ -321,6 +355,19 @@ def test_connection_drops_external():
     assert network._parse_connection(raw) is None
 
 
+def test_connection_drops_external_local_ip():
+    """Symmetric with remote_ip: a connection reported with a public local_ip
+    must be dropped too, not just filtered on the remote side (P1-5.2)."""
+    raw = {
+        "local_ip": "8.8.8.8",
+        "local_port": 51000,
+        "remote_ip": "192.168.1.10",
+        "remote_port": 443,
+        "state": "Established",
+    }
+    assert network._parse_connection(raw) is None
+
+
 def test_connection_drops_loopback_and_listen():
     assert (
         network._parse_connection(
@@ -387,6 +434,24 @@ def test_parse_quality_numbers():
         "loss_pct": 0.0,
         "samples": 3,
     }
+
+
+def test_parse_quality_drops_external_target():
+    """Privacy (P1-5.1): a public ping target (e.g. ISP-assigned public DNS)
+    must never leave the agent -- same RFC1918-only contract as every other
+    address field in this file."""
+    assert (
+        network._parse_quality(
+            {
+                "target_kind": "dns",
+                "target": "8.8.8.8",
+                "latency_ms": 12.0,
+                "loss_pct": 0.0,
+                "samples": 3,
+            }
+        )
+        is None
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -542,6 +607,18 @@ def test_internal_filter_ipv6_rfc1918_only():
     assert network._is_internal("fd00::1") is False  # ULA
     assert network._is_internal("2001:db8::1") is False  # documentation
     assert network._is_internal("::1") is False  # loopback
+
+
+def test_is_own_ipv4_allows_link_local_but_not_public():
+    """_is_own_ipv4 widens _is_internal by exactly one case (APIPA) for the
+    adapter's own address -- everything else behaves identically."""
+    assert network._is_own_ipv4("192.168.1.5") is True  # RFC1918
+    assert network._is_own_ipv4("169.254.10.20") is True  # APIPA/link-local
+    assert network._is_own_ipv4("8.8.8.8") is False  # public
+    assert network._is_own_ipv4("203.0.113.5") is False  # TEST-NET-3
+    assert network._is_own_ipv4(None) is False
+    assert network._is_own_ipv4("") is False
+    assert network._is_own_ipv4("not-an-ip") is False
 
 
 def test_neighbor_broadcast_filter_is_mac_based():
