@@ -189,6 +189,39 @@ def test_safe_extract_rejects_unsafe_names(tmp_path, bad_name) -> None:
         safe_extract(zpath, tmp_path / "staging")
 
 
+def test_safe_extract_rejects_oversized_uncompressed_total(tmp_path, monkeypatch) -> None:
+    """P1-8: _MAX_PACKAGE_SIZE only bounds the downloaded (compressed) size --
+    a small, highly-compressible archive could otherwise unpack into far more
+    data than the disk can hold. safe_extract must reject an oversized total
+    declared file_size from ZipInfo metadata alone, BEFORE ever calling
+    extractall or touching the destination directory -- no real gigabytes of
+    data are decompressed to prove this."""
+    zpath = tmp_path / "pkg.zip"
+    zpath.write_bytes(_zip_bytes(_good_members()))
+    dest = tmp_path / "staging"
+
+    class _FakeInfo:
+        def __init__(self, filename: str, file_size: int) -> None:
+            self.filename = filename
+            self.file_size = file_size
+
+    huge = updater_mod._MAX_UNCOMPRESSED_SIZE + 1
+    fake_infos = [_FakeInfo("setup.exe", huge), _FakeInfo("payload/srp-agent.exe", 1)]
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", lambda self: fake_infos)
+    monkeypatch.setattr(
+        zipfile.ZipFile,
+        "extractall",
+        lambda self, *a, **kw: (_ for _ in ()).throw(
+            AssertionError("must not extract before the uncompressed-size cap check")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="объём"):
+        safe_extract(zpath, dest)
+
+    assert not dest.exists()  # nothing was even created, let alone written to
+
+
 def test_safe_extract_requires_setup_exe(tmp_path) -> None:
     zpath = tmp_path / "pkg.zip"
     zpath.write_bytes(_zip_bytes({"payload/srp-agent.exe": b"agent-bytes"}))

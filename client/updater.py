@@ -59,6 +59,11 @@ log = logging.getLogger(__name__)
 
 TASK_NAME = "SRP Agent Update"
 _MAX_PACKAGE_SIZE = 200 * 1024 * 1024  # 200 MiB cap, mirrors the server-side manifest guard
+# zip-bomb guard (P1-8): _MAX_PACKAGE_SIZE only bounds the DOWNLOADED (compressed)
+# size -- a small, highly-compressible archive could otherwise unpack into far more
+# data than the disk can hold. A real agent package (two executables) is nowhere
+# near this; 10x the compressed cap is generous headroom while still bounding the DoS.
+_MAX_UNCOMPRESSED_SIZE = _MAX_PACKAGE_SIZE * 10
 _MAX_ATTEMPTS = 3  # per target version -- stop re-downloading a package that never applies
 _STALE_STAGE_SEC = 900  # 15 min grace period for the update task to finish the restart
 _CHUNK_SIZE = 64 * 1024
@@ -140,15 +145,20 @@ def _check_member_name(name: str) -> None:
 def safe_extract(zip_path: Path, dest: Path) -> None:
     """Extract *zip_path* into *dest*, which is wiped first.
 
-    Every member name is validated BEFORE any file touches disk: absolute
-    paths, drive letters, leading slashes/backslashes and ".." segments are
-    all rejected (split on both "/" and "\\" -- the zip spec stores forward
-    slashes, but a hostile archive can still smuggle a backslash for Windows).
+    Every member name is validated, and the total UNCOMPRESSED size capped,
+    BEFORE any file touches disk: absolute paths, drive letters, leading
+    slashes/backslashes and ".." segments are all rejected (split on both "/"
+    and "\\" -- the zip spec stores forward slashes, but a hostile archive can
+    still smuggle a backslash for Windows); total size is summed from ZipInfo
+    metadata alone, never by actually decompressing anything.
     """
     with zipfile.ZipFile(zip_path) as zf:
-        names = zf.namelist()
-        for name in names:
-            _check_member_name(name)
+        infos = zf.infolist()
+        for info in infos:
+            _check_member_name(info.filename)
+        total_size = sum(info.file_size for info in infos)
+        if total_size > _MAX_UNCOMPRESSED_SIZE:
+            raise ValueError("пакет обновления распаковывается в слишком большой объём данных")
         shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True, exist_ok=True)
         zf.extractall(dest)
