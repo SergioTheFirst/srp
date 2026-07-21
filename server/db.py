@@ -3983,13 +3983,17 @@ def get_pipeline_metrics() -> dict[str, Any]:
         scored: int = score_row[0]
         newest_score_ts: Optional[str] = score_row[1]
 
+        # 40 mirrors server.scoring.score100.band_for_risk_score's "bad" floor (the
+        # single source of truth for this classification) -- raw SQL can't call that
+        # function, so this literal must be kept in sync with it by hand (P1-6 follow-up:
+        # this used to be 50, silently disagreeing with the /fleet page's at_risk count).
         at_risk = conn.execute(
             """
             SELECT COUNT(*) FROM scores s
             JOIN (
               SELECT device_id, MAX(id) AS max_id FROM scores GROUP BY device_id
             ) m ON s.device_id = m.device_id AND s.id = m.max_id
-            WHERE s.risk_exposure >= 50
+            WHERE s.risk_exposure >= 40
             """
         ).fetchone()[0]
 
