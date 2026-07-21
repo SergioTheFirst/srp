@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from server import db
 from server.analytics import health
+from server.scoring import score100
 from server.web import dashboard, health_view
 
 pytestmark = pytest.mark.integration
@@ -85,6 +86,70 @@ def test_band_class_maps_band_vocab_to_css_class() -> None:
     assert dashboard.band_class("bad") == "bad"
     assert dashboard.band_class("unknown") == "na"
     assert dashboard.band_class(None) == "na"
+
+
+# --------------------------------------------------------------------------- #
+# P1-6: health_color/risk_color/at_risk must agree with score100.py's bands --
+# the single source of truth for good/watch/bad thresholds, no independent
+# numeric constants left in dashboard.py.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "value,expected_class",
+    [
+        (None, "na"),
+        (0.0, "good"),
+        (14.9, "good"),
+        (15.0, "warn"),  # band "watch" -> CSS class "warn" (band_class mapping)
+        (39.9, "warn"),
+        (40.0, "bad"),
+        (42.0, "bad"),  # the exact P1-6 symptom value
+        (100.0, "bad"),
+    ],
+)
+def test_risk_color_matches_band_for_risk_score(value, expected_class) -> None:
+    assert dashboard.risk_color(value) == expected_class
+    assert dashboard.risk_color(value) == dashboard.band_class(score100.band_for_risk_score(value))
+
+
+@pytest.mark.parametrize(
+    "value,expected_class",
+    [
+        (None, "na"),
+        (0.0, "bad"),
+        (39.9, "bad"),
+        (40.0, "warn"),  # band "watch" -> CSS class "warn" (band_class mapping)
+        (69.9, "warn"),
+        (70.0, "good"),
+        (75.0, "good"),
+        (100.0, "good"),
+    ],
+)
+def test_health_color_matches_band_for_health_score(value, expected_class) -> None:
+    assert dashboard.health_color(value) == expected_class
+    assert dashboard.health_color(value) == dashboard.band_class(
+        score100.band_for_health_score(value)
+    )
+
+
+@pytest.mark.parametrize(
+    "risk_exposure,expected_at_risk",
+    [
+        (None, False),
+        (14.9, False),
+        (39.9, False),
+        (40.0, True),
+        (42.0, True),  # P1-6: engine already calls this "bad"; old >=50 flag missed it
+        (50.0, True),
+    ],
+)
+def test_device_flags_at_risk_matches_risk_bad_band(risk_exposure, expected_at_risk) -> None:
+    flags = dashboard._device_flags({"risk_exposure": risk_exposure})
+    assert ("at_risk" in flags) is expected_at_risk
+
+
+def test_fleet_summary_at_risk_matches_risk_bad_band() -> None:
+    devices = [{"risk_exposure": 42.0}, {"risk_exposure": 10.0}, {"risk_exposure": None}]
+    assert dashboard._fleet_summary(devices)["at_risk"] == 1
 
 
 # --------------------------------------------------------------------------- #
