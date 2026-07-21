@@ -103,6 +103,28 @@ def test_cycle_idempotent_rerun_does_not_duplicate_links(tmp_path: Path):
     assert len(db.get_net_links()) == 1  # rerun replaces, never duplicates
 
 
+def test_topology_cycle_does_not_revive_status_when_snmp_times_out(tmp_path: Path):
+    """stoperrors P1-4: a device marked "down" by the reachability cycle must stay
+    "down" through a topology cycle where every collector comes back empty (SNMP
+    timeout) -- the topology cycle must assert "up" only when it actually got
+    evidence back, never unconditionally (COALESCE in db.upsert_net_device keeps
+    the existing status when the field is omitted from the upsert dict)."""
+    db.init_db(tmp_path / "srp.db")
+    db.upsert_net_device(_switch())
+    db.set_net_device_status("nd-chassis-sw1", "down")
+    assert db.get_net_device("nd-chassis-sw1")["status"] == "down"
+
+    reconcile.run_topology_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=db.get_net_devices,
+        session_factory=lambda ip, cfg: object(),
+        collect=lambda *a, **k: [],  # SNMP timeout: no LLDP/CDP/FDB evidence
+        collect_wireless_fn=lambda *a, **k: [],
+        collect_med_fn=lambda *a, **k: {},
+    )
+    assert db.get_net_device("nd-chassis-sw1")["status"] == "down"
+
+
 # --- reachability correlation cycle (§1.5/§3.7) ---
 
 _REACH_DEVICES = [
