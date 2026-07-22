@@ -79,6 +79,19 @@ def test_envelope_rejects_bad_msg_type():
         Envelope(device_id="dev-1", msg_type="nonsense", payload={})
 
 
+def test_envelope_device_id_at_max_length_is_valid():
+    env = Envelope(device_id="d" * 256, msg_type="heartbeat", payload={})
+    assert len(env.device_id) == 256
+
+
+def test_envelope_rejects_oversized_device_id():
+    """stoperrors P2-7 defense-in-depth: an oversized device_id could otherwise
+    inflate the rate-limiter's in-memory _device_windows dict
+    (server/ingest_guards.py) with unboundedly long keys."""
+    with pytest.raises(ValueError):
+        Envelope(device_id="d" * 257, msg_type="heartbeat", payload={})
+
+
 # --------------------------------------------------------------------------- #
 # SourceHealth and source_health on Envelope (Plan 2)
 # --------------------------------------------------------------------------- #

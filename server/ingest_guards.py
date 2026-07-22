@@ -32,6 +32,11 @@ import threading
 import time
 from typing import Optional
 
+# Shared opportunistic-trim threshold for both in-memory dicts below (stoperrors
+# P2-7): neither _seen_keys nor _device_windows is ever pruned by a background
+# task, so each is opportunistically trimmed inline once it grows past this size.
+_TRIM_THRESHOLD: int = 50_000
+
 _dedup_lock = threading.Lock()
 _seen_keys: dict[str, float] = {}  # idempotency_key → monotonic time of first receipt
 _DEDUP_TTL_SEC: float = 300.0  # 5 min — wider than any agent retry window
@@ -81,7 +86,7 @@ def mark_seen(key: Optional[str]) -> None:
     now = time.monotonic()
     with _dedup_lock:
         # Opportunistic trim so the dict doesn't grow unbounded.
-        if len(_seen_keys) > 50_000:
+        if len(_seen_keys) > _TRIM_THRESHOLD:
             cutoff = now - _DEDUP_TTL_SEC
             stale = [k for k, t in _seen_keys.items() if t < cutoff]
             for k in stale:
@@ -94,6 +99,15 @@ def check_rate_limit(device_id: str) -> bool:
     now = time.monotonic()
     cutoff = now - _RATE_WINDOW_SEC
     with _rate_lock:
+        # Opportunistic trim so the dict doesn't grow unbounded (mirrors _seen_keys
+        # above): a device that stops sending is never revisited by any other call,
+        # so its entry would otherwise sit here forever (stoperrors P2-7).
+        if len(_device_windows) > _TRIM_THRESHOLD:
+            stale_devices = [
+                d for d, times in _device_windows.items() if not any(t >= cutoff for t in times)
+            ]
+            for d in stale_devices:
+                del _device_windows[d]
         times = [t for t in _device_windows.get(device_id, []) if t >= cutoff]
         if len(times) >= _RATE_MAX_PER_WINDOW:
             _device_windows[device_id] = times
