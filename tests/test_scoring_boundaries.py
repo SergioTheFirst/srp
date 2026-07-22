@@ -12,10 +12,231 @@ monotonicity across three grades, determinism, and clamping to [0, 100].
 
 from __future__ import annotations
 
+import re
+
 import pytest
+from server.scoring.score100 import (
+    _gate_axis,
+    compute_day1_score100,
+    compute_observability_score,
+)
 from server.scoring.scores import compute_day1_scores
 
 pytestmark = pytest.mark.unit
+
+
+# --------------------------------------------------------------------------- #
+# RU/EN split (P2-11): factors/reasons/missing_evidence must be Russian prose;
+# only CLAUDE.md-sanctioned technical terms and machine-value keys (msg_type /
+# domain / lineage identifiers) stay Latin. This exercises the REAL
+# compute_day1_scores / compute_day1_score100 / compute_observability_score
+# output strings -- closing the "untested and unnoticed" gap from P2-11.
+# --------------------------------------------------------------------------- #
+_WORD_RE = re.compile(r"[A-Za-z]+(?:[-_][A-Za-z]+)*")
+
+_ALLOWED_LATIN = {
+    # technical terms kept Latin per CLAUDE.md (RSI/BSOD/SMART/KP41 + siblings)
+    "SMART",
+    "SSD",
+    "HDD",
+    "RSI",
+    "BSOD",
+    "CPU",
+    "RAM",
+    "NIC",
+    "WHEA",
+    "BugCheck",
+    "KP",
+    "Windows",
+    # multiplier/unit symbols kept Latin by established bayesian.py precedent
+    "x",
+    "k",
+    "I",
+    "O",
+    # msg_type values (machine values -- CLAUDE.md keeps these English)
+    "heartbeat",
+    "historical",
+    "inventory",
+    # score100 domain/lineage keys + schema field name (machine values)
+    "storage",
+    "thermal",
+    "boot",
+    "disk_fill",
+    "os_stability",
+    "source_health",
+}
+
+_S100_DOMAINS = ("storage", "disk_fill", "os_stability", "boot", "thermal")
+
+
+def _stray_latin_words(text: str) -> list[str]:
+    """Latin words in *text* that are not on the technical-term/machine-key allowlist."""
+    return [w for w in _WORD_RE.findall(text) if w not in _ALLOWED_LATIN]
+
+
+def _assert_russian_prose(text: str, where: str) -> None:
+    stray = _stray_latin_words(text)
+    assert not stray, f"{where}: stray English word(s) {stray} in {text!r}"
+
+
+def _trust100(states=None, sources=None):
+    """Minimal stored-trust dict (db.get_trust shape) for the 5 score100 domains."""
+    states = states or {}
+    domains = {}
+    for d in _S100_DOMAINS:
+        st = states.get(d, "trusted")
+        domains[d] = {
+            "state": st,
+            "weight": 1.0 if st == "trusted" else 0.0,
+            "contributing": [],
+            "dropped": [],
+            "reason": "",
+        }
+    return {"domains": domains, "sources": sources or {}}
+
+
+def test_scoring_factors_are_russian_with_allowed_tech_terms():
+    """Every hit() factor label across all four day-1 scores must be Russian
+    prose; only CLAUDE.md-sanctioned technical terms stay Latin (P2-11)."""
+    worst = compute_day1_scores(
+        _inv(pending_reboot=True, driver_problem_count=3, bios_release_date="2015-01-01"),
+        _hist(
+            reliability_stability_index=2.0,
+            kernel_power_41_30d=2,
+            dirty_shutdowns_30d=2,
+            bugchecks_30d=2,
+            app_crashes_30d=2,
+            whea_errors_30d=15,
+            avg_boot_ms=95_000,
+            storage=[
+                {
+                    "wear_pct": 85,
+                    "reallocated_sectors": 150,
+                    "power_on_hours": 45_000,
+                    "read_errors_total": 3,
+                    "write_errors_total": 2,
+                }
+            ],
+        ),
+        _hb(
+            cpu_perf_pct=80.0,
+            mem_avail_mb=400,
+            pagefile_pct=90.0,
+            disk_read_sec=0.06,
+            disk_write_sec=0.06,
+            free_space_pct=3.0,
+            nic_errors=5,
+        ),
+    )
+    mid = compute_day1_scores(
+        _inv(bios_release_date="2020-01-01"),
+        _hist(
+            reliability_stability_index=4.0,
+            avg_boot_ms=65_000,
+            whea_errors_30d=3,
+            storage=[{"reallocated_sectors": 5, "power_on_hours": 30_000}],
+        ),
+        _hb(
+            mem_avail_mb=900,
+            pagefile_pct=60.0,
+            disk_read_sec=0.03,
+            disk_write_sec=0.03,
+            free_space_pct=8.0,
+        ),
+    )
+    mild = compute_day1_scores(
+        _inv(bios_release_date="2023-01-01"),
+        _hist(reliability_stability_index=6.0, avg_boot_ms=42_000),
+        _hb(mem_avail_mb=1500),
+    )
+    checked = 0
+    for day1 in (worst, mid, mild):
+        for axis, factors in day1["factors"].items():
+            for f in factors:
+                _assert_russian_prose(f["label"], where=f"scores.py factor[{axis}]")
+                checked += 1
+    assert checked >= 25, "fixtures did not exercise the expected number of factor branches"
+
+
+def test_score100_reason_and_missing_evidence_are_russian():
+    """Every non-empty reason / missing_evidence / factor label produced by the
+    Score100 gating envelope must be Russian prose (P2-11)."""
+    day1 = compute_day1_scores(_inv(), _hist(), _hb())
+    scenarios = [
+        # 1. untrusted identity -> withheld on every axis
+        compute_day1_score100(
+            day1, _inv(), _hist(), _hb(), trust=_trust100(), device_trust="untrusted"
+        ),
+        # 2. no telemetry at all -> presence_ok=False on every axis
+        compute_day1_score100(day1, None, None, None, trust=None),
+        # 3. old agent (trust not evaluated) -> "source_health отсутствует" branch
+        compute_day1_score100(day1, _inv(), _hist(), _hb(), trust=None),
+        # 4. required domain unknown (reliability/wear) + optional unknown
+        #    (performance/risk_exposure), from one shared trust dict
+        compute_day1_score100(
+            day1,
+            _inv(),
+            _hist(),
+            _hb(),
+            trust=_trust100(
+                {"os_stability": "unknown", "storage": "unknown", "thermal": "unknown"}
+            ),
+        ),
+    ]
+    for s in scenarios:
+        for axis in ("performance", "reliability", "wear", "risk_exposure"):
+            ax = s[axis]
+            if ax.reason:
+                _assert_russian_prose(ax.reason, where=f"score100 reason[{axis}]")
+            for m in ax.missing_evidence:
+                _assert_russian_prose(m, where=f"score100 missing_evidence[{axis}]")
+            for f in ax.factors:
+                _assert_russian_prose(f["label"], where=f"score100 factor[{axis}]")
+
+    # 5. required-domain-unknown on a RISK axis: unreachable via the public
+    #    compute_day1_score100 wiring today (every is_risk=True axis currently
+    #    has required=[] -- P2-12 territory, out of scope here) so _gate_axis
+    #    is exercised directly to pin this string's translation too.
+    risk_required_unknown = _gate_axis(
+        numeric=50.0,
+        direction="higher_is_worse",
+        factors=[],
+        is_risk=True,
+        device_trust="ok",
+        trust=_trust100({"storage": "unknown"}),
+        presence_ok=True,
+        presence_missing=[],
+        required=["storage"],
+        optional=[],
+    )
+    _assert_russian_prose(
+        risk_required_unknown.reason, where="score100 reason[risk_required_unknown]"
+    )
+    for m in risk_required_unknown.missing_evidence:
+        _assert_russian_prose(m, where="score100 missing_evidence[risk_required_unknown]")
+
+
+def test_observability_reason_and_missing_evidence_are_russian():
+    """compute_observability_score's own reason/missing_evidence/factors must
+    be Russian prose across every branch (P2-11)."""
+    no_source_health = compute_observability_score(
+        None, {"has_source_health": False, "device_trust": "ok", "clock_drift": False}
+    )
+    no_applicable_domains = compute_observability_score(
+        _trust100(dict.fromkeys(_S100_DOMAINS, "not_applicable")),
+        {"has_source_health": True, "device_trust": "ok", "clock_drift": False},
+    )
+    degraded_untrusted = compute_observability_score(
+        _trust100({"thermal": "unknown"}, sources={"storage": {"regressed": True}}),
+        {"has_source_health": True, "device_trust": "untrusted", "clock_drift": True},
+    )
+    for s in (no_source_health, no_applicable_domains, degraded_untrusted):
+        if s.reason:
+            _assert_russian_prose(s.reason, where="observability reason")
+        for m in s.missing_evidence:
+            _assert_russian_prose(m, where="observability missing_evidence")
+        for f in s.factors:
+            _assert_russian_prose(f["label"], where="observability factor")
 
 
 # --------------------------------------------------------------------------- #

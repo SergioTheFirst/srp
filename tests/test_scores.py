@@ -60,9 +60,9 @@ def test_degrading_machine_explains_every_score():
 
 
 def test_low_free_space_drives_risk_exposure():
-    s = _scores(degrading)  # free_space_pct = 6 -> "cascade risk"
+    s = _scores(degrading)  # free_space_pct = 6 -> moderate free-space tier
     labels = " ".join(f["label"] for f in s["factors"]["risk_exposure"])
-    assert "free" in labels.lower()
+    assert "свободно" in labels.lower()
 
 
 # --------------------------------------------------------------------------- #

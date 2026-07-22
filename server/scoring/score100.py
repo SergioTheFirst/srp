@@ -106,7 +106,7 @@ def _domain_state(domains: dict[str, Any], name: str) -> Optional[str]:
     return d.get("state") if isinstance(d, dict) else None
 
 
-_UNTRUSTED_REASON = "device identity untrusted (contract §7)"
+_UNTRUSTED_REASON = "идентичность устройства не подтверждена (контракт §7)"
 
 # >=2 blind optional risk domains -> low confidence: a single optional blind spot
 # only mildly understates risk, two or more is material (contract §13).
@@ -144,7 +144,7 @@ def _gate_axis(
             "unknown",
             "unknown",
             factors=factors,
-            missing_evidence=["identity trust failed"],
+            missing_evidence=["идентичность устройства не подтверждена"],
             source_lineage={"identity": "untrusted"},
             reason=_UNTRUSTED_REASON,
         )
@@ -159,7 +159,7 @@ def _gate_axis(
             factors=factors,
             missing_evidence=list(presence_missing),
             source_lineage={},
-            reason="no telemetry for this axis",
+            reason="нет телеметрии для этого показателя",
         )
 
     # 3. Trust not evaluated (old agent, no source_health) -> keep number, low conf.
@@ -170,9 +170,9 @@ def _gate_axis(
             band_of(numeric),
             "low",
             factors=factors,
-            missing_evidence=["source_health missing"],
+            missing_evidence=["source_health отсутствует"],
             source_lineage={},
-            reason="agent did not report source health",
+            reason="агент не передал source_health",
         )
 
     # 4. Trust present -> per-domain gating.
@@ -184,7 +184,7 @@ def _gate_axis(
     }
     required_unknown = [n for n in required if _domain_state(domains, n) == "unknown"]
     optional_unknown = [n for n in optional if _domain_state(domains, n) == "unknown"]
-    missing = [f"{n} unavailable" for n in (required_unknown + optional_unknown)]
+    missing = [f"{n} недоступен" for n in (required_unknown + optional_unknown)]
 
     if required_unknown:
         if is_risk:
@@ -196,7 +196,7 @@ def _gate_axis(
                 factors=factors,
                 missing_evidence=missing,
                 source_lineage=lineage,
-                reason="required domain blind; risk may be understated",
+                reason="обязательный домен не виден; риск может быть занижен",
             )
         return make_score100(
             None,
@@ -206,7 +206,7 @@ def _gate_axis(
             factors=factors,
             missing_evidence=missing,
             source_lineage=lineage,
-            reason="required domain unknown",
+            reason="обязательный домен неизвестен",
         )
 
     if is_risk and len(optional_unknown) >= _RISK_LOW_CONF_OPTIONAL_UNKNOWN:
@@ -249,10 +249,10 @@ def compute_observability_score(
             direction,
             band_for_health_score(20.0),
             "low",
-            factors=[{"label": "agent reports no per-source health", "delta": -80.0}],
-            missing_evidence=["source_health missing"],
+            factors=[{"label": "агент не передаёт данные source_health", "delta": -80.0}],
+            missing_evidence=["source_health отсутствует"],
             source_lineage={},
-            reason="no source_health -> coverage cannot be judged",
+            reason="нет source_health -> покрытие нельзя оценить",
         )
 
     domains = trust.get("domains", {})
@@ -271,27 +271,29 @@ def compute_observability_score(
             direction,
             "unknown",
             "unknown",
-            missing_evidence=["no applicable domains to assess coverage"],
-            reason="no applicable domains",
+            missing_evidence=["нет применимых доменов для оценки покрытия"],
+            reason="нет применимых доменов",
         )
     unknown = [n for n, d in applicable.items() if d.get("state") == "unknown"]
     trusted = total - len(unknown)
     value = trusted / total * 100.0
 
     factors: list[Factor] = [
-        {"label": f"domain coverage {trusted}/{total}", "delta": round(value, 1)}
+        {"label": f"покрытие доменов {trusted}/{total}", "delta": round(value, 1)}
     ]
-    missing = [f"{n} unknown" for n in unknown]
+    missing = [f"{n} неизвестен" for n in unknown]
 
     regressed = sorted(n for n, s in sources.items() if isinstance(s, dict) and s.get("regressed"))
     if regressed:
         penalty = min(len(regressed) * 10.0, 30.0)
         value -= penalty
-        factors.append({"label": f"{len(regressed)} source(s) regressed", "delta": -penalty})
-        missing += [f"{n} regressed" for n in regressed]
+        factors.append(
+            {"label": f"деградировавших источников: {len(regressed)}", "delta": -penalty}
+        )
+        missing += [f"{n} деградировал" for n in regressed]
     if clock_drift:
         value -= 10.0
-        factors.append({"label": "clock drift", "delta": -10.0})
+        factors.append({"label": "рассинхронизация часов", "delta": -10.0})
     untrusted = device_trust == "untrusted"
     if untrusted:
         # Observability PENALISES untrusted identity (clamp to "bad") rather than
@@ -299,7 +301,7 @@ def compute_observability_score(
         # telemetry can't be trusted -- a None would hide that. But we are not
         # confident in anything from an untrusted device, so confidence drops to low.
         value = min(value, 10.0)
-        missing.append("identity trust failed")
+        missing.append("идентичность устройства не подтверждена")
 
     value = max(0.0, min(100.0, value))
     confidence: ScoreConfidence
@@ -317,7 +319,11 @@ def compute_observability_score(
         factors=factors,
         missing_evidence=missing,
         source_lineage={n: {"state": d.get("state")} for n, d in domains.items()},
-        reason="identity untrusted -> telemetry quality cannot be assured" if untrusted else "",
+        reason=(
+            "идентичность не подтверждена -> качество телеметрии не гарантировано"
+            if untrusted
+            else ""
+        ),
     )
 
 
@@ -340,7 +346,7 @@ def compute_day1_score100(
         device_trust=device_trust,
         trust=trust,
         presence_ok=heartbeat is not None,
-        presence_missing=["heartbeat (live vitals) missing"],
+        presence_missing=["heartbeat (текущие показатели) отсутствует"],
         required=[],
         optional=["thermal", "boot"],
     )
@@ -352,7 +358,7 @@ def compute_day1_score100(
         device_trust=device_trust,
         trust=trust,
         presence_ok=historical is not None,
-        presence_missing=["historical (stability history) missing"],
+        presence_missing=["historical (история стабильности) отсутствует"],
         required=["os_stability"],
         optional=[],
     )
@@ -364,7 +370,7 @@ def compute_day1_score100(
         device_trust=device_trust,
         trust=trust,
         presence_ok=(historical is not None or inventory is not None),
-        presence_missing=["historical/inventory (wear evidence) missing"],
+        presence_missing=["historical/inventory (данные об износе) отсутствует"],
         required=["storage"],
         optional=[],
     )
@@ -376,7 +382,7 @@ def compute_day1_score100(
         device_trust=device_trust,
         trust=trust,
         presence_ok=(historical is not None or heartbeat is not None),
-        presence_missing=["historical/heartbeat (risk evidence) missing"],
+        presence_missing=["historical/heartbeat (данные о риске) отсутствует"],
         required=[],
         optional=["disk_fill", "storage", "os_stability", "thermal"],
     )
