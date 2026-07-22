@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS device_source_trust (
   semantic_status   TEXT,
   reason            TEXT,
   ts                TEXT,
+  evidence_seen_at  TEXT,
   PRIMARY KEY (device_id, source)
 );
 CREATE TABLE IF NOT EXISTS print_jobs (
@@ -591,6 +592,10 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("a_port", "TEXT"),
         ("b_port", "TEXT"),
     ),
+    # P2-2: server-stamped "last real evidence" clock, distinct from the client-
+    # controlled ts -- the periodic staleness re-eval job (server/trust/staleness.py)
+    # computes age from this, never from ts (W0.2: never trust the client clock).
+    "device_source_trust": (("evidence_seen_at", "TEXT"),),
 }
 _BACKFILL: dict[str, str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
@@ -601,6 +606,11 @@ _BACKFILL: dict[str, str] = {
     "devices": "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL",
     # Pre-fallback rows could only have come from the Event 307 collector.
     "print_jobs": "UPDATE print_jobs SET source = 'events' WHERE source IS NULL",
+    # Same best-effort idea as the W0.2 backfills above: a legacy row is re-stamped
+    # with the real server clock on its very next ingest anyway.
+    "device_source_trust": (
+        "UPDATE device_source_trust SET evidence_seen_at = ts WHERE evidence_seen_at IS NULL"
+    ),
 }
 
 
@@ -3904,23 +3914,44 @@ def upsert_source_trust(
     semantic_status: str,
     reason: str,
     ts: str,
+    evidence_seen_at: str,
 ) -> None:
-    """Insert or replace the per-source trust row for a (device, source) pair."""
+    """Insert or replace the per-source trust row for a (device, source) pair.
+
+    *evidence_seen_at* is the SERVER clock at real ingest (P2-2) -- this is the
+    ONLY write path that may advance it. The periodic staleness re-eval job
+    (server/trust/staleness.py) writes via apply_source_staleness() instead,
+    which has no evidence_seen_at parameter at all: it cannot revive this clock,
+    so a source that has actually gone silent cannot be kept perpetually fresh
+    by its own staleness re-evaluation (the exact P1-4 trap, closed structurally).
+    """
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO device_source_trust
-              (device_id, source, state, weight, collector_status, semantic_status, reason, ts)
-            VALUES (?,?,?,?,?,?,?,?)
+              (device_id, source, state, weight, collector_status, semantic_status, reason, ts,
+               evidence_seen_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id, source) DO UPDATE SET
               state            = excluded.state,
               weight           = excluded.weight,
               collector_status = excluded.collector_status,
               semantic_status  = excluded.semantic_status,
               reason           = excluded.reason,
-              ts               = excluded.ts
+              ts               = excluded.ts,
+              evidence_seen_at = excluded.evidence_seen_at
             """,
-            (device_id, source, state, weight, collector_status, semantic_status, reason, ts),
+            (
+                device_id,
+                source,
+                state,
+                weight,
+                collector_status,
+                semantic_status,
+                reason,
+                ts,
+                evidence_seen_at,
+            ),
         )
 
 

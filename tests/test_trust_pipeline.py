@@ -10,6 +10,9 @@ across message types.
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 from tests.conftest import healthy
 
@@ -159,3 +162,97 @@ def test_unknown_source_and_payload_key_are_ignored_not_fatal(client):
     assert trust["domains"]["storage"]["state"] == "trusted"
     assert trust["domains"]["os_stability"]["state"] == "trusted"
     assert trust["domains"]["boot"]["state"] == "trusted"
+
+
+# --------------------------------------------------------------------------- #
+# P2-2 Ch1: evidence_seen_at -- the server-stamped clock the staleness re-eval
+# job (Ch2/Ch3) will compute source age from, never the client-controlled ts.
+# --------------------------------------------------------------------------- #
+def test_evidence_seen_at_is_server_stamped_not_client_ts(client):
+    from server import db
+
+    sh = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
+    env = _env("dev-evid", "historical", healthy("historical"), sh)
+    # A client ts far in the past: if evidence_seen_at ever mirrored ts instead
+    # of the server clock, it would be trivially forgeable / stale-forever.
+    env["ts"] = "2000-01-01T00:00:00+00:00"
+    resp = client.post("/api/v1/ingest", json=env)
+    assert resp.status_code == 200, resp.text
+
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT ts, evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-evid", "storage_reliability"),
+        ).fetchone()
+    assert row["ts"] == "2000-01-01T00:00:00+00:00"  # client ts preserved as-is elsewhere
+    assert row["evidence_seen_at"] is not None
+    assert row["evidence_seen_at"] != row["ts"]  # server-stamped, not the client's clock
+    assert not row["evidence_seen_at"].startswith("2000-01-01")
+
+
+def test_evidence_seen_at_advances_on_a_real_re_ingest(client):
+    """A genuine second envelope for the same source moves evidence_seen_at
+    forward -- contrast with the periodic staleness job (Ch2/Ch3), which must
+    NEVER be able to do this (the P1-4-style reset trap)."""
+    from server import db
+
+    sh = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-evid2", "historical", healthy("historical"), sh))
+    with db._connect() as conn:
+        first = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-evid2", "storage_reliability"),
+        ).fetchone()["evidence_seen_at"]
+
+    client.post("/api/v1/ingest", json=_env("dev-evid2", "historical", healthy("historical"), sh))
+    with db._connect() as conn:
+        second = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-evid2", "storage_reliability"),
+        ).fetchone()["evidence_seen_at"]
+
+    assert second >= first  # a real re-ingest is allowed to advance the clock
+
+
+def test_legacy_db_migrates_evidence_seen_at_column(tmp_path: Path) -> None:
+    from server import db
+
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    con = sqlite3.connect(str(p))
+    # Simulate a pre-P2-2 DB: rebuild device_source_trust without the new column
+    # (same technique as test_netdisco_db_p7.py's Ф7-column migration tests).
+    con.executescript(
+        """
+        CREATE TABLE legacy_dst AS SELECT
+          device_id, source, state, weight, collector_status, semantic_status, reason, ts
+          FROM device_source_trust;
+        DROP TABLE device_source_trust;
+        CREATE TABLE device_source_trust (
+          device_id TEXT, source TEXT, state TEXT, weight REAL,
+          collector_status TEXT, semantic_status TEXT, reason TEXT, ts TEXT,
+          PRIMARY KEY (device_id, source));
+        INSERT INTO device_source_trust SELECT * FROM legacy_dst;
+        DROP TABLE legacy_dst;
+        INSERT INTO device_source_trust
+          (device_id, source, state, weight, collector_status, semantic_status, reason, ts)
+        VALUES ('dev-legacy-row', 'storage_reliability', 'ok', 1.0, 'ok', 'plausible', '',
+                '2020-01-01T00:00:00+00:00');
+        """
+    )
+    con.commit()
+    con.close()
+    cols = {r[1] for r in sqlite3.connect(str(p)).execute("PRAGMA table_info(device_source_trust)")}
+    assert "evidence_seen_at" not in cols
+
+    db.init_db(p)  # re-init migrates the legacy DB
+
+    con = sqlite3.connect(str(p))
+    con.row_factory = sqlite3.Row
+    cols = {r[1] for r in con.execute("PRAGMA table_info(device_source_trust)")}
+    assert "evidence_seen_at" in cols
+    row = con.execute(
+        "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=?",
+        ("dev-legacy-row",),
+    ).fetchone()
+    assert row["evidence_seen_at"] == "2020-01-01T00:00:00+00:00"  # backfilled from legacy ts
