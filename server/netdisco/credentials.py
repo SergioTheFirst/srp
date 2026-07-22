@@ -23,12 +23,23 @@ import json
 import logging
 import os
 import sys
+import threading
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 _log = logging.getLogger("srp.netdisco")
+
+# Serializes the read-modify-write in set_community/set_secret (stoperrors
+# P2-5): two concurrent calls could otherwise both read the same on-disk
+# snapshot, and whichever wrote back last silently dropped the other's change.
+# Module-level (not per-instance): default_store() builds a fresh
+# CredentialStore per call (scan.py/scheduler.py/reconcile.py/adapters/*), so an
+# instance lock would not serialize the concurrent callers that actually share
+# the same underlying file -- mirrors the module-level _dedup_lock/_rate_lock
+# pattern in server/ingest_guards.py.
+_write_lock = threading.Lock()
 
 # DPAPI flag: protect under the machine key so the SYSTEM-run service (not a
 # specific interactive user) can decrypt.
@@ -156,18 +167,21 @@ class CredentialStore:
         if not self._available:
             raise RuntimeError("DPAPI unavailable: refusing to store a community unencrypted")
         blob = self._protect(community.encode("utf-8"))
-        data = self._load()
-        communities = data.get("communities")
-        if not isinstance(communities, dict):
-            communities = {}
-        communities[name] = base64.b64encode(blob).decode("ascii")
-        data["communities"] = communities
-        # Atomic write: a power-cut mid-write must never leave a torn store that
-        # silently parses empty and drops the secret. Same-volume replace is
-        # atomic on Windows NTFS.
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        os.replace(tmp, self._path)
+        with _write_lock:
+            data = self._load()
+            communities = data.get("communities")
+            if not isinstance(communities, dict):
+                communities = {}
+            communities[name] = base64.b64encode(blob).decode("ascii")
+            data["communities"] = communities
+            # Atomic write: a power-cut mid-write must never leave a torn store
+            # that silently parses empty and drops the secret. Same-volume
+            # replace is atomic on Windows NTFS. The lock (not just the atomic
+            # replace) is what stops two concurrent callers from each reading
+            # the same pre-write snapshot and one clobbering the other's change.
+            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, self._path)
 
     def get_community(self, name: str) -> Optional[str]:
         if not self._available:
@@ -190,15 +204,16 @@ class CredentialStore:
         if not self._available:
             raise RuntimeError("DPAPI unavailable: refusing to store a secret unencrypted")
         blob = self._protect(secret.encode("utf-8"))
-        data = self._load()
-        secrets = data.get("secrets")
-        if not isinstance(secrets, dict):
-            secrets = {}
-        secrets[name] = base64.b64encode(blob).decode("ascii")
-        data["secrets"] = secrets
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        os.replace(tmp, self._path)
+        with _write_lock:
+            data = self._load()
+            secrets = data.get("secrets")
+            if not isinstance(secrets, dict):
+                secrets = {}
+            secrets[name] = base64.b64encode(blob).decode("ascii")
+            data["secrets"] = secrets
+            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, self._path)
 
     def get_secret(self, name: str) -> Optional[str]:
         """The decrypted adapter secret, or ``None`` (fail-closed): a missing key,
