@@ -539,3 +539,47 @@ def test_early_events_with_damage_events_does_not_fire():
     chain = _FakeChain(counts={"early": 2, "damage": 1})
     s = compute_storage_risk(_hist([_disk(nvme_media_errors=1)]), None, chain=chain)
     assert "early_events" not in _coords(s)["flags"]
+
+
+# --------------------------------------------------------------------------- #
+# Temperature rule confidence stability (P2-13): a transient spike must not
+# claim the same confidence as a genuinely sustained high-temperature pattern.
+# --------------------------------------------------------------------------- #
+
+
+def test_temp_spike_among_normal_readings_is_not_high_confidence():
+    """A single 71C reading with mostly-normal (65C) history for THIS disk must
+    not claim 'high' confidence -- the median of its own recent readings stays
+    well under 70, so this is a one-off spike, not a sustained problem."""
+    series = [
+        _series_row(4, temperature_c=65),
+        _series_row(3, temperature_c=65),
+        _series_row(2, temperature_c=65),
+        _series_row(1, temperature_c=71),
+    ]
+    s = compute_storage_risk(_hist([_disk(temperature_c=71)]), None, disk_series=series)
+    assert s.value == 15.0  # legacy temp>70 rule still fires, value untouched (T2.4 pin)
+    assert s.confidence == "medium"
+
+
+def test_temp_sustained_high_across_window_keeps_high_confidence():
+    """Must not over-correct: a genuinely sustained high temperature (median of
+    the disk's own recent readings also > 70) keeps 'high' confidence."""
+    series = [
+        _series_row(4, temperature_c=72),
+        _series_row(3, temperature_c=74),
+        _series_row(2, temperature_c=73),
+        _series_row(1, temperature_c=71),
+    ]
+    s = compute_storage_risk(_hist([_disk(temperature_c=71)]), None, disk_series=series)
+    assert s.value == 15.0
+    assert s.confidence == "high"
+
+
+def test_temp_over_70_without_disk_series_is_not_high_confidence():
+    """No per-disk history at all -- we cannot confirm the reading is
+    sustained, so this must not default to 'high' (mirrors disk_fill.py's
+    n_samples == 0 case: absence of evidence is never treated as confirmation)."""
+    s = compute_storage_risk(_hist([_disk(temperature_c=75)]), None)
+    assert s.value == 15.0
+    assert s.confidence == "medium"
