@@ -75,15 +75,20 @@ def _enrich_med_subtypes(
     dev_ev: List[Any],
     med: dict[int, str],
     known_nids: set,
-    upsert: Callable[..., None],
-    now: Optional[str],
+    fill_identity: Callable[..., None],
 ) -> None:
     """Ф7 T3: set a neighbour's subtype (phone/AP) from this switch's LLDP-MED advert.
 
     A port's MED device-class is matched to the LLDP neighbour seen on the same local
     port; the subtype is written ONLY when that neighbour is already a known device,
-    so a neighbour advertisement never fabricates a phantom MAC-less node. The upsert
-    COALESCE-preserves, so this never demotes a richer record."""
+    so a neighbour advertisement never fabricates a phantom MAC-less node.
+    fill_net_device_identity is fill-empty-only (stored subtype wins via
+    COALESCE(subtype, new)) -- a lower-priority LLDP-MED classification can only
+    fill an empty subtype, never demote a richer one a higher-priority source
+    already set (P2-4 stoperrors: this used to call upsert_net_device, whose
+    COALESCE(excluded.subtype, subtype) is new-wins whenever the new value is
+    non-null -- the opposite of what this docstring incorrectly used to claim,
+    and the actual source of the overwrite bug)."""
     if not med:
         return
     for ev in dev_ev:
@@ -91,7 +96,7 @@ def _enrich_med_subtypes(
             continue
         neighbor = node_id(ev.b)
         if neighbor in known_nids:
-            upsert({"device_nid": neighbor, "subtype": med[ev.local_if]}, now)
+            fill_identity(neighbor, subtype=med[ev.local_if])
 
 
 def _link_row(link: ResolvedLink) -> dict[str, Any]:
@@ -146,6 +151,7 @@ def run_topology_cycle(
     replace_links: Callable[..., None] = db.replace_net_links,
     store_snapshot: Callable[..., None] = db.store_topology_snapshot,
     upsert: Callable[..., None] = db.upsert_net_device,
+    fill_identity: Callable[..., None] = db.fill_net_device_identity,
     get_prev_snapshot: Callable[[], Optional[dict]] = db.get_latest_topology_snapshot,
     store_change: Callable[..., None] = db.store_net_change,
     set_status: Callable[[str, str], None] = db.set_net_device_status,
@@ -182,7 +188,7 @@ def run_topology_cycle(
             wireless_ev = collect_wireless_fn(session, sys_object_id=dev.get("sys_object_id"))
             evidence.extend(wireless_ev)
             _enrich_med_subtypes(
-                dev_ev, collect_med_fn(netdev.nid, session), known_nids, upsert, now
+                dev_ev, collect_med_fn(netdev.nid, session), known_nids, fill_identity
             )
             probed_nids.add(netdev.nid)
             probed += 1

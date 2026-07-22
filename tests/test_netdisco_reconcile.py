@@ -15,7 +15,7 @@ import server.db as db
 from server.analytics.oui import normalize_mac
 from server.netdisco import reconcile
 from server.netdisco.config import NetdiscoConfig
-from server.netdisco.evidence import HIGH, SOURCE_FDB_EDGE, LinkEvidence
+from server.netdisco.evidence import HIGH, SOURCE_FDB_EDGE, SOURCE_LLDP, LinkEvidence
 
 HOST_AA = normalize_mac("00:00:00:00:00:aa")
 
@@ -123,6 +123,35 @@ def test_topology_cycle_does_not_revive_status_when_snmp_times_out(tmp_path: Pat
         collect_med_fn=lambda *a, **k: {},
     )
     assert db.get_net_device("nd-chassis-sw1")["status"] == "down"
+
+
+def test_topology_cycle_med_subtype_does_not_demote_a_richer_stored_subtype(tmp_path: Path):
+    """stoperrors P2-4: a neighbour's subtype already set by a higher-priority
+    source (e.g. a passive banner confirming "printer") must not be overwritten
+    by a lower-priority LLDP-MED classification claiming something else. The
+    subtype write used to go through upsert_net_device, whose COALESCE is
+    new-wins whenever the new value is non-null -- fixed to route through
+    fill_net_device_identity (fill-empty-only, stored subtype wins)."""
+    db.init_db(tmp_path / "srp.db")
+    switch = _switch()
+    db.upsert_net_device(switch)
+    neighbor_mac = "00:11:22:33:44:55"
+    neighbor_nid = "nd-mac-" + normalize_mac(neighbor_mac)
+    db.upsert_net_device({"device_nid": neighbor_nid, "mac": neighbor_mac, "dev_type": "endpoint"})
+    db.fill_net_device_identity(neighbor_nid, subtype="printer")  # already set by a richer source
+    assert db.get_net_device(neighbor_nid)["subtype"] == "printer"
+
+    lldp_ev = LinkEvidence(switch["device_nid"], normalize_mac(neighbor_mac), SOURCE_LLDP, HIGH, 3)
+    reconcile.run_topology_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=db.get_net_devices,
+        session_factory=lambda ip, cfg: object(),
+        collect=lambda netdev, *a, **k: [lldp_ev] if netdev.nid == switch["device_nid"] else [],
+        collect_wireless_fn=lambda *a, **k: [],
+        collect_med_fn=lambda local, session: {3: "phone"},  # lower-priority classification
+    )
+
+    assert db.get_net_device(neighbor_nid)["subtype"] == "printer"  # not demoted to "phone"
 
 
 # --- reachability correlation cycle (§1.5/§3.7) ---

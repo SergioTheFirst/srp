@@ -81,7 +81,7 @@ def test_topology_cycle_sets_lldp_med_subtype_on_known_neighbor():
         "last_seen": "2026-06-27T00:00:00+00:00",
     }
     devices = [switch, phone]
-    upserts: list = []
+    fills: list = []
 
     lldp_ev = LinkEvidence(
         a="nd-mac-sw", b=normalize_mac(phone_mac), source=SOURCE_LLDP, confidence=HIGH, local_if=3
@@ -97,16 +97,17 @@ def test_topology_cycle_sets_lldp_med_subtype_on_known_neighbor():
         collect_med_fn=lambda local, session: {3: "phone"},
         replace_links=lambda *a, **k: None,
         store_snapshot=lambda *a, **k: None,
-        upsert=lambda d, now=None: upserts.append(d),
+        upsert=lambda d, now=None: None,
+        fill_identity=lambda device_nid, **kw: fills.append({"device_nid": device_nid, **kw}),
         get_prev_snapshot=lambda: None,
         store_change=lambda *a, **k: None,
         set_status=lambda *a, **k: None,
         now="2026-06-27T01:00:00+00:00",
     )
-    subtype_upserts = [
-        u for u in upserts if u.get("subtype") == "phone" and u["device_nid"] == phone_nid
+    subtype_fills = [
+        f for f in fills if f.get("subtype") == "phone" and f["device_nid"] == phone_nid
     ]
-    assert len(subtype_upserts) == 1
+    assert len(subtype_fills) == 1
 
 
 def test_topology_cycle_skips_med_subtype_for_unknown_neighbor():
@@ -120,7 +121,7 @@ def test_topology_cycle_skips_med_subtype_for_unknown_neighbor():
         "sys_object_id": None,
         "last_seen": "2026-06-27T00:00:00+00:00",
     }
-    upserts: list = []
+    fills: list = []
     lldp_ev = LinkEvidence(
         a="nd-mac-sw",
         b=normalize_mac("00:11:22:33:44:55"),
@@ -138,10 +139,11 @@ def test_topology_cycle_skips_med_subtype_for_unknown_neighbor():
         collect_med_fn=lambda local, session: {3: "phone"},
         replace_links=lambda *a, **k: None,
         store_snapshot=lambda *a, **k: None,
-        upsert=lambda d, now=None: upserts.append(d),
+        upsert=lambda d, now=None: None,
+        fill_identity=lambda device_nid, **kw: fills.append({"device_nid": device_nid, **kw}),
         get_prev_snapshot=lambda: None,
         store_change=lambda *a, **k: None,
         set_status=lambda *a, **k: None,
         now="2026-06-27T01:00:00+00:00",
     )
-    assert not any(u.get("subtype") for u in upserts)
+    assert not fills  # no phantom fill for a neighbour that isn't a known device
