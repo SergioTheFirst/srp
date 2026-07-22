@@ -325,6 +325,23 @@ def test_oversized_body_returns_413(tmp_path):
         assert r.status_code == 413
 
 
+@pytest.mark.integration
+def test_malformed_content_length_returns_413(tmp_path):
+    """stoperrors P2-10: a non-numeric Content-Length header must be rejected
+    with 413, not allowed to bubble up as an unhandled ValueError → 500."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    env = envelope("malformed-dev", "heartbeat", healthy("heartbeat"))
+    with TestClient(_app(tmp_path)) as c:
+        r = c.post(
+            "/api/v1/ingest",
+            json=env,
+            headers={"Content-Length": "abc"},  # non-numeric, should fail parsing
+        )
+        assert r.status_code == 413
+
+
 # --------------------------------------------------------------------------- #
 # stoperrors P2-9: chunked (no Content-Length) ingest body must not be fully
 # buffered before the size guard runs.
