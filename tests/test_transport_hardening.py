@@ -17,6 +17,8 @@ Integration tests (FastAPI TestClient):
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from server.config import ServerConfig
@@ -321,3 +323,100 @@ def test_oversized_body_returns_413(tmp_path):
             headers={"Content-Type": "application/json"},
         )
         assert r.status_code == 413
+
+
+# --------------------------------------------------------------------------- #
+# stoperrors P2-9: chunked (no Content-Length) ingest body must not be fully
+# buffered before the size guard runs.
+# --------------------------------------------------------------------------- #
+
+
+def _chunked_receive(chunk: bytes, count: int):
+    """Fake ASGI receive() yielding `count` copies of `chunk` as separate
+    http.request messages (more_body=True until the last), simulating a
+    Transfer-Encoding: chunked body with unknown total length. Returns the
+    callable plus a call counter so tests can see how many chunks the guard
+    actually pulled before giving up."""
+    calls = {"n": 0}
+
+    async def receive():
+        i = calls["n"]
+        calls["n"] += 1
+        if i >= count:  # defensive: never actually hit once the guard aborts early
+            return {"type": "http.disconnect"}
+        return {"type": "http.request", "body": chunk, "more_body": i < count - 1}
+
+    return receive, calls
+
+
+def test_chunked_oversized_body_aborts_before_full_buffering():
+    """No Content-Length header (chunked transfer) + body over the limit: the
+    guard must stop pulling chunks once the running total crosses
+    _MAX_INGEST_BODY_BYTES, not drain the whole stream first.
+
+    Pre-fix, `_IngestBodySizeMiddleware.dispatch` calls `await request.body()`
+    for the no-Content-Length path, which fully drains every chunk (all 50,
+    ~5 MB) before ever checking the size -- an attacker can exhaust memory
+    with an unbounded chunked body before the limit has a chance to reject
+    it. Post-fix, it must reject after only enough chunks to cross the 512 KB
+    limit (6 chunks of 100 KB = 600 KB), leaving the remaining 44 unread.
+    """
+    from server.main import _IngestBodySizeMiddleware
+    from starlette.requests import Request
+
+    chunk = b"x" * (100 * 1024)  # 100 KB per chunk
+    total_chunks = 50  # 5 MB if fully drained -- far past the 512 KB limit
+    receive, calls = _chunked_receive(chunk, total_chunks)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/ingest",
+        "headers": [],  # no content-length -> chunked / unknown-length path
+        "query_string": b"",
+    }
+    request = Request(scope, receive=receive)
+    middleware = _IngestBodySizeMiddleware(app=None)
+
+    async def _never_call_next(_request):
+        raise AssertionError("call_next must not run for an oversized body")
+
+    response = asyncio.run(middleware.dispatch(request, _never_call_next))
+
+    assert response.status_code == 413
+    assert calls["n"] < total_chunks, (
+        f"guard pulled {calls['n']}/{total_chunks} chunks before rejecting -- it "
+        "must abort as soon as the running total exceeds the limit, not after "
+        "buffering the entire oversized body"
+    )
+
+
+@pytest.mark.integration
+def test_chunked_small_body_still_reaches_handler(tmp_path):
+    """A legitimate chunked (no Content-Length) request UNDER the limit must
+    still be readable by the /ingest route handler itself.
+
+    Guards against a regression where fixing the guard via request.stream()
+    leaves the body only partially cached: Starlette's BaseHTTPMiddleware
+    wraps the request in a _CachedRequest whose wrapped_receive() replays the
+    full body downstream only when `request._body` ends up set -- if the
+    guard consumed the stream without populating that cache, the route's own
+    request.json() parse would see an empty body instead of the envelope.
+    """
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    env = envelope("chunked-dev", "heartbeat", healthy("heartbeat"))
+    body = __import__("json").dumps(env).encode()
+
+    def _body_chunks():
+        # A generator (not bytes/str) makes httpx omit Content-Length and send
+        # Transfer-Encoding: chunked instead -- see httpx._content.encode_content.
+        yield body
+
+    with TestClient(_app(tmp_path)) as c:
+        r = c.post(
+            "/api/v1/ingest",
+            content=_body_chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 200, r.text
