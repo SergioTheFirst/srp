@@ -27,6 +27,7 @@ from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
 from server.netdisco.cache import GraphCache
 from server.printers import scheduler
+from server.trust import staleness as trust_staleness
 from server.web.dashboard import router as web_router
 
 # Reject ingest bodies larger than this to prevent a single agent from
@@ -124,6 +125,39 @@ async def _retention_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec)
         _run_retention_sweep(cfg)  # self-guards transient errors (see above)
         await asyncio.to_thread(_run_maintenance_sweep, cfg)
+
+
+_tlog = logging.getLogger("srp.trust")
+
+
+def _run_source_staleness(cfg: ServerConfig) -> None:
+    """Re-evaluate per-source trust staleness against evidence_seen_at (P2-2):
+    a source that has gone silent degrades to STALE independent of ingest.
+
+    Self-guards like the sibling sweep/poll loops: a transient DB error must
+    never crash startup or kill the periodic loop.
+    """
+    try:
+        result = trust_staleness.run_staleness_cycle(cfg.source_stale_after_sec)
+    except Exception:  # never let a transient cycle error crash the caller
+        _tlog.exception("source staleness re-eval cycle failed")
+        return
+    if result["updated"]:
+        _tlog.info(
+            "source staleness re-eval: %d/%d row(s) transitioned",
+            result["updated"],
+            result["checked"],
+        )
+
+
+async def _source_staleness_loop(cfg: ServerConfig) -> None:
+    """Re-evaluate source staleness at startup, then every
+    source_stale_reeval_interval_sec until cancelled."""
+    interval_sec = max(60, cfg.source_stale_reeval_interval_sec)
+    while True:
+        await asyncio.to_thread(_run_source_staleness, cfg)
+        # jitter de-phases this loop from the other poll loops (anti-thundering-herd)
+        await asyncio.sleep(interval_sec + random.uniform(0, 60))  # nosec B311
 
 
 _plog = logging.getLogger("srp.printers")
@@ -368,6 +402,8 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         # operator disables ghost auto-purge specifically.
         if cfg.purge_interval_hours > 0:
             tasks.append(asyncio.create_task(_retention_loop(cfg)))
+        if cfg.source_stale_reeval_interval_sec > 0:
+            tasks.append(asyncio.create_task(_source_staleness_loop(cfg)))
         if cfg.printer_poll_enabled:
             tasks.append(asyncio.create_task(_printer_poll_loop(cfg)))
         if cfg.netdisco_enabled:

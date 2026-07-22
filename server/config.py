@@ -28,6 +28,12 @@ class ServerConfig:
     retain_events: int = 1000  # per device
     # Порог «offline» на дашборде, сек: 2 пропущенных liveness-пинга агента (300 с).
     stale_after_sec: int = 600
+    # P2-2: per-SOURCE trust staleness re-eval -- NOT the same thing as
+    # stale_after_sec above (device-level offline flag). A source whose last
+    # real evidence (device_source_trust.evidence_seen_at) is older than this
+    # degrades to STALE on the periodic sweep below, independent of ingest.
+    source_stale_after_sec: int = 43200  # 12h ~= 3 missed 4h agent cycles
+    source_stale_reeval_interval_sec: int = 3600  # 1h cadence; 0 disables the loop
     # W4.0: пересчитывать скоры в фоновом воркере, а не в HTTP-запросе ingest.
     async_rescore: bool = False
     # Device-ghost hygiene (2026-06-16): auto-delete a device after this many days
