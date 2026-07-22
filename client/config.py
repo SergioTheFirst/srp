@@ -7,6 +7,11 @@ address is a valid explicit choice). An unset URL is a hard error at startup --
 we never silently phone home to a hard-coded host. ``device_id`` is resolved
 once and persisted so a machine keeps a stable identity across agent restarts.
 
+A missing/truncated/corrupt ``config.json``, or a field holding a value of the
+wrong type, must never crash the agent at startup -- both fall back to safe
+defaults with a logged reason (stoperrors P2-14) rather than an unhandled
+exception or a silent bad value that crashes later, far from the cause.
+
 Config protection
 -----------------
 Settings can be guarded with a password set at install time (``--setup`` mode).
@@ -20,12 +25,16 @@ from __future__ import annotations
 import hashlib
 import hmac as _hmac
 import json
+import logging
+import os
 import secrets
 import sys
 import uuid
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Optional
+from typing import Optional, get_type_hints
+
+log = logging.getLogger(__name__)
 
 # When frozen by PyInstaller the config lives next to the .exe, not inside the bundle.
 _CONFIG_PATH = (
@@ -169,14 +178,58 @@ def resolve_device_id(machine_guid: Optional[str], hostname: str) -> str:
     return f"dev-{digest[:24]}"
 
 
+def _type_matches(expected: type, value: object) -> bool:
+    """True if *value* is compatible with a ``ClientConfig`` field's *expected* type.
+
+    ``bool`` is a subclass of ``int`` in Python, so a bare ``isinstance`` check
+    would let a JSON ``true``/``false`` silently pass for an int field (or a JSON
+    ``0``/``1`` silently pass for a bool field) -- both are exactly the "wrong
+    type slips through" bug this guards against (stoperrors P2-14), so ``bool``
+    is matched exactly and never accepted as a stand-in for ``int``.
+
+    Every current ``ClientConfig`` field is a plain ``str``/``int``/``bool``, so
+    ``expected`` is always a real class here today -- but a subscripted generic
+    (``Optional[X]``/``Union[...]``) is not a class, and ``isinstance`` against
+    one is unreliable across Python versions/typing constructs: it can raise
+    ``TypeError``, or (observed on 3.10 with ``typing.Optional``) silently
+    return ``False`` even for values that should be valid. Either outcome would
+    make a future such field crash startup or have every value wrongly
+    rejected -- skip the strict check rather than risk either.
+    """
+    if not isinstance(expected, type):
+        return True
+    if expected is bool:
+        return isinstance(value, bool)
+    if expected is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, expected)
+
+
 def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
     cfg = ClientConfig()
     if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            log.error("config.json unreadable or not valid JSON (%s) -- using defaults", exc)
+            data = {}
+        if not isinstance(data, dict):
+            log.error("config.json top-level value is not an object -- using defaults")
+            data = {}
         known = {f.name for f in fields(ClientConfig)}
+        hints = get_type_hints(ClientConfig)
         for key, value in data.items():
-            if key in known:
-                setattr(cfg, key, value)
+            if key not in known:
+                continue
+            if not _type_matches(hints[key], value):
+                log.error(
+                    "config.json field %r has wrong type (expected %s, got %s) -- keeping default",
+                    key,
+                    hints[key].__name__,
+                    type(value).__name__,
+                )
+                continue
+            setattr(cfg, key, value)
 
     # hostname is display/identity, not a stable key: always reflect the CURRENT
     # machine name rather than a value cached on disk, so a rename surfaces at
@@ -185,13 +238,30 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
 
     if not cfg.device_id:
         cfg.device_id = resolve_device_id(_machine_guid(), _hostname())
-        _persist(cfg, path)
+        try:
+            _persist(cfg, path)
+        except OSError as exc:
+            log.error(
+                "could not persist newly generated device_id to %s (%s) -- "
+                "continuing in-memory only for this run",
+                path,
+                exc,
+            )
     return cfg
 
 
 def _persist(cfg: ClientConfig, path: Path) -> None:
+    """Write *cfg* to *path* atomically: temp file in the same dir, then replace.
+
+    A same-volume ``os.replace`` either lands fully or leaves the previous valid
+    file untouched, so a power-cut mid-write can never corrupt/truncate an
+    existing config.json (stoperrors P2-14). Mirrors the pattern already used in
+    ``server/netdisco/credentials.py``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def save_config(
