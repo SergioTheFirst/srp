@@ -3955,6 +3955,62 @@ def upsert_source_trust(
         )
 
 
+def get_source_trust_rows() -> list[dict[str, Any]]:
+    """Every device_source_trust row, across all devices (P2-2 staleness re-eval).
+
+    Unlike get_source_trusts(device_id) (single-device, ingest-path read), this
+    is a fleet-wide bulk read for the periodic staleness job -- one SELECT.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT device_id, source, state, collector_status, semantic_status, evidence_seen_at
+            FROM device_source_trust
+            """
+        ).fetchall()
+    return [
+        {
+            "device_id": r["device_id"],
+            "source": r["source"],
+            "state": r["state"],
+            "collector_status": r["collector_status"],
+            "semantic_status": r["semantic_status"],
+            "evidence_seen_at": r["evidence_seen_at"],
+        }
+        for r in rows
+    ]
+
+
+def apply_source_staleness(updates: list[Any]) -> int:
+    """Persist ONLY state/weight/reason for periodic staleness re-eval results
+    (server.trust.staleness.StaleUpdate).
+
+    Deliberately has NO evidence_seen_at parameter (P2-2 design D3): this write
+    path is structurally incapable of advancing the "last real evidence" clock a
+    repeated re-evaluation must never reset (the P1-4 reset-trap, closed
+    structurally rather than by convention). Guarded by an optimistic
+    ``WHERE evidence_seen_at IS <the value the job read>``: if a real ingest
+    updated the row between read and write, this stale write is safely dropped
+    (fresh ingest wins; the next cycle self-corrects -- STALE is the safe
+    direction to be temporarily wrong in, never OK). Returns rows actually changed.
+    """
+    if not updates:
+        return 0
+    applied = 0
+    with _lock, _connect() as conn:
+        for u in updates:
+            cur = conn.execute(
+                """
+                UPDATE device_source_trust
+                SET state = ?, weight = ?, reason = ?
+                WHERE device_id = ? AND source = ? AND evidence_seen_at IS ?
+                """,
+                (u.state, u.weight, u.reason, u.device_id, u.source, u.evidence_seen_at),
+            )
+            applied += cur.rowcount
+    return applied
+
+
 def get_source_trusts(device_id: str) -> dict[str, dict]:
     """Return all per-source trust rows for a device as {source: row_dict}."""
     with _connect() as conn:
