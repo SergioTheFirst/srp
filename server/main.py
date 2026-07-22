@@ -39,9 +39,16 @@ class _IngestBodySizeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path == "/api/v1/ingest":
             cl = request.headers.get("content-length")
-            if cl and int(cl) > _MAX_INGEST_BODY_BYTES:
-                count_reject("too_large")
-                return Response("Request body too large", status_code=413)
+            if cl:
+                try:
+                    cl_int = int(cl)
+                except ValueError:
+                    # P2-10: non-numeric Content-Length treated as guard failure
+                    count_reject("malformed_content_length")
+                    return Response("Invalid Content-Length header", status_code=413)
+                if cl_int > _MAX_INGEST_BODY_BYTES:
+                    count_reject("too_large")
+                    return Response("Request body too large", status_code=413)
             if cl is None:
                 # Chunked transfer (no Content-Length): stoperrors P2-9 -- calling
                 # request.body() here would buffer the WHOLE body in memory before
