@@ -201,6 +201,35 @@ def test_pages_series_overview_returns_per_printer_history(db_init):
     assert by_id["prn-sn-B"]["points"][-1]["total_pages"] == 500
 
 
+def test_pages_series_includes_active_printer_outside_top_by_lifetime(db_init):
+    """P2-3: a printer with recent activity must not be silently dropped from
+    the trend chart just because a higher lifetime-total printer that's gone
+    quiet occupies its top-N slot instead."""
+    from datetime import datetime, timedelta, timezone
+
+    db = db_init
+    old = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    db.store_printer_reading(
+        "prn-high", _reading(ip="192.168.1.20", serial="HIGH", total_pages=50000), received_at=old
+    )
+    db.store_printer_reading(
+        "prn-med", _reading(ip="192.168.1.21", serial="MED", total_pages=30000), received_at=recent
+    )
+    db.store_printer_reading(
+        "prn-low", _reading(ip="192.168.1.22", serial="LOW", total_pages=100), received_at=recent
+    )
+
+    out = db.get_printers_pages_series(days=30, max_printers=1)
+    ids = {s["printer_id"] for s in out}
+    assert "prn-med" in ids  # active in-window -- must not be dropped
+    assert "prn-high" not in ids  # top by lifetime, but no readings in the window
+    # 3 candidates (high/med/low) compete for a max_printers*2=2 cap -- pins that
+    # the cap itself still applies, not just the "no readings in window" drop.
+    assert "prn-low" not in ids
+    assert len(out) == 1
+
+
 def test_readings_retention_caps_per_printer(db_init):
     db = db_init  # retain_printer_readings=5
     for i in range(8):

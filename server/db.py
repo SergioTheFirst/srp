@@ -3234,21 +3234,49 @@ def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[di
     """Historical hardware page-counter trend, one series per printer, for the
     /printers overview chart (spec §9 "история счётчиков (тренд)").
 
-    Picks the printers with the highest latest ``total_pages``, then returns each
-    one's time-ordered (received_at, total_pages) readings inside the ``days``
-    window. Readings with a NULL counter are skipped -- an unreachable poll is
-    UNKNOWN, never plotted as 0. ``days`` MUST be a caller-clamped int (f-string).
+    Candidates (P2-3) = the union of (a) the max_printers printers with the
+    highest lifetime ``total_pages``, and (b) any printer with at least one
+    reading inside the ``days`` window -- a printer that is actively printing
+    right now must never be silently dropped from the chart just because it
+    isn't a top-N lifetime grosser (e.g. a newer or lower-volume device).
+    Capped overall at ``max_printers * 2`` candidates (bounded response size),
+    preferring higher lifetime total_pages within that cap. Each candidate's
+    time-ordered (received_at, total_pages) readings inside the ``days`` window
+    are returned; a candidate with none there (the lifetime-top printer that
+    has gone quiet) is dropped at that point, not before. Readings with a NULL
+    counter are skipped -- an unreachable poll is UNKNOWN, never plotted as 0.
+    ``days`` MUST be a caller-clamped int (f-string).
     """
     win = f"AND received_at >= datetime('now', '-{days} days')" if days > 0 else ""
     out: list[dict[str, Any]] = []
     with _connect() as conn:
-        top = conn.execute(
-            """SELECT printer_id,
-                      COALESCE(model, hostname, ip, printer_id) AS label
+        top_rows = conn.execute(
+            """SELECT printer_id, COALESCE(model, hostname, ip, printer_id) AS label,
+                      total_pages
                FROM printers WHERE total_pages IS NOT NULL
                ORDER BY total_pages DESC LIMIT ?""",
             (max_printers,),
         ).fetchall()
+        active_rows = conn.execute(
+            "SELECT DISTINCT p.printer_id AS printer_id,"  # nosec B608
+            "       COALESCE(p.model, p.hostname, p.ip, p.printer_id) AS label,"
+            "       p.total_pages AS total_pages"
+            "  FROM printer_readings pr JOIN printers p ON p.printer_id = pr.printer_id"
+            f" WHERE pr.total_pages IS NOT NULL {win}"
+        ).fetchall()
+        candidates: dict[str, dict[str, Any]] = {}
+        for r in (*top_rows, *active_rows):
+            candidates.setdefault(
+                r["printer_id"],
+                {
+                    "printer_id": r["printer_id"],
+                    "label": r["label"],
+                    "total_pages": r["total_pages"],
+                },
+            )
+        top = sorted(candidates.values(), key=lambda c: c["total_pages"] or 0, reverse=True)[
+            : max_printers * 2
+        ]
         for t in top:
             pts = conn.execute(
                 "SELECT received_at, total_pages FROM printer_readings"  # nosec B608
