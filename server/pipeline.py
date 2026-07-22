@@ -234,10 +234,14 @@ def evaluate_trust(
     payload: dict,
     source_health: dict[str, dict[str, Any]],
     ts: str,
+    received_at: str,
 ) -> dict[str, Any]:
     """Compute and persist per-source + per-domain trust for one envelope.
 
-    Called from ingest_envelope when source_health is non-empty.
+    Called from ingest_envelope when source_health is non-empty. *received_at*
+    (server clock, W0.2) is stamped as each source's evidence_seen_at -- the
+    periodic staleness re-eval job (P2-2) computes age from that, never from
+    the client-controlled *ts*.
     """
     safe_payload = payload or {}
 
@@ -270,6 +274,7 @@ def evaluate_trust(
             semantic_status.value,
             reason or "",
             ts,
+            received_at,
         )
 
         if collector_status == CollectorStatus.OK and reading:
@@ -479,7 +484,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             src: {"status": sh.status, "collected_at": sh.collected_at}
             for src, sh in env.source_health.items()
         }
-        evaluate_trust(did, env.payload, raw_health, ts)
+        evaluate_trust(did, env.payload, raw_health, ts, received_at)
 
     # W4.0: events never feed scoring -- recompute_scores reads only the latest
     # inventory / historical / heartbeat, never the events table. Rescoring on an
