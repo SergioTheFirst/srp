@@ -23,6 +23,7 @@ withholds; no SMART data anywhere -> UNKNOWN, never a confident zero.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any, Optional
 
 from server.analytics.rulestats import RULE_LABELS, reinforcement
@@ -30,6 +31,7 @@ from server.scoring.score100 import (
     Direction,
     Factor,
     Score100,
+    ScoreConfidence,
     band_for_risk_score,
     make_score100,
 )
@@ -62,6 +64,13 @@ _SMART_FIELDS = (
 # from real false-alarm rates, not guessed once and frozen).
 _UNSAFE_SHUTDOWNS_HIGH = 10
 _RECURRENCE_MIN_GAP = timedelta(days=7)
+
+# A median over fewer than this many of a disk's own recent readings cannot
+# yet rule out a transient temperature spike -- the legacy temp>70 rule still
+# fires (value untouched, T2.4 pin), but confidence is not "high" without a
+# confirmed sustained pattern (mirrors disk_fill.py's _MIN_HIGH_CONF_SAMPLES,
+# P2-13).
+_MIN_HIGH_CONF_SAMPLES = 3
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -125,6 +134,24 @@ def _has_recurrence(disk_series: list[dict[str, Any]]) -> bool:
             if any(a is not None and b is not None and b > a for a, b in pairs):
                 return True
     return False
+
+
+def _temp_sustained_high(disk: dict, disk_series: Optional[list[dict[str, Any]]]) -> bool:
+    """True when THIS disk's own recent history confirms temp > 70 is a
+    sustained pattern (median across recent readings), not a single transient
+    spike. Gated to disk_series actually belonging to this disk (matched by
+    serial_hash -- same convention ``_has_recurrence`` uses above); without
+    that history we cannot rule out a spike, so this returns False rather
+    than assume sustained (P2-13). Known limitation shared with every other
+    disk_series-gated rule in this file: pipeline.py only fetches a series
+    for worst_disk_key()'s pick (ranked by ssd3 damage, blind to this legacy
+    rule), so a genuinely sustained-hot disk that isn't that pick still caps
+    at "medium" here -- safe (never wrongly "high"), just not maximally
+    informative in that multi-disk case."""
+    if not disk_series or disk_series[0].get("serial_hash") != disk.get("serial_hash"):
+        return False
+    temps = [t for t in (_num(row, "temperature_c") for row in disk_series) if t is not None]
+    return len(temps) >= _MIN_HIGH_CONF_SAMPLES and median(temps) > 70
 
 
 def _score_disk(
@@ -242,7 +269,13 @@ def _score_disk(
     temp = _num(disk, "temperature_c")
     if temp is not None:
         if temp > 70:
-            hit(f"диск {int(temp)}°C (тепловой стресс)", 15, legacy=True)
+            stable = _temp_sustained_high(disk, disk_series)
+            hit(
+                f"диск {int(temp)}°C (тепловой стресс)",
+                15,
+                flag=None if stable else "temp_unstable",
+                legacy=True,
+            )
         elif temp > 60:
             hit(f"диск {int(temp)}°C (нагрев)", 8, legacy=True)
 
@@ -478,6 +511,16 @@ def worst_disk_key(historical: Optional[dict[str, Any]]) -> Optional[str]:
     return best_key
 
 
+def _confidence(coords: dict[str, Any]) -> ScoreConfidence:
+    """High confidence requires the worst disk's own rules to carry no
+    unresolved stability concern -- currently just the temperature rule
+    (P2-13): a single transient spike must not claim the same confidence as
+    a genuinely sustained problem (mirrors disk_fill.py's sample-count gate)."""
+    if "temp_unstable" in coords.get("flags", []):
+        return "medium"
+    return "high"
+
+
 def compute_storage_risk(
     historical: Optional[dict[str, Any]],
     heartbeat: Optional[dict[str, Any]],
@@ -549,7 +592,7 @@ def compute_storage_risk(
         worst_value,
         direction,
         band_for_risk_score(worst_value),
-        "high",
+        _confidence(worst_coords),
         factors=worst_factors,
         source_lineage={
             "worst_disk": worst_disk,
