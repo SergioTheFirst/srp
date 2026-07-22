@@ -109,6 +109,26 @@ def test_same_mac_different_ip_collapses_to_one():
 
 
 @pytest.mark.unit
+def test_same_mac_different_ip_prefers_freshest_last_seen():
+    # Device changed IP (e.g. DHCP lease renewal): the OLD ip is lexically
+    # SMALLER than the NEW ip, but was seen earlier -- recency must decide
+    # the winner, not a lexical string comparison of the ip (P2-6).
+    arp = [
+        {
+            "last_seen": "2026-01-01T00:00:00",
+            "neighbors": [{"ip": "192.168.1.60", "mac": "AA-BB-CC-DD-EE-04"}],
+        },
+        {
+            "last_seen": "2026-01-02T00:00:00",
+            "neighbors": [{"ip": "192.168.1.99", "mac": "AA-BB-CC-DD-EE-04"}],
+        },
+    ]
+    out = discovery.merge(agent_hints=[], arp_snapshots=arp, static_ips=[])
+    assert len(out) == 1
+    assert out[0].ip == "192.168.1.99"  # freshest last_seen wins, not the smaller ip string
+
+
+@pytest.mark.unit
 def test_empty_sources_give_empty_list():
     assert discovery.merge(agent_hints=[], arp_snapshots=[], static_ips=[]) == []
 

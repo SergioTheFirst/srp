@@ -89,25 +89,30 @@ def merge(
     """Union + dedup the discovery sources (spooler/ARP/static/scan) into candidates."""
     by_ip: dict[str, dict[str, Any]] = {}
 
-    def add(ip: Any, mac: Any, name: Any, source: str) -> None:
+    def add(ip: Any, mac: Any, name: Any, source: str, last_seen: Any = None) -> None:
         if not is_rfc1918(ip):
             return
         key = ip.strip()
-        rec = by_ip.setdefault(key, {"ip": key, "mac": None, "name": None, "sources": set()})
+        rec = by_ip.setdefault(
+            key, {"ip": key, "mac": None, "name": None, "sources": set(), "last_seen": None}
+        )
         rec["sources"].add(source)
         normalized_mac = _norm_mac(mac)
         if normalized_mac and not rec["mac"]:
             rec["mac"] = normalized_mac
         if name and not rec["name"]:
             rec["name"] = name
+        if isinstance(last_seen, str) and last_seen and (rec["last_seen"] or "") < last_seen:
+            rec["last_seen"] = last_seen
 
     for hint in agent_hints:
         if isinstance(hint, dict):
             add(hint.get("ip"), None, hint.get("name"), "spooler")
     for snap in arp_snapshots:
+        snap_last_seen = snap.get("last_seen")
         for neighbor in snap.get("neighbors") or []:
             if isinstance(neighbor, dict):
-                add(neighbor.get("ip"), neighbor.get("mac"), None, "arp")
+                add(neighbor.get("ip"), neighbor.get("mac"), None, "arp", snap_last_seen)
     for ip in static_ips:
         add(ip, None, None, "config")
     for ip in scan_ips:
@@ -128,14 +133,24 @@ def _collapse_by_mac(by_ip: dict[str, dict[str, Any]]) -> list[PrinterCandidate]
 
     merged: list[dict[str, Any]] = list(standalone)
     for mac, recs in by_mac.items():
-        recs_sorted = sorted(recs, key=lambda r: r["ip"])
+        # Freshest last_seen wins (a device that changed ip, e.g. DHCP lease
+        # renewal, keeps its newest ip, not whichever ip string sorts lowest).
+        # When recency is equal or unknown for every candidate, fall back to
+        # the lowest ip for a deterministic, backward-compatible pick (P2-6).
+        best_last_seen = max((r["last_seen"] or "" for r in recs), default="")
+        tied = [r for r in recs if (r["last_seen"] or "") == best_last_seen]
+        winner = min(tied, key=lambda r: r["ip"])
         sources: set[str] = set()
         name: Optional[str] = None
-        for rec in recs_sorted:
+        # Winner's own name takes priority (freshest-wins, same as its ip);
+        # only fall through to the rest for a name when the winner has none.
+        # Iterating recs directly here (pre-P2-6) made the pick depend on
+        # by_ip's insertion order instead of a deterministic rule.
+        for rec in (winner, *(r for r in recs if r is not winner)):
             sources |= rec["sources"]
             if name is None and rec["name"]:
                 name = rec["name"]
-        merged.append({"ip": recs_sorted[0]["ip"], "mac": mac, "name": name, "sources": sources})
+        merged.append({"ip": winner["ip"], "mac": mac, "name": name, "sources": sources})
 
     candidates = [
         PrinterCandidate(
