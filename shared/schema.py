@@ -383,7 +383,12 @@ class SourceHealth(_Base):
 # Envelope
 # --------------------------------------------------------------------------- #
 class Envelope(_Base):
-    device_id: str
+    # max_length defense-in-depth (stoperrors P2-7) against a deliberately
+    # oversized device_id inflating the rate-limiter's in-memory
+    # _device_windows dict (server/ingest_guards.py); 256 is far above any real
+    # id -- resolve_device_id() in client/config.py produces at most ~28 chars
+    # ("dev-" + 24 hex, or "agent-" + 16 hex for the no-MachineGuid fallback).
+    device_id: str = Field(max_length=256)
     agent_version: str = CONTRACT_VERSION
     msg_type: MsgType
     ts: str = Field(default_factory=utcnow_iso)

@@ -182,6 +182,31 @@ def test_rate_limit_independent_per_device(monkeypatch):
     assert check_rate_limit("b") is True
 
 
+def test_device_windows_trims_stale_entries_past_threshold():
+    """stoperrors P2-7: _device_windows must not grow unboundedly for devices that
+    stop sending -- mirrors the existing _seen_keys opportunistic trim (mark_seen,
+    above). Seeds > _TRIM_THRESHOLD devices with an aged-out timestamp each, then
+    confirms one more real call shrinks the dict instead of leaving it to grow
+    forever (today's code, pre-fix, never removes a device once added)."""
+    import time
+
+    from server import ingest_guards
+    from server.ingest_guards import check_rate_limit, reset_guards
+
+    reset_guards()
+    # Guaranteed older than any cutoff check_rate_limit computes below, regardless
+    # of how long the seeding loop takes (monotonic clock never goes backwards).
+    old_ts = time.monotonic() - ingest_guards._RATE_WINDOW_SEC - 1.0
+    n = ingest_guards._TRIM_THRESHOLD + 1  # > 50_000, per stoperrors P2-7
+    for i in range(n):
+        ingest_guards._device_windows[f"stale-{i}"] = [old_ts]
+
+    check_rate_limit("fresh-device")  # dict is over threshold -> trim should fire
+
+    assert len(ingest_guards._device_windows) == 1
+    assert list(ingest_guards._device_windows) == ["fresh-device"]
+
+
 # --------------------------------------------------------------------------- #
 # Unit: client-side payload size cap
 # --------------------------------------------------------------------------- #
