@@ -345,8 +345,8 @@ def compute_day1_score100(
         is_risk=False,
         device_trust=device_trust,
         trust=trust,
-        presence_ok=heartbeat is not None,
-        presence_missing=["heartbeat (текущие показатели) отсутствует"],
+        presence_ok=(heartbeat is not None or historical is not None),
+        presence_missing=["heartbeat/historical (текущие показатели) отсутствует"],
         required=[],
         optional=["thermal", "boot"],
     )
@@ -381,8 +381,8 @@ def compute_day1_score100(
         is_risk=True,
         device_trust=device_trust,
         trust=trust,
-        presence_ok=(historical is not None or heartbeat is not None),
-        presence_missing=["historical/heartbeat (данные о риске) отсутствует"],
+        presence_ok=(historical is not None or heartbeat is not None or inventory is not None),
+        presence_missing=["historical/heartbeat/inventory (данные о риске) отсутствует"],
         required=[],
         optional=["disk_fill", "storage", "os_stability", "thermal"],
     )

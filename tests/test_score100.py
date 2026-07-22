@@ -223,3 +223,37 @@ def test_pipeline_keeps_legacy_fields_and_adds_score100(client):
     assert s100["performance"]["direction"] == "higher_is_better"
     assert s100["risk_exposure"]["direction"] == "higher_is_worse"
     assert "confidence" in s100["wear"] and "band" in s100["wear"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. presence_ok gates must include every source their own axis reads (P2-12)
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_risk_exposure_presence_ok_includes_inventory():
+    """_risk_exposure() (scores.py) reads inv.pending_reboot/driver_problem_count
+    directly, so a device that ONLY reports inventory still produces a real,
+    non-null risk_exposure signal -- presence_ok must not withhold it just
+    because historical/heartbeat are absent (mirrors wear's already-correct
+    gate, which includes both of its sources)."""
+    inventory = {"pending_reboot": True, "driver_problem_count": 3}
+    day1 = compute_day1_scores(inventory, None, None)
+    assert day1["factors"]["risk_exposure"]  # real signal was computed
+    risk = compute_day1_score100(day1, inventory, None, None, trust=None)["risk_exposure"]
+    assert risk.value == day1["risk_exposure"]
+    assert risk.band == band_for_risk_score(day1["risk_exposure"])
+    assert risk.band != "unknown"
+
+
+@pytest.mark.unit
+def test_performance_presence_ok_includes_historical():
+    """_performance() (scores.py) reads avg_boot_ms straight from historical, so
+    a device that ONLY reports historical (no live heartbeat) still produces a
+    real performance signal -- presence_ok must not withhold it just because
+    heartbeat is absent."""
+    historical = {"avg_boot_ms": 65000}
+    day1 = compute_day1_scores(None, historical, None)
+    assert day1["factors"]["performance"]  # real signal was computed
+    perf = compute_day1_score100(day1, None, historical, None, trust=None)["performance"]
+    assert perf.value == day1["performance"]
+    assert perf.band == band_for_health_score(day1["performance"])
+    assert perf.band != "unknown"
