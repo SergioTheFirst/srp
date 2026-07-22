@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 
 import pytest
 from server.netdisco.config import load_netdisco_config
@@ -193,3 +194,55 @@ def test_secret_and_community_namespaces_are_separate(tmp_path) -> None:
     store.set_secret("core", "adapter-secret")  # same name, different namespace
     assert store.get_community("core") == "comm"
     assert store.get_secret("core") == "adapter-secret"
+
+
+# --- P2-5: unsynchronized read-modify-write must not lose a concurrent update ---
+
+
+def test_concurrent_set_calls_do_not_lose_an_update(tmp_path, monkeypatch) -> None:
+    """set_community/set_secret each do read-file -> modify one key -> atomically
+    rewrite. Without a lock around that whole sequence, two concurrent calls can
+    both read the same on-disk snapshot; whichever writes back last wins, and the
+    other call's change is silently dropped entirely (not just its key).
+
+    The interleaving is forced deterministically (not left to thread-scheduling
+    luck) by pacing the store's ``_load`` so the first call blocks, mid
+    read-modify-write, until the second call has had a real chance to also start
+    its own read. Without the fix both calls read before either writes, so the
+    second write clobbers the first. With the fix the second call blocks trying
+    to acquire the lock and never even reaches its own read until the first call
+    has finished writing -- so the wait below harmlessly times out instead of
+    reproducing the race, and both updates survive.
+    """
+    store = _store(tmp_path)
+    reader_entered = threading.Event()
+    proceed = threading.Event()
+    real_load = store._load
+
+    def paced_load():
+        data = real_load()
+        reader_entered.set()
+        assert proceed.wait(timeout=2.0), "second call never released the first"
+        return data
+
+    monkeypatch.setattr(store, "_load", paced_load)
+
+    t1 = threading.Thread(target=store.set_community, args=("site-a", "secret-a"))
+    t1.start()
+    assert reader_entered.wait(timeout=2.0), "thread 1 never entered its read"
+    reader_entered.clear()
+
+    t2 = threading.Thread(target=store.set_secret, args=("site-b", "secret-b"))
+    t2.start()
+    # Real chance for thread 2 to also enter _load() before either writes back --
+    # a no-op wait once the fix serializes the two calls (see docstring).
+    reader_entered.wait(timeout=0.3)
+
+    proceed.set()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+
+    assert store.get_community("site-a") == "secret-a"
+    assert store.get_secret("site-b") == "secret-b"
