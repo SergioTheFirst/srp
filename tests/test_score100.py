@@ -130,7 +130,7 @@ def test_untrusted_identity_withholds_all_values():
         assert s[axis].value is None
         assert s[axis].band == "unknown"
         assert s[axis].confidence == "unknown"
-        assert "identity trust failed" in s[axis].missing_evidence
+        assert "идентичность устройства не подтверждена" in s[axis].missing_evidence
 
 
 # --------------------------------------------------------------------------- #
@@ -144,7 +144,7 @@ def test_old_agent_no_source_health_is_low_confidence():
     )
     for axis in ("performance", "reliability", "wear", "risk_exposure"):
         assert s[axis].confidence in ("low", "unknown")
-        assert "source_health missing" in s[axis].missing_evidence
+        assert "source_health отсутствует" in s[axis].missing_evidence
     # telemetry was received, so legacy numbers remain available for the dashboard
     assert legacy_value(s["performance"]) is not None
 
@@ -168,8 +168,8 @@ def test_observability_reflects_coverage():
     )
     assert full.value > degraded.value > blind.value
     assert full.confidence == "high"
-    assert "source_health missing" in blind.missing_evidence
-    assert any("regressed" in m for m in degraded.missing_evidence)
+    assert "source_health отсутствует" in blind.missing_evidence
+    assert any("деградировал" in m for m in degraded.missing_evidence)
 
 
 @pytest.mark.unit
@@ -184,7 +184,7 @@ def test_observability_untrusted_is_bad_not_withheld_low_confidence():
     assert s.value is not None and s.value <= 10.0
     assert s.band == "bad"
     assert s.confidence == "low"
-    assert "identity trust failed" in s.missing_evidence
+    assert "идентичность устройства не подтверждена" in s.missing_evidence
 
 
 @pytest.mark.unit

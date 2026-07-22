@@ -109,6 +109,6 @@ def test_no_source_health_low_confidence_score100(client):
     # but the Score100 envelope is present and low/unknown confidence with a reason
     rel = sc["risk"]["score100"]["reliability"]
     assert rel["confidence"] in ("low", "unknown")
-    assert "source_health missing" in rel["missing_evidence"]
+    assert "source_health отсутствует" in rel["missing_evidence"]
     # legacy numeric still present for the dashboard
     assert sc["reliability"] is not None
