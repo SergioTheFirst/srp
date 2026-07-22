@@ -42,13 +42,33 @@ class _IngestBodySizeMiddleware(BaseHTTPMiddleware):
             if cl and int(cl) > _MAX_INGEST_BODY_BYTES:
                 count_reject("too_large")
                 return Response("Request body too large", status_code=413)
-            # Also guard chunked TE (no Content-Length header): read and cache
-            # the body so pydantic can still parse it from the Starlette cache.
             if cl is None:
-                body = await request.body()
-                if len(body) > _MAX_INGEST_BODY_BYTES:
-                    count_reject("too_large")
-                    return Response("Request body too large", status_code=413)
+                # Chunked transfer (no Content-Length): stoperrors P2-9 -- calling
+                # request.body() here would buffer the WHOLE body in memory before
+                # any size check runs, so an unbounded chunked upload exhausts
+                # memory before the limit ever gets a chance to reject it.
+                # Option A (chosen over an ASGI-level receive-wrapping middleware,
+                # which would be more invasive to the rest of the stack and race
+                # with who owns `send`): pull request.stream() chunk-by-chunk and
+                # abort the instant the running total crosses the limit, so the
+                # oversized remainder is never read into memory at all.
+                total = 0
+                chunks: list[bytes] = []
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > _MAX_INGEST_BODY_BYTES:
+                        count_reject("too_large")
+                        return Response("Request body too large", status_code=413)
+                    chunks.append(chunk)
+                # Within limit: cache the body the same way Request.body() would
+                # (it sets this same private attribute). BaseHTTPMiddleware wraps
+                # `request` in a _CachedRequest whose wrapped_receive() replays the
+                # full body downstream ONLY when `_body` is set this way; if we'd
+                # merely consumed request.stream() without this, the /ingest
+                # handler's own pydantic body parse would see an empty body
+                # instead of the envelope (see starlette.middleware.base
+                # ._CachedRequest.wrapped_receive).
+                request._body = b"".join(chunks)
         return await call_next(request)
 
 
