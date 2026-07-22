@@ -75,3 +75,11 @@ def test_force_poll_empty_db_finds_no_candidates(client):
     r = client.post("/api/v1/printers/poll")
     assert r.status_code == 200
     assert r.json() == {"polled": 0, "online": 0, "unreachable": 0, "errors": 0, "skipped": 0}
+
+
+def test_printers_poll_is_rate_limited_after_a_burst(client):
+    # Unauthenticated force button for printer poll -> must be throttled (same as
+    # discovery/poll and topology/poll).
+    assert client.post("/api/v1/printers/poll").status_code == 200  # within budget
+    statuses = {client.post("/api/v1/printers/poll").status_code for _ in range(40)}
+    assert 429 in statuses  # the flood is throttled

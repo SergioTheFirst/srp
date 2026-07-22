@@ -610,7 +610,11 @@ def printer_detail(printer_id: str, days: int = 30) -> dict:
 @router.post("/printers/poll")
 def poll_printers(request: Request) -> dict:
     """Force one printer poll cycle now (dashboard button). Bounded by SNMP/HTTP
-    timeouts; probes only already-discovered hosts, never scans ranges here."""
+    timeouts; probes only already-discovered hosts, never scans ranges here. Unauthenticated,
+    so it is rate-limited (a single shared bucket) AND bounded by the scheduler's
+    anti-DoS lock (a concurrent poll returns busy)."""
+    if not check_rate_limit("endpoint:printers_poll"):
+        raise HTTPException(status_code=429, detail="printers poll rate exceeded")
     printer_cfg = getattr(request.app.state, "printer_config", None)
     if printer_cfg is None:
         from server.printers.config import load_printer_config
