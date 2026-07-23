@@ -46,8 +46,19 @@ def encode_integer(value: int) -> bytes:
     while v not in (0, -1):
         body.insert(0, v & 0xFF)
         v >>= 8
-    if value > 0 and body[0] & 0x80:
-        body.insert(0, 0x00)
+    # Append final byte to complete the representation.
+    # For positive values: we stopped at v=0, so append 0x00 if high bit is set.
+    # For negative values: we stopped at v=-1, so append 0xFF to represent the sign.
+    if value > 0:
+        if body and body[0] & 0x80:
+            body.insert(0, 0x00)
+    else:
+        # Negative value: append sign-extending 0xFF.
+        # Ensure at least 1 byte of content (can't have empty body for INTEGER).
+        if body and not (body[0] & 0x80):
+            body.insert(0, 0xFF)
+        elif not body:
+            body.append(0xFF)
     return encode_tlv(0x02, bytes(body))
 
 
