@@ -149,12 +149,15 @@ def printer_status_ru(status: Optional[str], online: Optional[bool]) -> tuple[st
     this is display-only for the operator (Russian dashboard)."""
     if not online or status == "unreachable":
         return ("bad", "недоступен")
+    # ponytail: fallback for unknown status codes (not in dict) returns raw code,
+    # aligning with net_type_ru/net_change_ru pattern. Operator sees actual
+    # unmapped value instead of generic placeholder. "other" removed from explicit
+    # dict, now falls through to return ("na", "other").
     return {
         "idle": ("good", "готов"),
         "printing": ("accent", "печать"),
         "warmup": ("warn", "разогрев"),
         "stopped": ("bad", "остановлен"),
-        "other": ("na", "—"),
         "unknown": ("na", "неизвестно"),
     }.get(status or "", ("na", status or "—"))
 
