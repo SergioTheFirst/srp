@@ -219,6 +219,10 @@ def _power_thermal(
     WHEA (W4.3 D6): removed.  Corrected hardware errors are predominantly
     firmware / ASPM / PCIe link-training noise, not early-warning of VRM or PSU
     failure.  Keeping WHEA here produced systematic false-positive alerts.
+
+    domain_values (W4.2 thermal engine): reserved for future integration with
+    a dedicated thermal-monitoring engine (similar to _storage and _stability).
+    Not yet wired up; currently always None. See cctodo.md/backlog for details.
     """
     if _domain_gated("power_thermal", domain_trust):
         return _withheld("power_thermal")
