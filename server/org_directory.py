@@ -101,13 +101,17 @@ class OrgDirectory:
             self._orgs = parsed
             self._mtime = mtime
 
-    def org_name(self, code: Optional[str]) -> Optional[str]:
-        self.reload_if_changed()
+    def org_name(self, code: Optional[str], *, check_reload: bool = True) -> Optional[str]:
+        if check_reload:
+            self.reload_if_changed()
         org = self._orgs.get(_coerce_code(code))
         return org.name if org else None
 
-    def dept_name(self, org_code: Optional[str], dept_code: Optional[str]) -> Optional[str]:
-        self.reload_if_changed()
+    def dept_name(
+        self, org_code: Optional[str], dept_code: Optional[str], *, check_reload: bool = True
+    ) -> Optional[str]:
+        if check_reload:
+            self.reload_if_changed()
         org = self._orgs.get(_coerce_code(org_code))
         if org is None:
             return None
@@ -135,11 +139,11 @@ class OrgDirectory:
                 for code, org in items
             ]
 
-    def org_display(self, code: Optional[str]) -> Label:
+    def org_display(self, code: Optional[str], *, check_reload: bool = True) -> Label:
         coerced = _coerce_code(code)
         if not coerced:
             return Label("", True)  # nothing assigned -> nothing to flag
-        name = self.org_name(coerced)
+        name = self.org_name(coerced, check_reload=check_reload)
         return Label(name, True) if name else Label(coerced, False)
 
     def dept_display(
@@ -147,16 +151,23 @@ class OrgDirectory:
         org_code: Optional[str],
         dept_code: Optional[str],
         legacy_department: Optional[str] = None,
+        *,
+        check_reload: bool = True,
     ) -> Label:
         """Decode a department for display (tray spec §7 COALESCE policy).
 
         Known code -> name. Unknown code -> the code + chip (a typo must not be
         masked by stale free text). No code -> the legacy free-text
         ``devices.department`` (deprecated), else "Без отдела".
+
+        ``check_reload=False`` skips this call's own ``reload_if_changed()``
+        (still a per-lookup call otherwise) -- for a caller that already did
+        one reload check up front for a whole batch (P3-7: ``_enrich_fleet``'s
+        per-device loop), so N devices cost 1 ``stat()`` per poll, not N.
         """
         dcode = _coerce_code(dept_code)
         if dcode:
-            name = self.dept_name(org_code, dcode)
+            name = self.dept_name(org_code, dcode, check_reload=check_reload)
             return Label(name, True) if name else Label(dcode, False)
         legacy = (legacy_department or "").strip()
         if legacy:
