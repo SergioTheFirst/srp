@@ -12,6 +12,7 @@ module constants, never user input.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import ipaddress
 import json
@@ -22,7 +23,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from server.analytics import rulestats
 from server.analytics.oui import normalize_mac
@@ -478,14 +479,19 @@ def init_db(
         _backfill_printer_ip_map(conn)
 
 
-def _connect() -> sqlite3.Connection:
+@contextlib.contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     if _db_path is None:
         raise RuntimeError("db not initialized; call init_db() first")
     conn = sqlite3.connect(str(_db_path), timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        with conn:  # commits on clean exit, rolls back on exception (unchanged)
+            yield conn
+    finally:
+        conn.close()  # P3-1: sqlite3.Connection.__exit__ never closed the fd
 
 
 # --------------------------------------------------------------------------- #

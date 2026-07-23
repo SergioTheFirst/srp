@@ -205,6 +205,16 @@ def test_migration_recovers_from_orphan_shadow(tmp_path):
     assert len(db.get_historical_series("dev-1")) == 2
 
 
+def test_connect_closes_connection_after_with_block(db_init):
+    """`with _connect() as conn:` must close conn on exit, not just commit
+    (P3-1) -- else the file descriptor leaks across ~120 call sites."""
+    with db_init._connect() as conn:
+        conn.execute("SELECT 1")
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        conn.execute("SELECT 1")
+
+
 @pytest.fixture
 def seeded_client_db(tmp_path):
     from server import db
