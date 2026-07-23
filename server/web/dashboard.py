@@ -303,11 +303,19 @@ def _group_by_site(devices: list) -> list:
     )
 
 
-def _identity_labels(d: dict) -> dict:
-    """Decode org/dept codes to display labels via the directory (render-time)."""
+def _identity_labels(d: dict, *, check_reload: bool = True) -> dict:
+    """Decode org/dept codes to display labels via the directory (render-time).
+
+    ``check_reload=False`` skips this call's own directory reload check (an
+    mtime ``stat()``) -- for a batch caller that already reloaded once up
+    front (P3-7: ``_enrich_fleet``'s per-device loop), so N devices cost 1
+    ``stat()`` per poll cycle, not N.
+    """
     directory = org_directory.get_directory()
-    org = directory.org_display(d.get("org_code"))
-    dept = directory.dept_display(d.get("org_code"), d.get("dept_code"), d.get("department"))
+    org = directory.org_display(d.get("org_code"), check_reload=check_reload)
+    dept = directory.dept_display(
+        d.get("org_code"), d.get("dept_code"), d.get("department"), check_reload=check_reload
+    )
     return {
         "org_label": {"text": org.text, "known": org.known},
         "dept_label": {"text": dept.text, "known": dept.known},
@@ -331,6 +339,11 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
     parsed = [parse_version(d.get("agent_version")) for d in devices]
     current = parse_version(available) or max([v for v in parsed if v is not None], default=None)
     now = datetime.now(timezone.utc)
+    # P3-7: reload the org directory ONCE per poll cycle here, then tell every
+    # per-device _identity_labels call to skip its own reload check -- N
+    # devices previously cost N mtime stat() calls per ~12s poll for a check
+    # that only needs to happen once per cycle.
+    org_directory.get_directory().reload_if_changed()
     enriched = []
     for d, ver in zip(devices, parsed):
         # ssd3 Ф7: apply the read-side staleness overlay here (same helper the
@@ -346,7 +359,7 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
         enriched.append(
             {
                 **d,
-                **_identity_labels(d),
+                **_identity_labels(d, check_reload=False),
                 "health": health,
                 "version_outdated": bool(current is not None and ver is not None and ver < current),
                 "is_new": _is_recent(d.get("first_seen"), days=7),
