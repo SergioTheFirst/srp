@@ -3245,9 +3245,11 @@ def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[di
     are returned; a candidate with none there (the lifetime-top printer that
     has gone quiet) is dropped at that point, not before. Readings with a NULL
     counter are skipped -- an unreachable poll is UNKNOWN, never plotted as 0.
-    ``days`` MUST be a caller-clamped int (f-string).
+    ``days`` is self-clamped (P2-15): callers no longer need to pre-validate it.
     """
-    win = f"AND received_at >= datetime('now', '-{days} days')" if days > 0 else ""
+    days = max(0, min(int(days), 365))
+    win = "AND received_at >= ?" if days > 0 else ""
+    win_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
     out: list[dict[str, Any]] = []
     with _connect() as conn:
         top_rows = conn.execute(
@@ -3262,7 +3264,8 @@ def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[di
             "       COALESCE(p.model, p.hostname, p.ip, p.printer_id) AS label,"
             "       p.total_pages AS total_pages"
             "  FROM printer_readings pr JOIN printers p ON p.printer_id = pr.printer_id"
-            f" WHERE pr.total_pages IS NOT NULL {win}"
+            f" WHERE pr.total_pages IS NOT NULL {win}",
+            win_params,
         ).fetchall()
         candidates: dict[str, dict[str, Any]] = {}
         for r in (*top_rows, *active_rows):
@@ -3281,7 +3284,7 @@ def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[di
             pts = conn.execute(
                 "SELECT received_at, total_pages FROM printer_readings"  # nosec B608
                 f" WHERE printer_id=? AND total_pages IS NOT NULL {win} ORDER BY id ASC",
-                (t["printer_id"],),
+                (t["printer_id"], *win_params),
             ).fetchall()
             if not pts:
                 continue
@@ -3303,15 +3306,19 @@ def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
 
     Source = print_jobs (agent-reported spool data, phases 1-3 of print tracking).
     Used to reconcile the software view ("who printed how much") against the
-    hardware SNMP counters. ``days`` MUST be a caller-clamped int (f-string).
+    hardware SNMP counters. ``days`` is self-clamped (P2-15): callers no longer
+    need to pre-validate it.
     """
-    ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    days = max(0, min(int(days), 365))
+    ts_filter = "AND ts >= ?" if days > 0 else ""
+    ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
     with _connect() as conn:
         name_rows = conn.execute(
             "SELECT printer AS name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
             " COUNT(DISTINCT device_id) AS device_count, MAX(ts) AS last_ts"
             f" FROM print_jobs WHERE printer IS NOT NULL {ts_filter}"
-            " GROUP BY printer ORDER BY pages DESC"
+            " GROUP BY printer ORDER BY pages DESC",
+            ts_params,
         ).fetchall()
         dev_rows = conn.execute(
             "SELECT p.printer AS name, p.device_id AS device_id,"  # nosec B608
@@ -3319,7 +3326,8 @@ def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
             " COALESCE(SUM(p.pages),0) AS pages, MAX(p.ts) AS last_ts"
             " FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE p.printer IS NOT NULL {ts_filter}"
-            " GROUP BY p.printer, p.device_id ORDER BY pages DESC"
+            " GROUP BY p.printer, p.device_id ORDER BY pages DESC",
+            ts_params,
         ).fetchall()
     by_name: dict[str, dict[str, Any]] = {}
     for r in name_rows:
@@ -4650,32 +4658,37 @@ def get_print_records(
 
 
 def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
-    """Print stats for a single device over the last *days* days (0 = all time)."""
-    ts_filter = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
+    """Print stats for a single device over the last *days* days (0 = all time).
+
+    ``days`` is self-clamped (P2-15): callers no longer need to pre-validate it.
+    """
+    days = max(0, min(int(days), 365))
+    ts_filter = "AND ts >= ?" if days > 0 else ""
+    ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
     with _connect() as conn:
         total_row = conn.execute(
             f"SELECT COUNT(*) AS jobs, COALESCE(SUM(pages),0) AS pages"  # nosec B608
             f" FROM print_jobs WHERE device_id=? {ts_filter}",
-            (device_id,),
+            (device_id, *ts_params),
         ).fetchone()
         printer_rows = conn.execute(
             f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE device_id=? {ts_filter}"
             " GROUP BY printer ORDER BY pages DESC",
-            (device_id,),
+            (device_id, *ts_params),
         ).fetchall()
         daily_rows = conn.execute(
             f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
             f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
             f" FROM print_jobs WHERE device_id=? {ts_filter}"
             " GROUP BY date ORDER BY date",
-            (device_id,),
+            (device_id, *ts_params),
         ).fetchall()
         recent_rows = conn.execute(
             f"SELECT ts, printer, pages, size_bytes"  # nosec B608
             f" FROM print_jobs WHERE device_id=? {ts_filter}"
             " ORDER BY ts DESC LIMIT 20",
-            (device_id,),
+            (device_id, *ts_params),
         ).fetchall()
     return {
         "device_id": device_id,
@@ -4714,15 +4727,17 @@ def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
     """Fleet-level print totals.
 
     ``today=True`` counts only the current local calendar day; otherwise the
-    last *days* days (0 = all time).
+    last *days* days (0 = all time). ``days`` is self-clamped (P2-15): callers
+    no longer need to pre-validate it.
     """
+    days = max(0, min(int(days), 365))
     params: tuple[Any, ...] = ()
     if today:
         params = (_local_day_start_utc(),)
         ts_f, pts_f = "AND ts >= ?", "AND p.ts >= ?"
     elif days > 0:
-        ts_f = f"AND ts >= datetime('now', '-{days} days')"
-        pts_f = f"AND p.ts >= datetime('now', '-{days} days')"
+        params = (_cutoff_iso(days=days),)
+        ts_f, pts_f = "AND ts >= ?", "AND p.ts >= ?"
     else:
         ts_f = pts_f = ""
     with _connect() as conn:
@@ -4780,7 +4795,9 @@ def get_print_analytics(
     When *date_from*/*date_to* are given the old sections honor that explicit
     range (bound cutoffs, reusing the print-filter date logic) and the
     period-over-period delta is skipped; otherwise the legacy last-*days* window
-    applies unchanged."""
+    applies unchanged. ``days`` is self-clamped (P2-15): callers no longer need
+    to pre-validate it."""
+    days = max(0, min(int(days), 365))
     df, dt = _normalize_dates(date_from, date_to)
     rp: list[Any] = []
     if df or dt:
@@ -4799,8 +4816,10 @@ def get_print_analytics(
         pts_f = ("AND " + " AND ".join(pts_parts)) if pts_parts else ""
         use_prev = False
     else:
-        ts_f = f"AND ts >= datetime('now', '-{days} days')" if days > 0 else ""
-        pts_f = f"AND p.ts >= datetime('now', '-{days} days')" if days > 0 else ""
+        ts_f = "AND ts >= ?" if days > 0 else ""
+        pts_f = "AND p.ts >= ?" if days > 0 else ""
+        if days > 0:
+            rp.append(_cutoff_iso(days=days))
         use_prev = days > 0
     with _connect() as conn:
         total_row = conn.execute(
@@ -4845,11 +4864,10 @@ def get_print_analytics(
         ).fetchall()
         if use_prev:
             prev_row = conn.execute(
-                f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
-                f" FROM print_jobs"
-                f" WHERE ts >= datetime('now', '-{days * 2} days')"
-                f" AND ts < datetime('now', '-{days} days')",
-                (),
+                "SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+                " FROM print_jobs"
+                " WHERE ts >= ? AND ts < ?",
+                (_cutoff_iso(days=days * 2), _cutoff_iso(days=days)),
             ).fetchone()
             prev_pages = int(prev_row["pages"])
             prev_jobs = int(prev_row["jobs"])
