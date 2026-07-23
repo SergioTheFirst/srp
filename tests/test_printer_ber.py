@@ -28,6 +28,22 @@ def test_encode_integer_multibyte_and_high_bit():
     assert ber.encode_integer(256) == b"\x02\x02\x01\x00"
 
 
+def test_encode_integer_negative_one():
+    # -1 должен кодироваться как 0xFF (все биты установлены).
+    # Тело должно иметь минимум 1 октет (валидный BER INTEGER).
+    encoded = ber.encode_integer(-1)
+    assert encoded == b"\x02\x01\xff"  # tag=0x02, length=1, body=0xff
+
+
+def test_encode_integer_negative_values_roundtrip():
+    # Регрессионный тест: убедиться, что существующие положительные значения
+    # не изменились после добавления поддержки отрицательных чисел.
+    assert ber.encode_integer(0) == b"\x02\x01\x00"
+    assert ber.encode_integer(127) == b"\x02\x01\x7f"
+    assert ber.encode_integer(128) == b"\x02\x02\x00\x80"
+    assert ber.encode_integer(256) == b"\x02\x02\x01\x00"
+
+
 def test_encode_decode_oid_roundtrip():
     oid = "1.3.6.1.2.1.1.5.0"
     enc = ber.encode_oid(oid)
