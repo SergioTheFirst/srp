@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import logging
 import struct
 import threading
 from ctypes import wintypes
@@ -25,6 +26,8 @@ from typing import Any, Callable, Optional
 
 from client.collectors.inventory import hash_serial
 from client.collectors.ps import as_list, run_ps
+
+logger = logging.getLogger(__name__)
 
 _SMART_SCRIPT = r"""
 $m=@(); foreach ($d in Get-CimInstance Win32_DiskDrive) {
@@ -215,6 +218,9 @@ def read_nvme_health(
         try:
             outcome["buf"] = transport(disk_index, buf)
         except OSError:
+            outcome["buf"] = None
+        except Exception as e:  # noqa: BLE001 -- catch all to degrade gracefully
+            logger.warning("NVMe IOCTL worker unexpected exception: %s: %s", type(e).__name__, e)
             outcome["buf"] = None
 
     t = threading.Thread(target=_run, daemon=True)
