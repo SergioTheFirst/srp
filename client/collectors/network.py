@@ -1,6 +1,5 @@
-"""Network collector (Phase 1): adapter/IP/Wi-Fi health, ARP neighbors,
-internal-only TCP connections, link quality, and (T1) internal routing-table
-entries. Pure stdlib.
+"""Network collector (Phase 1): adapter/IP, ARP neighbors, internal-only TCP
+connections, link quality, and (T1) internal routing-table entries. Pure stdlib.
 
 Language independence: the PowerShell script emits only numeric values and
 English enum names (Status/State); never localized text. Privacy: external
@@ -200,6 +199,9 @@ def _parse_adapter(raw: Any) -> Optional[dict[str, Any]]:
         "gateway": (gateway if _is_internal(gateway) else None),
         "dns": [ip for ip in _clean_strs(raw.get("dns")) if _is_internal(ip)],
         "dhcp": (bool(raw.get("dhcp")) if raw.get("dhcp") is not None else None),
+        # Wi-Fi fields reserved for future collector enhancement; currently always
+        # empty/None since _NET_SCRIPT does not query Wi-Fi data (would require
+        # Get-NetWiFiProfile / WLAN API integration and PS 5.1-floor verification).
         "ssid": (raw.get("ssid") or None),
         "signal_pct": _i(raw.get("signal_pct")),
         "channel": _i(raw.get("channel")),

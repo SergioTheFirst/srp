@@ -330,6 +330,19 @@ def test_parse_adapter_rejects_non_dict():
     assert network._parse_adapter("nope") is None
 
 
+def test_parse_adapter_includes_wifi_fields_reserved_for_future():
+    """Wi-Fi fields (ssid/signal_pct/channel) are reserved for future
+    implementation; they're currently always None since _NET_SCRIPT does not
+    query Wi-Fi data, but they must be present in the output schema."""
+    a = network._parse_adapter({"name": "Ethernet", "iftype": 6})
+    assert "ssid" in a
+    assert "signal_pct" in a
+    assert "channel" in a
+    assert a["ssid"] is None
+    assert a["signal_pct"] is None
+    assert a["channel"] is None
+
+
 def test_connection_keeps_internal():
     raw = {
         "local_ip": "192.168.1.5",
