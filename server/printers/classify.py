@@ -23,6 +23,8 @@ def is_printer(probe: Dict[str, object], *, ipp: bool = False) -> bool:
             continue
         if oid == _PRINTER_MIB or oid.startswith(_PRINTER_MIB + "."):
             return True
-        if oid.startswith(_HR_DEVICE_TYPE) and value == _HR_DEVICE_PRINTER:
+        if (
+            oid == _HR_DEVICE_TYPE or oid.startswith(_HR_DEVICE_TYPE + ".")
+        ) and value == _HR_DEVICE_PRINTER:
             return True
     return False
