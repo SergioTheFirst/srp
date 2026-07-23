@@ -115,6 +115,29 @@ def test_read_nvme_health_transport_raises_returns_none():
     assert smart.read_nvme_health(0, ioctl_fn=_boom) is None
 
 
+def test_read_nvme_health_transport_raises_non_oserror_returns_none(caplog):
+    """NVMe worker catches unexpected exceptions (not just OSError) to prevent
+    thread death with an unhandled traceback. Non-OSError failures are logged but
+    treated the same as OSError: worker returns None, collector degrades gracefully.
+
+    Asserting `is None` alone doesn't discriminate this fix from an *unfixed*
+    version: `outcome["buf"]` is initialized to `None`, so a thread that dies
+    silently from an unhandled RuntimeError also leaves `read_nvme_health`
+    returning None -- same visible result, no crash reaches the caller either
+    way, since the thread is daemonized and joined with a timeout. The warning
+    log line only fires from the `except Exception` branch itself, so it's
+    what actually proves the exception was caught here rather than the thread
+    just dying quietly in the background."""
+
+    def _boom(idx, buf):
+        raise RuntimeError("unexpected transport failure")
+
+    with caplog.at_level("WARNING", logger="client.collectors.smart"):
+        assert smart.read_nvme_health(0, ioctl_fn=_boom) is None
+    assert "RuntimeError" in caplog.text
+    assert "unexpected transport failure" in caplog.text
+
+
 def test_read_nvme_health_short_response_returns_none():
     assert smart.read_nvme_health(0, ioctl_fn=lambda idx, buf: b"\x00" * 4) is None
 
