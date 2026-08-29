@@ -115,3 +115,36 @@ def test_valid_port_range_boundaries_accepted(
     assert load_config(tmp_path / "missing.json").port == 1
     monkeypatch.setenv("PORT", "65535")
     assert load_config(tmp_path / "missing.json").port == 65535
+
+
+# --------------------------------------------------------------------------- #
+# SRP_CONFIG_PATH: на serverless-хостинге (Vercel) файловая система только для
+# чтения, и приём Dockerfile «скопировать демо-конфиг поверх рабочего» не
+# работает — конфиг выбирается переменной окружения.
+# --------------------------------------------------------------------------- #
+
+
+def test_config_path_env_selects_the_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    other = tmp_path / "demo-config.json"
+    other.write_text(json.dumps({"port": 8123, "stale_after_sec": 3600}), encoding="utf-8")
+    monkeypatch.setenv("SRP_CONFIG_PATH", str(other))
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("SRP_PORT", raising=False)
+    cfg = load_config()
+    assert cfg.port == 8123
+    assert cfg.stale_after_sec == 3600
+
+
+def test_explicit_path_argument_still_wins_over_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Явный аргумент сильнее окружения: иначе тесты и smoke, передающие путь,
+    молча читали бы чужой конфиг."""
+    env_cfg = tmp_path / "env.json"
+    env_cfg.write_text(json.dumps({"port": 8001}), encoding="utf-8")
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text(json.dumps({"port": 8002}), encoding="utf-8")
+    monkeypatch.setenv("SRP_CONFIG_PATH", str(env_cfg))
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("SRP_PORT", raising=False)
+    assert load_config(explicit).port == 8002

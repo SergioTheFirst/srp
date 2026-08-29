@@ -25,6 +25,10 @@ _ORG_DIRECTORY_ENV = "SRP_ORG_DIRECTORY"
 _PORT_ENV = "PORT"
 _PORT_ENV_FALLBACK = "SRP_PORT"
 _DB_PATH_ENV = "SRP_DB_PATH"
+# SRP_CONFIG_PATH: на serverless-хостинге файловая система только для чтения,
+# и подменить server/config.json копированием (как делает Dockerfile) нельзя —
+# поэтому путь к конфигу задаётся переменной окружения.
+_CONFIG_PATH_ENV = "SRP_CONFIG_PATH"
 
 
 @dataclass
@@ -124,7 +128,10 @@ class ServerConfig:
         return load_netdisco_config(self.netdisco)
 
 
-def load_config(path: Path = _CONFIG_PATH) -> ServerConfig:
+def load_config(path: Optional[Path] = None) -> ServerConfig:
+    if path is None:
+        env_cfg = os.environ.get(_CONFIG_PATH_ENV)
+        path = Path(env_cfg) if env_cfg else _CONFIG_PATH
     cfg = ServerConfig()
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
