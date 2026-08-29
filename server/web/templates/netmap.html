@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Карта сети · SRP{% endblock %}
+{% block subtitle %}карта сети{% endblock %}
+
+{% block extra_head %}
+<style>
+.net-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+.net-search {
+  flex: 1; min-width: 220px; max-width: 420px;
+  font: 500 14px/1 var(--mono);
+  padding: 8px 12px; border-radius: var(--r-btn);
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-2); outline: none;
+}
+.net-search:focus { border-color: var(--accent); }
+.net-poll-btn {
+  font: 600 13px/1 var(--mono); padding: 8px 16px; border-radius: var(--r-btn);
+  background: var(--accent-dim); border: 1px solid rgba(14,165,233,.45);
+  color: var(--accent); cursor: pointer;
+}
+.net-poll-btn:hover { background: rgba(14,165,233,.2); }
+.net-poll-btn:disabled { opacity: .5; cursor: default; }
+.net-poll-result { font: 600 13px/1 var(--mono); color: var(--muted); }
+
+table.net-inv td { padding: 8px 11px; font-size: 14px; }
+table.net-inv th { position: static; }
+.changelog { list-style: none; margin-top: 6px; }
+.changelog li {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px;
+}
+.changelog li .when { color: var(--muted); font: 500 12px/1 var(--mono); white-space: nowrap; }
+.changelog li .what { font-weight: 600; }
+.changelog li .who  { color: var(--muted); font-family: var(--mono); }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="net-toolbar">
+  <input id="netgraph-search" class="net-search" type="search"
+         placeholder="фильтр: имя / IP / MAC / тип…" autocomplete="off">
+  <button class="net-poll-btn" id="net-poll-btn" onclick="pollNetworkMap()" {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>⟳ Собрать карту сейчас</button>
+  <span id="net-poll-result" class="net-poll-result"></span>
+  {% if snapshots %}
+  <span id="ng-timemachine" class="net-poll-result"></span>
+  {% endif %}
+  <div class="cards" style="margin-left:auto">
+    <div class="stat"><div class="n">{{ graph.totals.nodes }}</div><div class="l">узлов</div></div>
+    <div class="stat"><div class="n">{{ graph.totals.links }}</div><div class="l">связей</div></div>
+    <div class="stat"><div class="n {{ 'bad' if graph.totals.anomalies }}">{{ graph.totals.anomalies }}</div><div class="l">аномалий</div></div>
+  </div>
+</div>
+{% if history %}
+<p class="muted small" style="margin-bottom:8px">
+  Показан исторический кадр топологии ({{ history.received_at[:16]|replace('T',' ') if history.received_at else '—' }}).
+  Live-оверлеи (качество, аномалии) для него не считаются — вернитесь к живой карте для актуальных данных.
+</p>
+{% endif %}
+
+{# Ф4: единый canvas-движок (один граф — реальные L2/L3 + agent-uplink + качество/кластеры/аномалии). #}
+{% include "_netgraph.html" %}
+
+<h2>Инвентарь сети</h2>
+{% if graph.nodes %}
+<table class="net-inv">
+  <thead><tr><th>Устройство</th><th>IP</th><th>MAC</th><th>Тип</th><th>Статус</th><th>Производитель</th></tr></thead>
+  <tbody>
+  {% for n in graph.nodes %}
+  {% set st = net_status_ru(n.status) %}
+  <tr data-filter="{{ (n.hostname or '')|lower }} {{ (n.ip or '')|lower }} {{ (n.mac or '')|lower }} {{ net_type_ru(n.dev_type)|lower }}">
+    <td>{% if n.card_url %}<a href="{{ n.card_url }}">{{ n.hostname or n.nid }}</a>{% else %}{{ n.hostname or n.nid }}{% endif %}</td>
+    <td class="mono small">{{ n.ip or "—" }}</td>
+    <td class="mono small muted">{{ n.mac or "—" }}</td>
+    <td class="small">{{ net_type_ru(n.dev_type) }}</td>
+    <td><span class="chip {{ st[0] }}">{{ st[1] }}</span></td>
+    <td class="small muted">{{ n.vendor or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Сетевые устройства ещё не обнаружены.</p>
+{% endif %}
+
+<h2 class="incident">Журнал изменений <a href="/netmap/changes" class="small" style="font-weight:400" title="Полная история изменений топологии, не только последние 7 дней">весь журнал →</a></h2>
+{% if changes %}
+<ul class="changelog">
+  {% for c in changes %}
+  <li>
+    <span class="when">{{ c.ts }}</span>
+    <span class="what">{{ net_change_ru(c.kind) }}</span>
+    {% if c.device_nid %}<span class="who">{{ c.device_nid }}</span>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted small">За последние 7 дней изменений топологии не зафиксировано.</p>
+{% endif %}
+
+<script id="netmap-snapshots" type="application/json">{{ snapshots | tojson }}</script>
+<script>
+/* Список снимков топологии для машины времени (Ф5). |tojson (autoescape on). */
+window.__NETMAP_SNAPSHOTS = (function () {
+  try { return JSON.parse(document.getElementById("netmap-snapshots").textContent) || []; }
+  catch (e) { return []; }
+})();
+</script>
+
+<script>
+/* Кнопка «собрать карту сейчас» (D1): запускает ПОЛНЫЙ серверный сбор одним
+   фоновым заданием -- поиск хостов -> инвентарь -> типы -> топология ->
+   доступность -> принтеры -- затем сервер САМ синхронно пересобирает кэш
+   графа. Кнопка опрашивает статус задания раз в 2с, показывает текущую фазу
+   по-русски, и перезагружает страницу только когда задание реально
+   закончилось (не по таймауту, как раньше). Потолок ожидания -- 10 минут.
+   Все строки с сервера идут через textContent -- никогда через innerHTML. */
+var NETMAP_PHASE_RU = {
+  discovery: "поиск хостов",
+  inventory: "инвентарь",
+  classify: "определение типов",
+  topology: "топология",
+  reachability: "доступность",
+  printers: "принтеры",
+  cache: "пересборка карты"
+};
+var NETMAP_COLLECT_CEILING_MS = 10 * 60 * 1000;
+var NETMAP_POLL_INTERVAL_MS = 2000;
+
+function _netmapPhaseLabel(status) {
+  var idx = (status.phases || []).indexOf(status.phase);
+  var total = (status.phases || []).length || 6;
+  var name = NETMAP_PHASE_RU[status.phase] || status.phase || "…";
+  return "сбор: " + name + " (" + (idx + 1) + "/" + total + ")";
+}
+
+var NETMAP_RESULT_KEY_RU = {
+  discovered: "найдено", persisted: "сохранено", linked: "связано", routes: "маршрутов",
+  hints: "подсказок", classified: "классифицировано", probed: "опрошено", links: "связей",
+  deltas: "изменений", down: "недоступно", unreachable: "недостижимо", polled: "опрошено",
+  online: "онлайн", errors: "ошибок", skipped: "пропущено", purged: "удалено",
+  error: "ошибка", skipped_busy: "пропущено (занято)", enriched: "обогащено",
+  added: "добавлено", scanned: "просканировано",
+  saturated: "диапазонов отброшено (VPN/прокси)"
+};
+
+function _netmapResultSummary(result) {
+  var parts = [];
+  Object.keys(result || {}).forEach(function (phase) {
+    var r = result[phase] || {};
+    Object.keys(r).forEach(function (key) {
+      if (key === "busy" || key === "active") return;
+      var v = r[key];
+      if (typeof v === "number" && v) {
+        parts.push((NETMAP_RESULT_KEY_RU[key] || key) + ": " + v);
+      }
+    });
+  });
+  return parts.length ? parts.join(" · ") : "готово, изменений нет";
+}
+
+// startedAtRef -- изменяемая ячейка {v: string|null}: фиксирует СЕРВЕРНОЕ время
+// старта задания (из первого статус-ответа) -- сравнивать нужно server-время с
+// server-временем, у браузера и сервера разный формат ISO-строки.
+function _netmapPollStatus(out, btn, deadline, startedAtRef) {
+  fetch("/api/v1/network-map/collect/status")
+    .then(function (r) { return r.json(); })
+    .then(function (status) {
+      if (!startedAtRef.v) { startedAtRef.v = status.started_at || ""; }
+      if (Date.now() > deadline) {
+        out.textContent = "не дождались окончания сбора";
+        btn.disabled = false;
+        return;
+      }
+      if (status.running) {
+        out.textContent = _netmapPhaseLabel(status);
+        setTimeout(function () { _netmapPollStatus(out, btn, deadline, startedAtRef); }, NETMAP_POLL_INTERVAL_MS);
+        return;
+      }
+      if (!status.finished_at || status.finished_at < startedAtRef.v) {
+        // задание ещё не стартовало на сервере -- продолжаем ждать
+        setTimeout(function () { _netmapPollStatus(out, btn, deadline, startedAtRef); }, NETMAP_POLL_INTERVAL_MS);
+        return;
+      }
+      out.textContent = _netmapResultSummary(status.result);
+      setTimeout(function () { location.reload(); }, 600);
+    })
+    .catch(function (e) {
+      out.textContent = "ошибка: " + String(e);
+      btn.disabled = false;
+    });
+}
+
+function pollNetworkMap() {
+  var btn = document.getElementById("net-poll-btn");
+  var out = document.getElementById("net-poll-result");
+  btn.disabled = true;
+  var deadline = Date.now() + NETMAP_COLLECT_CEILING_MS;
+  out.textContent = "запуск сбора…";
+  fetch("/api/v1/network-map/collect", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.skipped) {
+        out.textContent = "обнаружение сети выключено в конфигурации сервера";
+        btn.disabled = false;
+        return;
+      }
+      if (d.cooldown) {
+        out.textContent = "карта собиралась менее 5 минут назад — повторить можно через " +
+          d.retry_after_sec + " с";
+        btn.disabled = false;
+        return;
+      }
+      if (d.busy) { out.textContent = "сбор уже идёт…"; }
+      _netmapPollStatus(out, btn, deadline, { v: null });
+    })
+    .catch(function (e) {
+      out.textContent = "ошибка: " + String(e);
+      btn.disabled = false;
+    });
+}
+
+/* Текстовый фильтр SSR-таблицы (canvas-движок слушает тот же input). */
+(function () {
+  var input = document.getElementById("netgraph-search");
+  if (!input) return;
+  input.addEventListener("input", function () {
+    var q = input.value.trim().toLowerCase();
+    document.querySelectorAll("tr[data-filter]").forEach(function (el) {
+      var hay = el.getAttribute("data-filter") || "";
+      el.style.display = (!q || hay.indexOf(q) !== -1) ? "" : "none";
+    });
+  });
+})();
+</script>
+{% endblock %}

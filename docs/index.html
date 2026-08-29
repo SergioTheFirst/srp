@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SRP — раннее предупреждение отказов парка Windows-ПК</title>
+<meta name="description" content="Тонкий агент без зависимостей собирает телеметрию Windows-ПК, сервер оценивает риск отказа каждой машины и показывает, какая сломается следующей. Self-hosted, открытый код.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:title" content="SRP — раннее предупреждение отказов парка Windows-ПК">
+<meta property="og:description" content="Агент на чистом stdlib, сервер FastAPI + SQLite, риск-скоринг, прогноз SMART и тонера, карта сети по SNMP. Живое демо по ссылке.">
+<meta property="og:image" content="https://j-space.ru/img/og.png">
+<meta property="og:url" content="https://j-space.ru/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Палитра — ровно токены дашборда (server/web/templates/base.html), чтобы
+   скриншоты на странице читались её продолжением, а не вставками. */
+:root{
+  --bg:#040810; --panel:#07101e; --panel-2:#0b1828;
+  --line:#132030; --line-2:#1d3250;
+  --text:#deeef8; --muted:#7aa8c4;
+  --accent:#0ea5e9;
+  --good:#10d97a; --warn:#f59e0b; --high:#f97316; --bad:#ffe000;
+  --mono:"JetBrains Mono",Consolas,monospace;
+  --body:Inter,-apple-system,"Segoe UI",system-ui,sans-serif;
+  --wrap:1300px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--text); font-family:var(--body);
+  font-size:17px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+img{max-width:100%; display:block; height:auto}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+.shot:hover{text-decoration:none}
+:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
+.wrap{width:min(var(--wrap),calc(100% - 48px)); margin-inline:auto}
+
+/* ── шапка ─────────────────────────────────────────────────────────── */
+.topbar{
+  position:sticky; top:0; z-index:20; background:rgba(4,8,16,.86);
+  backdrop-filter:blur(8px); border-bottom:1px solid var(--line);
+}
+.topbar .wrap{display:flex; align-items:center; gap:28px; height:56px}
+.brand{font-family:var(--mono); font-weight:700; letter-spacing:.5px; color:var(--text)}
+.brand span{color:var(--accent)}
+.brand:hover{text-decoration:none}
+.topnav{display:flex; gap:22px; margin-left:auto; font-family:var(--mono); font-size:13px}
+.topnav a{color:var(--muted)}
+.topnav a:hover{color:var(--text); text-decoration:none}
+
+/* ── общие блоки ───────────────────────────────────────────────────── */
+.band{padding:96px 0}
+.eyebrow{
+  font-family:var(--mono); font-size:12px; letter-spacing:2.4px; text-transform:uppercase;
+  color:var(--muted); margin:0 0 14px;
+}
+h2{font-size:clamp(28px,3.4vw,42px); line-height:1.15; letter-spacing:-.5px; margin:0 0 18px}
+h3{font-size:20px; margin:0 0 8px; letter-spacing:-.2px}
+p{margin:0 0 16px}
+.muted{color:var(--muted)}
+
+/* ── герой ─────────────────────────────────────────────────────────── */
+.hero{padding:88px 0 44px}
+.hero .wrap{display:grid; grid-template-columns:minmax(0,.92fr) minmax(0,1.3fr); gap:48px; align-items:center}
+.hero h1{
+  font-size:clamp(38px,5.2vw,66px); line-height:1.04; letter-spacing:-1.6px;
+  font-weight:800; margin:0 0 20px;
+}
+.hero h1 em{font-style:normal; color:var(--accent)}
+.lede{font-size:19px; color:var(--muted); max-width:34em}
+.cta-row{display:flex; flex-wrap:wrap; gap:12px; margin-top:28px}
+.btn{
+  font-family:var(--mono); font-size:14px; padding:12px 20px; border-radius:4px;
+  border:1px solid var(--line-2); color:var(--text); background:var(--panel-2);
+  transition:transform .16s ease, border-color .16s ease, background .16s ease;
+}
+.btn:hover{text-decoration:none; transform:translateY(-2px); border-color:var(--accent)}
+.btn-primary{background:var(--accent); border-color:var(--accent); color:#03121d; font-weight:700}
+.btn-primary:hover{background:#38bdf8; border-color:#38bdf8}
+.btn-ghost{background:transparent}
+.hero-facts{
+  list-style:none; padding:0; margin:34px 0 0; display:flex; flex-wrap:wrap; gap:10px 26px;
+  font-family:var(--mono); font-size:13px; color:var(--muted);
+}
+.hero-facts b{color:var(--text); font-weight:500}
+
+/* Кадр героя наклонён, при наведении выпрямляется — «подойти ближе». */
+.shot{
+  display:block; border:1px solid var(--line-2); border-radius:6px; overflow:hidden; background:var(--panel);
+  box-shadow:0 30px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(14,165,233,.08);
+}
+.hero-shot{
+  margin:0;
+  transform:perspective(1400px) rotateY(-7deg) rotateX(2deg) rotateZ(-.6deg);
+  transition:transform .5s cubic-bezier(.2,.8,.2,1);
+}
+.hero-shot:hover{transform:perspective(1400px) rotateY(0) rotateX(0) rotateZ(0)}
+
+/* ── сигнатура: полоса витальности ─────────────────────────────────── */
+.ladder{border-block:1px solid var(--line); background:var(--panel); padding:26px 0}
+.ladder-line{
+  position:relative; height:2px; margin:26px 0 14px;
+  background:linear-gradient(90deg,var(--good),var(--warn),var(--high),var(--bad));
+  opacity:.6;
+}
+.ladder-dot{
+  position:absolute; top:50%; left:2%; width:13px; height:13px; margin:-6.5px 0 0 -6.5px;
+  border-radius:50%; background:var(--bad); box-shadow:0 0 0 5px rgba(255,224,0,.16);
+  animation:slide 9s cubic-bezier(.6,0,.4,1) infinite alternate;
+}
+@keyframes slide{from{left:2%}to{left:98%}}
+.ladder-stops{
+  display:flex; justify-content:space-between; gap:8px;
+  font-family:var(--mono); font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:var(--muted);
+}
+.ladder-stops span:first-child{color:var(--good)}
+.ladder-stops span:last-child{color:var(--bad)}
+.ladder-note{font-family:var(--mono); font-size:12px; color:var(--muted); margin:0}
+
+/* ── витрина ───────────────────────────────────────────────────────── */
+.row{display:grid; grid-template-columns:minmax(0,.82fr) minmax(0,1.6fr); gap:48px; align-items:center; margin-bottom:84px}
+.row:last-child{margin-bottom:0}
+.row.flip .row-copy{order:2}
+.row-copy p:last-child{margin-bottom:0}
+.tag{
+  display:inline-block; font-family:var(--mono); font-size:11px; letter-spacing:1.6px;
+  text-transform:uppercase; padding:4px 9px; border-radius:3px; margin-bottom:12px;
+  border:1px solid var(--line-2); color:var(--muted);
+}
+.tag.bad{color:var(--bad); border-color:rgba(255,224,0,.35); background:rgba(255,224,0,.08)}
+.tag.warn{color:var(--warn); border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.08)}
+.tag.good{color:var(--good); border-color:rgba(16,217,122,.3); background:rgba(16,217,122,.08)}
+.row .shot{transition:transform .35s ease, border-color .35s ease}
+.row .shot:hover{transform:translateY(-4px); border-color:var(--accent)}
+
+/* ── как устроено ──────────────────────────────────────────────────── */
+.panelband{background:var(--panel); border-block:1px solid var(--line)}
+.pipeline{margin:34px 0 40px; width:100%; height:auto}
+.steps{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px}
+.step{
+  background:var(--panel-2); border:1px solid var(--line); border-radius:5px; padding:22px;
+  transition:border-color .2s ease, transform .2s ease;
+}
+.step:hover{border-color:var(--line-2); transform:translateY(-3px)}
+.step .k{font-family:var(--mono); font-size:12px; color:var(--accent); letter-spacing:1.6px; text-transform:uppercase}
+.step p{font-size:15px; color:var(--muted); margin:8px 0 0}
+.trust{
+  margin-top:34px; border-left:2px solid var(--accent); padding:6px 0 6px 20px;
+  color:var(--muted); max-width:52em;
+}
+.trust b{color:var(--text); font-weight:500}
+
+/* ── скачать / полная версия ───────────────────────────────────────── */
+.cards{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px; margin-top:30px}
+.card{background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:24px}
+.card .n{font-family:var(--mono); font-size:28px; color:var(--accent); line-height:1}
+.card h3{margin:14px 0 6px}
+.card p{font-size:15px; color:var(--muted); margin:0}
+code{
+  font-family:var(--mono); font-size:13px; background:var(--panel-2);
+  border:1px solid var(--line); border-radius:3px; padding:2px 6px; color:var(--text);
+}
+.limit{
+  margin-top:26px; border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.08);
+  border-radius:4px; padding:14px 18px; font-family:var(--mono); font-size:13px; color:var(--warn);
+}
+.full-list{list-style:none; padding:0; margin:24px 0 0; display:grid; gap:12px; max-width:62em}
+.full-list li{padding-left:26px; position:relative; color:var(--muted)}
+.full-list li::before{content:"+"; position:absolute; left:0; color:var(--accent); font-family:var(--mono)}
+.full-list b{color:var(--text); font-weight:500}
+
+footer{border-top:1px solid var(--line); padding:34px 0; color:var(--muted); font-family:var(--mono); font-size:13px}
+footer .wrap{display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between}
+
+@media (max-width:900px){
+  .band{padding:64px 0}
+  .hero .wrap,.row{grid-template-columns:1fr; gap:32px}
+  .row.flip .row-copy{order:0}
+  .hero-shot{transform:none}
+  .steps,.cards{grid-template-columns:1fr}
+  .topnav{display:none}
+  .ladder-stops{font-size:9px; letter-spacing:.4px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none !important; transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#top">SRP <span>//</span></a>
+    <nav class="topnav" aria-label="Разделы">
+      <a href="#shots">Витрина</a>
+      <a href="#how">Как устроено</a>
+      <a href="#download">Скачать</a>
+      <a href="#full">Полная версия</a>
+      <a href="https://github.com/SergioTheFirst/srp">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-copy">
+      <p class="eyebrow">self-hosted · открытый код · Windows-парк</p>
+      <h1>Раннее предупреждение <em>отказов</em> парка Windows-ПК</h1>
+      <p class="lede">
+        Тонкий агент без единой зависимости собирает телеметрию — SMART, журналы,
+        BSOD, сеть, печать. Сервер оценивает риск отказа каждой машины и показывает,
+        какая сломается следующей.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="demo/">Живое демо</a>
+        <a class="btn" href="#download">Скачать</a>
+        <a class="btn btn-ghost" href="https://github.com/SergioTheFirst/srp">Код на GitHub</a>
+      </div>
+      <ul class="hero-facts">
+        <li><b>0</b> зависимостей у агента</li>
+        <li><b>FastAPI + SQLite</b> на сервере</li>
+        <li><b>3</b> координаты здоровья вместо одного числа</li>
+      </ul>
+    </div>
+    <figure class="hero-shot">
+      <a class="shot" href="img/fleet.png"><img src="img/fleet.png" width="1600" height="900"
+        alt="Список парка: индекс здоровья, состояние и главный фактор риска по каждой машине"></a>
+    </figure>
+  </div>
+</section>
+
+<div class="ladder">
+  <div class="wrap">
+    <p class="ladder-note">машина не ломается вдруг — она проходит эти состояния, и SRP видит переход</p>
+    <div class="ladder-line"><span class="ladder-dot"></span></div>
+    <div class="ladder-stops">
+      <span>здоров</span><span>ранняя деградация</span><span>компенсация</span>
+      <span>ускоренная деградация</span><span>предотказ</span>
+    </div>
+  </div>
+</div>
+
+<section class="band" id="shots">
+  <div class="wrap">
+    <p class="eyebrow">Витрина</p>
+    <h2>Что видно на экране</h2>
+    <p class="muted" style="max-width:44em;margin-bottom:52px">
+      Кадры сняты с демо-парка: десять вымышленных машин с настоящей историей телеметрии.
+    </p>
+
+    <div class="row">
+      <div class="row-copy">
+        <span class="tag bad">предотказ</span>
+        <h3>Диск, который скоро откажет</h3>
+        <p class="muted">
+          124 переназначенных сектора, 18 в ожидании, прошивка сама предсказывает отказ.
+          SRP не ждёт, пока диск встанет: он показывает срок и объясняет каждый фактор
+          словами, а не кодом атрибута.
+        </p>
+      </div>
+      <a class="shot" href="img/device-dying-disk.png"><img src="img/device-dying-disk.png" width="1600" height="900" loading="lazy"
+        alt="Карточка машины: состояние «предотказ» и SMART-история умирающего диска"></a>
+    </div>
+
+    <div class="row flip">
+      <div class="row-copy">
+        <span class="tag warn">прогноз</span>
+        <h3>Тонер закончится раньше, чем вы вспомните о нём</h3>
+        <p class="muted">
+          Сетевые принтеры опрашиваются по SNMP: уровень расходников, счётчики страниц,
+          оценка даты, когда картридж кончится. Плюс — кто именно печатает и сколько.
+        </p>
+      </div>
+      <a class="shot" href="img/printers.png"><img src="img/printers.png" width="1600" height="900" loading="lazy"
+        alt="Страница принтеров: уровни расходников и прогноз исчерпания тонера"></a>
+    </div>
+
+    <div class="row">
+      <div class="row-copy">
+        <span class="tag">карта сети</span>
+        <h3>Кто к чему подключён</h3>
+        <p class="muted">
+          Роутер, коммутатор, точка доступа, компьютеры и принтеры — граф собирается из
+          SNMP, LLDP и наблюдений самих агентов. Беспроводные связи отличаются от
+          проводных, у каждой связи своя уверенность.
+        </p>
+      </div>
+      <a class="shot" href="img/netmap.png"><img src="img/netmap.png" width="1600" height="900" loading="lazy"
+        alt="Карта сети: граф узлов и связей с панелью фильтров"></a>
+    </div>
+
+    <div class="row flip">
+      <div class="row-copy">
+        <span class="tag good">обзор</span>
+        <h3>Здоровье парка целиком</h3>
+        <p class="muted">
+          Распределение по состояниям и тепловая карта «машины × измерения»: где именно
+          проседает парк — в железе, в стабильности ОС или в наблюдаемости.
+        </p>
+      </div>
+      <a class="shot" href="img/health.png"><img src="img/health.png" width="1600" height="900" loading="lazy"
+        alt="Страница здоровья флота: распределение по состояниям и тепловая карта"></a>
+    </div>
+  </div>
+</section>
+
+<section class="band panelband" id="how">
+  <div class="wrap">
+    <p class="eyebrow">Как устроено</p>
+    <h2>Три части, ни одной лишней</h2>
+
+    <svg class="pipeline" viewBox="0 0 900 96" role="img" width="900" height="96"
+         aria-label="Агент на Windows отправляет телеметрию серверу, сервер отдаёт дашборд в браузер">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0 0 L9 4.5 L0 9 z" fill="#1d3250"/>
+        </marker>
+      </defs>
+      <g font-family="JetBrains Mono, monospace" font-size="13" fill="#7aa8c4">
+        <rect x="1" y="24" width="230" height="48" rx="5" fill="#0b1828" stroke="#1d3250"/>
+        <text x="116" y="53" text-anchor="middle" fill="#deeef8">агент · Windows</text>
+        <line x1="240" y1="48" x2="325" y2="48" stroke="#1d3250" stroke-width="2" marker-end="url(#ar)"/>
+        <text x="282" y="38" text-anchor="middle">HTTP</text>
+        <rect x="335" y="24" width="230" height="48" rx="5" fill="#0b1828" stroke="#1d3250"/>
+        <text x="450" y="53" text-anchor="middle" fill="#deeef8">сервер · FastAPI</text>
+        <line x1="574" y1="48" x2="659" y2="48" stroke="#1d3250" stroke-width="2" marker-end="url(#ar)"/>
+        <text x="616" y="38" text-anchor="middle">HTML</text>
+        <rect x="669" y="24" width="230" height="48" rx="5" fill="#0b1828" stroke="#0ea5e9"/>
+        <text x="784" y="53" text-anchor="middle" fill="#deeef8">дашборд · браузер</text>
+      </g>
+    </svg>
+
+    <div class="steps">
+      <div class="step">
+        <div class="k">агент</div>
+        <h3>Ничего не ставит сверх себя</h3>
+        <p>Чистая стандартная библиотека Python, ноль pip-пакетов на рабочих машинах.
+        PowerShell 5.1 — тот, что уже есть в Windows. Данные собираются
+        языконезависимо: русская Windows отдаёт те же числа, что английская.</p>
+      </div>
+      <div class="step">
+        <div class="k">сервер</div>
+        <h3>Одна команда, один файл базы</h3>
+        <p>FastAPI и SQLite, разворачивается у вас — телеметрия парка наружу не уходит.
+        Сервер проверяет каждый конверт на границе, копит историю, считает риск и
+        держит прогнозы.</p>
+      </div>
+      <div class="step">
+        <div class="k">дашборд</div>
+        <h3>Не число, а объяснение</h3>
+        <p>Три координаты здоровья, риск по классам отказа с разбором вклада каждого
+        фактора, прогнозы SMART и тонера, карта сети. Серверный рендер, без сборки JS.</p>
+      </div>
+    </div>
+
+    <p class="trust">
+      <b>Доверие к данным — часть модели.</b> У каждого источника телеметрии своя оценка:
+      источник может устареть, начать врать или замолчать. Такой источник не участвует в
+      выводах, и это видно на экране. <b>UNKNOWN честнее ложной уверенности</b> — SRP скорее
+      скажет «не знаю», чем нарисует уверенный ноль.
+    </p>
+  </div>
+</section>
+
+<section class="band" id="download">
+  <div class="wrap">
+    <p class="eyebrow">Скачать бесплатно</p>
+    <h2>Три шага до первого экрана</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="n">1</div>
+        <h3>Поднять сервер</h3>
+        <p>Скачайте <code>srp-server-free.zip</code>, распакуйте и запустите
+        <code>install-server.bat</code>. Нужен Python 3.9+.</p>
+      </div>
+      <div class="card">
+        <div class="n">2</div>
+        <h3>Поставить агент</h3>
+        <p>На каждой машине запустите <code>srp-setup-free.exe</code> от администратора.
+        Мастер спросит адрес сервера — и всё.</p>
+      </div>
+      <div class="card">
+        <div class="n">3</div>
+        <h3>Открыть дашборд</h3>
+        <p>Через несколько минут на <code>http://адрес-сервера:8000</code> появятся первые
+        машины и их оценки.</p>
+      </div>
+    </div>
+    <p class="limit">Бесплатная версия: до 3 компьютеров · некоммерческое использование (PolyForm Noncommercial)</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать в Releases</a>
+      <a class="btn" href="demo/">Сначала посмотреть демо</a>
+    </div>
+  </div>
+</section>
+
+<section class="band panelband" id="full">
+  <div class="wrap">
+    <p class="eyebrow">Полная версия</p>
+    <h2>Когда парк больше трёх машин</h2>
+    <ul class="full-list">
+      <li><b>Без лимита машин</b> — весь парк на одном сервере.</li>
+      <li><b>Автообновление агентов</b> — новая версия расходится по парку сама, с откатом при неудаче.</li>
+      <li><b>Несколько организаций и подразделений</b> — свои площадки, свои списки, свои владельцы машин.</li>
+      <li><b>Поддержка внедрения</b> — установка, настройка сбора, разбор первых находок.</li>
+    </ul>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/SergioTheFirst">Написать автору</a>
+      <a class="btn btn-ghost" href="https://github.com/SergioTheFirst/srp">Посмотреть код</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 SRP · лицензия PolyForm Noncommercial 1.0.0</span>
+    <span><a href="https://github.com/SergioTheFirst/srp">github.com/SergioTheFirst/srp</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

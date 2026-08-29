@@ -1,0 +1,68 @@
+{# Ф6 shared topology section: the network twin (net_devices, FK-linked in Ф1) of
+   the canonical agent / printer card. Reused by device.html and printer_detail.html.
+   Renders nothing when ``nd`` is absent. All values are SNMP/discovery strings ->
+   autoescape (on for .html) keeps them inert; no |safe, no innerHTML. Collapsible
+   so it never bloats the host card. #}
+{% if nd %}
+{% set nst = net_status_ru(nd.status) %}
+<div class="section-label" style="margin-top:28px">Сеть — топология</div>
+<details class="net-topo"{% if nd.links %} open{% endif %}>
+  <summary>
+    <span class="chip {{ nst[0] }}">{{ nst[1] }}</span>
+    <span class="pill">{{ net_type_ru(nd.dev_type) }}</span>
+    {% if nd.vendor %}<span class="muted">{{ nd.vendor }}</span>{% endif %}
+    · <a href="/netdisco/device/{{ nd.device_nid | urlencode }}">полная карточка устройства</a>
+  </summary>
+
+  <div class="nt-meta small muted mono">
+    IP {{ nd.ip or "—" }} · MAC {{ nd.mac or "—" }}{% if nd.model %} · {{ nd.model }}{% endif %}
+    · впервые {{ nd.first_seen or "—" }} · последний раз {{ nd.last_seen or "—" }}
+  </div>
+
+  {% if nd.interfaces %}
+  <table style="margin-top:10px">
+    <thead><tr><th>#</th><th>Имя</th><th>Тип</th><th>Состояние</th><th>MAC</th></tr></thead>
+    <tbody>
+    {% for i in nd.interfaces %}
+    <tr>
+      <td class="mono small">{{ i.if_index if i.if_index is not none else "—" }}</td>
+      <td class="mono small">{{ i.name or "—" }}</td>
+      <td class="mono small muted">{{ i.if_type if i.if_type is not none else "—" }}</td>
+      <td>
+        {% if i.oper_up == 1 %}<span class="chip good">up</span>
+        {% elif i.oper_up == 0 %}<span class="chip bad">down</span>
+        {% else %}<span class="chip na">—</span>{% endif %}
+      </td>
+      <td class="mono small muted">{{ i.phys_mac or "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if nd.links %}
+  <ul class="nt-links">
+    {% for l in nd.links %}
+    {% set peer = l.b_nid if l.a_nid == nd.device_nid else l.a_nid %}
+    <li>
+      <a href="/netdisco/device/{{ peer | urlencode }}">{{ peer }}</a>
+      <span class="chip {{ net_conf_color(l.confidence) }}">{{ l.confidence or "—" }}</span>
+      <span class="via muted">{{ l.link_kind or "link" }} · через {{ l.via_source or "—" }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if not nd.interfaces and not nd.links %}
+  <p class="muted small" style="margin-top:10px">Интерфейсы и связи ещё не собраны по SNMP.</p>
+  {% endif %}
+</details>
+<style>
+.net-topo { margin-top: 8px; }
+.net-topo > summary { cursor: pointer; font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.net-topo .nt-meta { margin: 10px 0 2px; }
+.net-topo .nt-links { list-style: none; margin-top: 8px; padding: 0; }
+.net-topo .nt-links li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.net-topo .nt-links .via { font: 500 12px/1 var(--mono); }
+</style>
+{% endif %}

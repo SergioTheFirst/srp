@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HP LaserJet M428 · Принтер · SRP</title>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+.back { font:600 13px/1 var(--mono); color:var(--muted); }
+.kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:14px 0 24px; }
+.kv .stat .l { margin-bottom:4px; }
+.kv .stat .v { font:600 15px/1.3 var(--mono); word-break:break-word; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:16px 16px; margin-bottom:18px; }
+.panel .ch-title { font:600 11px/1 var(--mono); letter-spacing:1.4px; text-transform:uppercase; color:var(--muted); margin-bottom:12px; }
+.suprow { display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line); }
+.suprow:first-child { border-top:none; }
+.suprow .nm { flex:1; }
+.supbar2 { width:160px; height:8px; border-radius:4px; background:var(--line); overflow:hidden; }
+.supbar2 > i { display:block; height:100%; }
+.supbar2.good>i{background:var(--good);} .supbar2.warn>i{background:var(--warn);} .supbar2.bad>i{background:var(--bad);} .supbar2.na>i{background:var(--na);}
+td.r,th.r{text-align:right;}
+.no-data{ color:var(--muted); padding:14px 0; }
+.eta { font:600 12px/1 var(--mono); margin-left:2px; }
+.eta.bad { color:var(--bad); }
+.eta.warn { color:var(--warn); }
+</style>
+
+<style>
+/* ─── Dark theme (default) ─────────────────────────────────────────── */
+:root {
+  --bg:          #040810;
+  --panel:       #07101e;
+  --panel-2:     #0b1828;
+  --line:        #132030;
+  --line-2:      #1d3250;
+  --text:        #deeef8;
+  --muted:       #7aa8c4;
+  --accent:      #0ea5e9;
+  --accent-dim:  rgba(14,165,233,.12);
+  --good:        #10d97a;
+  --good-dim:    rgba(16,217,122,.12);
+  --warn:        #f59e0b;
+  --warn-dim:    rgba(245,158,11,.12);
+  --high:        #f97316;
+  --high-dim:    rgba(249,115,22,.12);
+  /* Dark theme: no red — "bad" reads as a high-contrast yellow highlight. */
+  --bad:         #ffe000;
+  --bad-dim:     rgba(255,224,0,.14);
+  --na:          #5878a0;
+  --na-dim:      rgba(88,120,160,.12);
+  --mono:        "JetBrains Mono","Cascadia Code","Fira Code",Consolas,monospace;
+  --font-body:   -apple-system,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+  --r-card:      5px;
+  --r-chip:      3px;
+  --r-btn:       4px;
+  --r-pill:      100px;
+  --shadow-card: none;
+  --header-h:    44px;
+}
+
+/* ─── Meta theme ────────────────────────────────────────────────────── */
+[data-theme="meta"] {
+  --bg:          #ffffff;
+  --panel:       #f1f4f7;
+  --panel-2:     #ffffff;
+  --line:        #ced0d4;
+  --line-2:      #dee3e9;
+  --text:        #0a1317;
+  --muted:       #5d6c7b;
+  --accent:      #0064e0;
+  --accent-dim:  rgba(0,100,224,.10);
+  --good:        #31a24c;
+  --good-dim:    rgba(49,162,76,.10);
+  --warn:        #f7b928;
+  --warn-dim:    rgba(247,185,40,.12);
+  --high:        #f2a918;
+  --high-dim:    rgba(242,169,24,.12);
+  --bad:         #e41e3f;
+  --bad-dim:     rgba(228,30,63,.10);
+  --na:          #8595a4;
+  --na-dim:      rgba(133,149,164,.10);
+  --font-body:   "Helvetica Neue",Helvetica,"Segoe UI",Arial,sans-serif;
+  --r-card:      16px;
+  --r-chip:      100px;
+  --r-btn:       100px;
+  --shadow-card: rgba(20,22,26,.08) 0 1px 4px 0;
+  --header-h:    64px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 var(--font-body);
+  min-height: 100vh;
+  transition: background .2s, color .2s;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ─── Header ─────────────────────────────────────────────────────────── */
+header.top {
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 28px;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--line-2);
+  background: var(--panel);
+  position: sticky; top: 0; z-index: 100;
+  transition: background .2s, border-color .2s;
+}
+.brand {
+  font: 700 17px/1 var(--mono);
+  letter-spacing: .4px;
+  flex-shrink: 0;
+}
+.brand em { color: var(--accent); font-style: normal; }
+.sub { color: var(--muted); font-size: 14px; }
+header.top nav { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+
+/* Dark nav: plain links */
+header.top nav a {
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: var(--r-btn);
+  transition: color .15s;
+}
+header.top nav a:hover { color: var(--accent); text-decoration: none; }
+
+/* Meta nav: pill tabs */
+[data-theme="meta"] header.top .brand {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+[data-theme="meta"] header.top nav a {
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--bg);
+}
+[data-theme="meta"] header.top nav a:hover {
+  color: var(--text);
+  border-color: var(--text);
+  text-decoration: none;
+}
+[data-theme="meta"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+}
+
+/* ─── Theme toggle button ────────────────────────────────────────────── */
+#theme-toggle {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 700 13px/1 var(--font-body);
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  letter-spacing: .2px;
+  transition: border-color .15s, color .15s, background .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+[data-theme="meta"] #theme-toggle {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+[data-theme="meta"] #theme-toggle:hover {
+  background: #444950;
+  border-color: #444950;
+}
+
+main { padding: 24px 28px; max-width: 1220px; margin: 0 auto; }
+
+/* ─── Section headings ───────────────────────────────────────────────── */
+h2, .section-label {
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+  margin: 30px 0 14px;
+}
+h2::after, .section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.section-label.predictive { color: var(--accent); }
+.section-label.predictive::after { background: rgba(14,165,233,.25); }
+.section-label.incident { color: var(--warn); }
+.section-label.incident::after { background: rgba(245,158,11,.2); }
+
+/* Meta section labels: drop uppercase mono, use clean style */
+[data-theme="meta"] h2,
+[data-theme="meta"] .section-label {
+  font: 700 13px/1 var(--font-body);
+  letter-spacing: .3px;
+  text-transform: none;
+  color: var(--muted);
+}
+[data-theme="meta"] .section-label.predictive { color: var(--accent); }
+[data-theme="meta"] .section-label.incident   { color: var(--high); }
+
+/* ─── Utility ────────────────────────────────────────────────────────── */
+.muted { color: var(--muted); }
+.mono  { font-family: var(--mono); }
+.small { font-size: 14px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill {
+  font: 600 12px/1 var(--mono);
+  padding: 2px 7px; border-radius: 20px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+
+/* ─── Chips ──────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 700 13px/1 var(--mono);
+  padding: 3px 8px; border-radius: var(--r-chip);
+  letter-spacing: .3px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+[data-theme="meta"] .chip {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.chip.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.35); }
+.chip.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.35); }
+.chip.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.35); }
+.chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
+.chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
+.chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+/* "not in directory" chip — a typo'd org/dept code, surfaced not rejected (§7) */
+.chip-unk {
+  display: inline-block; font: 600 10px/1 var(--mono); vertical-align: middle;
+  padding: 2px 5px; border-radius: 3px;
+  background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.35);
+}
+
+/* ─── Score grid ─────────────────────────────────────────────────────── */
+.scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.scorecard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 15px 18px;
+  box-shadow: var(--shadow-card);
+  transition: border-radius .2s, box-shadow .2s;
+}
+[data-theme="meta"] .scorecard {
+  background: #fff;
+  border-left-width: 1px;
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="meta"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 16px; right: 16px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--line);
+}
+[data-theme="meta"] .scorecard.good::before { background: var(--good); }
+[data-theme="meta"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="meta"] .scorecard.high::before { background: var(--high); }
+[data-theme="meta"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="meta"] .scorecard.na::before   { background: var(--na); }
+
+.scorecard.good { border-left-color: var(--good); }
+.scorecard.warn { border-left-color: var(--warn); }
+.scorecard.high { border-left-color: var(--high); }
+.scorecard.bad  { border-left-color: var(--bad); }
+.scorecard.na   { border-left-color: var(--na); }
+
+.scorecard .lab {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted);
+}
+[data-theme="meta"] .scorecard .lab {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+.scorecard .val {
+  font: 700 40px/1 var(--mono); margin: 8px 0 4px;
+}
+[data-theme="meta"] .scorecard .val {
+  font: 500 40px/1 var(--font-body);
+}
+.val.good { color: var(--good); }
+.val.warn { color: var(--warn); }
+.val.high { color: var(--high); }
+.val.bad  { color: var(--bad); }
+.val.na   { color: var(--na); }
+.scorecard .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 12px; }
+.scorecard .bar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.scorecard.good .bar > i { background: var(--good); }
+.scorecard.warn .bar > i { background: var(--warn); }
+.scorecard.high .bar > i { background: var(--high); }
+.scorecard.bad  .bar > i { background: var(--bad); }
+.scorecard.na   .bar > i { background: var(--na); }
+
+/* ─── Risk rows ──────────────────────────────────────────────────────── */
+.riskrow {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 14px 16px; margin-bottom: 8px;
+  box-shadow: var(--shadow-card);
+}
+.riskrow .head {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 12px;
+}
+.riskrow .name { font-weight: 600; font-size: 16px; }
+[data-theme="meta"] .riskrow { background: #fff; }
+.riskbar { height: 6px; background: var(--line); border-radius: 2px; margin: 10px 0 6px; overflow: hidden; }
+.riskbar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.riskbar.good > i { background: var(--good); }
+.riskbar.warn > i { background: var(--warn); }
+.riskbar.high > i { background: var(--high); }
+.riskbar.bad  > i { background: var(--bad); }
+.riskbar.na   > i { background: var(--na); }
+
+/* ─── Factors list ───────────────────────────────────────────────────── */
+.factors { list-style: none; font-size: 14px; margin-top: 8px; }
+.factors li {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted);
+}
+.factors li .w { font-family: var(--mono); }
+.w.pos { color: var(--bad); }
+.w.neg { color: var(--good); }
+
+/* ─── Table ──────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th {
+  color: var(--muted); font: 600 12px/1 var(--mono);
+  letter-spacing: 1px; text-transform: uppercase;
+  background: var(--panel);
+  position: sticky; top: var(--header-h); z-index: 10;
+}
+/* .table-wrap (printers.html, device.html + _device_net.html, print.html) sets
+   overflow-x:auto, which per the CSS Overflow spec forces overflow-y's computed
+   value to auto too (CSS Overflow §3.5) -- silently turning the div into a scroll
+   container, which becomes the sticky positioning ancestor for `th` above instead
+   of the page. Without this override the header sticks var(--header-h) INSIDE the
+   wrapper and its opaque background paints over the first data row underneath.
+   Shared here (not per-template) so every current and future .table-wrap picks it
+   up automatically -- do not remove without re-checking this interaction. */
+.table-wrap th { top: 0; }
+[data-theme="meta"] th {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+tbody tr { transition: background .1s; }
+tbody tr:hover { background: var(--panel-2); }
+[data-theme="meta"] tbody tr:hover { background: var(--panel); }
+
+/* ─── Stat cards ─────────────────────────────────────────────────────── */
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.stat {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 12px 16px; min-width: 110px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="meta"] .stat { background: #fff; }
+.stat .n { font: 700 24px/1 var(--mono); }
+[data-theme="meta"] .stat .n { font: 500 24px/1 var(--font-body); }
+.stat .l { color: var(--muted); font: 600 11px/1.2 var(--mono); letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+[data-theme="meta"] .stat .l { font: 700 12px/1.2 var(--font-body); letter-spacing: .2px; text-transform: none; }
+
+/* ─── Alert banners ──────────────────────────────────────────────────── */
+.alert-banner {
+  padding: 11px 15px; border-radius: var(--r-card); margin-bottom: 10px;
+  font-size: 15px; border-left: 3px solid;
+}
+[data-theme="meta"] .alert-banner {
+  border-left: none;
+  border-radius: var(--r-card);
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.alert-bad  { background: var(--bad-dim);  border-color: var(--bad);  color: var(--bad); }
+.alert-warn { background: var(--warn-dim); border-color: var(--warn); color: var(--warn); }
+
+/* ─── Misc ───────────────────────────────────────────────────────────── */
+details > summary { cursor: pointer; color: var(--muted); font-size: 15px; list-style: none; }
+details > summary::before { content: "▶ "; font-size: 12px; }
+details[open] > summary::before { content: "▼ "; }
+code {
+  font-family: var(--mono); background: var(--panel-2);
+  padding: 1px 5px; border-radius: 3px; font-size: 14px;
+}
+
+/* ─── Vercel theme ──────────────────────────────────────────────────────── */
+[data-theme="vercel"] {
+  --bg:          #fafafa;
+  --panel:       #ffffff;
+  --panel-2:     #f5f5f5;
+  --line:        #ebebeb;
+  --line-2:      #a1a1a1;
+  --text:        #171717;
+  --muted:       #4d4d4d;
+  --accent:      #0070f3;
+  --accent-dim:  rgba(0,112,243,.07);
+  --good:        #0070f3;
+  --good-dim:    rgba(0,112,243,.07);
+  --warn:        #f5a623;
+  --warn-dim:    rgba(245,166,35,.10);
+  --high:        #f5a623;
+  --high-dim:    rgba(245,166,35,.10);
+  --bad:         #ee0000;
+  --bad-dim:     rgba(238,0,0,.07);
+  --na:          #888888;
+  --na-dim:      rgba(136,136,136,.10);
+  --font-body:   system-ui,-apple-system,"Segoe UI Variable","Segoe UI",sans-serif;
+  --r-card:      8px;
+  --r-chip:      100px;
+  --r-btn:       6px;
+  --shadow-card: inset 0 0 0 1px rgba(0,0,0,.08),0 1px 1px rgba(0,0,0,.02),0 2px 2px rgba(0,0,0,.04);
+  --header-h:    64px;
+}
+[data-theme="vercel"] header.top {
+  background: rgba(255,255,255,.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding-top: 2px;
+}
+[data-theme="vercel"] header.top::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,#007cf0,#00dfd8,#7928ca,#ff0080,#ff4d4d,#f9cb28);
+  z-index: 1;
+}
+[data-theme="vercel"] .brand {
+  font: 600 16px/1 var(--font-body);
+  letter-spacing: -.4px;
+  color: var(--text);
+}
+[data-theme="vercel"] .brand em {
+  background: linear-gradient(90deg,#007cf0,#7928ca,#ff0080);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+[data-theme="vercel"] header.top nav a {
+  color: var(--muted);
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font: 400 14px/1 var(--font-body);
+}
+[data-theme="vercel"] header.top nav a:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+[data-theme="vercel"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+}
+[data-theme="vercel"] #theme-toggle {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+  border-radius: var(--r-btn);
+  font: 500 14px/1 var(--font-body);
+  height: 28px;
+  padding: 0 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] #theme-toggle:hover {
+  background: #333;
+  border-color: #333;
+}
+[data-theme="vercel"] h2,
+[data-theme="vercel"] .section-label {
+  font: 400 12px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .section-label.predictive { color: var(--accent); }
+[data-theme="vercel"] .section-label.predictive::after { background: rgba(0,112,243,.15); }
+[data-theme="vercel"] .section-label.incident   { color: var(--warn); }
+[data-theme="vercel"] .section-label.incident::after   { background: rgba(245,166,35,.2); }
+[data-theme="vercel"] .scorecard {
+  background: var(--panel);
+  border: none;
+  border-left: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="vercel"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  border-radius: var(--r-card) var(--r-card) 0 0;
+  background: var(--line);
+}
+[data-theme="vercel"] .scorecard.good::before { background: var(--good); }
+[data-theme="vercel"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="vercel"] .scorecard.high::before { background: var(--high); }
+[data-theme="vercel"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="vercel"] .scorecard .lab {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .scorecard .val {
+  font: 600 40px/1 var(--font-body);
+  letter-spacing: -1.5px;
+}
+[data-theme="vercel"] .chip {
+  font: 500 12px/1 var(--font-body);
+  border-radius: var(--r-chip);
+  padding: 3px 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] .chip.good  { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .chip.warn  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.high  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.bad   { background: rgba(238,0,0,.07);    color: #ee0000; border-color: rgba(238,0,0,.2); }
+[data-theme="vercel"] .chip.na    { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
+[data-theme="vercel"] .chip.accent{ background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .riskrow {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat .n {
+  font: 600 24px/1 var(--font-body);
+  letter-spacing: -.8px;
+}
+[data-theme="vercel"] .stat .l {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+[data-theme="vercel"] th {
+  background: var(--bg);
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] td { border-bottom-color: var(--line); }
+[data-theme="vercel"] tbody tr:hover { background: rgba(0,0,0,.02); }
+[data-theme="vercel"] .alert-bad  { background: rgba(238,0,0,.06);    border-color: var(--bad);  color: #ee0000; }
+[data-theme="vercel"] .alert-warn { background: rgba(245,166,35,.08); border-color: var(--warn); color: #ab570a; }
+[data-theme="vercel"] .pill { background: var(--panel-2); border-color: var(--line); color: var(--muted); }
+[data-theme="vercel"] code { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+</style>
+<script>
+(function () {
+  var saved = localStorage.getItem("srp-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+})();
+// XSS defense (one source of truth): HTML-escape any agent/operator-controlled
+// string before it reaches an innerHTML or Plotly pseudo-HTML sink. Plotly renders
+// a <b>/<a>/<span> tag subset inside tick + hover text, so an un-escaped value there
+// executes just like innerHTML would. Escaped entities still round-trip to the
+// correct glyph for display, so legitimate names render unchanged.
+// HTML-context only: safe for innerHTML / double-quoted attributes / Plotly text.
+// NOT sufficient for a JS-string, URL/href, or unquoted-attribute sink — those need
+// their own encoding.
+window.srpEsc = function (s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
+</script>
+</head>
+<body>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Статичная копия демо от 2026-08-29. <a style="color:#0ea5e9" href="https://srp-demo.onrender.com/">Открыть живую версию</a> · <a style="color:#0ea5e9" href="../../index.html">на главную j-space.ru</a></div>
+<script id="mirror-data" type="application/json">{}</script>
+<script>
+(function () {
+  var D = JSON.parse(document.getElementById("mirror-data").textContent);
+  window.fetch = function (url) {
+    var key = String(url), hit = null;
+    Object.keys(D).forEach(function (k) { if (key.indexOf(k) !== -1) { hit = k; } });
+    var v = hit === null ? null : D[hit];
+    return Promise.resolve({
+      ok: hit !== null,
+      status: hit === null ? 404 : 200,
+      json: function () { return Promise.resolve(v); },
+      text: function () {
+        return Promise.resolve(typeof v === "string" ? v : JSON.stringify(v));
+      }
+    });
+  };
+})();
+</script>
+<header class="top">
+  <div class="brand">SRP <em>//</em> раннее предупреждение</div>
+  <div class="sub">принтер</div>
+  <nav>
+    <a href="../index.html">флот</a>
+    <a href="../health.html">здоровье</a>
+    <a href="../pipeline.html">пайплайн</a>
+    <a href="../print.html">печать</a>
+    <a href="../printers.html">принтеры</a>
+    <a href="../netmap.html">карта сети</a>
+    <a href="https://srp-demo.onrender.com/deploy">развёртывание</a>
+    <a href="https://srp-demo.onrender.com/api/v1/devices">API</a>
+    <button id="theme-toggle" onclick="(function(){
+      var h=document.documentElement;
+      var themes=['','meta','vercel'];
+      var labels={'':'Meta','meta':'Vercel','vercel':'Тёмный'};
+      var cur=h.getAttribute('data-theme')||'';
+      var next=themes[(themes.indexOf(cur)+1)%themes.length];
+      h.setAttribute('data-theme',next);
+      localStorage.setItem('srp-theme',next);
+      document.getElementById('theme-toggle').textContent=labels[next];
+    })()" title="Переключить тему"></button>
+    
+    <span class="chip accent" title="Публичное демо: данные вымышленные, изменение отключено">ДЕМО · только чтение</span>
+  </nav>
+</header>
+<main>
+
+
+
+<a class="back" href="../printers.html">← все принтеры</a>
+
+<h2 style="margin-top:14px">HP LaserJet M428 <span class="chip good">готов</span></h2>
+
+<div class="kv">
+  <div class="stat"><div class="l">IP</div><div class="v">192.168.77.21</div></div>
+  <div class="stat"><div class="l">Имя</div><div class="v">—</div></div>
+  <div class="stat"><div class="l">Вендор</div><div class="v">HP</div></div>
+  <div class="stat"><div class="l">Серийный №</div><div class="v">HP-M428-DM01</div></div>
+  <div class="stat"><div class="l">MAC</div><div class="v">02:1A:2B:00:00:21</div></div>
+  <div class="stat"><div class="l">Прошивка</div><div class="v">—</div></div>
+  <div class="stat"><div class="l">Страниц (всего)</div><div class="v">124 650</div></div>
+  <div class="stat"><div class="l">Первые данные</div><div class="v">2026-08-10T10:00</div></div>
+  <div class="stat"><div class="l">Последний опрос</div><div class="v">2026-08-29T06:18</div></div>
+  <div class="stat"><div class="l">Источник</div><div class="v">snmp · snmp</div></div>
+</div>
+
+
+
+<div class="panel">
+  <div class="ch-title">История счётчика страниц</div>
+  <div id="chart-counter" style="height:260px"></div>
+</div>
+
+<div class="panel">
+  <div class="ch-title">Расходники</div>
+  
+    
+    <div class="suprow">
+      <span class="nm">Black Toner <span class="muted small">(toner)</span></span>
+      
+        <span class="supbar2 bad"><i style="width:9%"></i></span>
+        <span class="mono">9%</span>
+        <span class="eta bad" title="Прогноз по скорости расхода за последние недели">≈3 дн</span>
+      
+    </div>
+    
+  
+</div>
+
+
+
+<div class="panel">
+  <div class="ch-title">Печать с компьютеров (за 30 дн)</div>
+  <div class="no-data">Нет сопоставленных данных печати с ПК (имя принтера на ПК может отличаться от сетевого).</div>
+</div>
+
+
+
+<script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>
+<script id="series-data" type="application/json">[{"color_pages": null, "duplex_pages": null, "mono_pages": 124650, "received_at": "2026-08-29T06:18:45.342572+00:00", "status": "idle", "total_pages": 124650}, {"color_pages": null, "duplex_pages": null, "mono_pages": 124321, "received_at": "2026-08-28T10:00:00+00:00", "status": "idle", "total_pages": 124321}, {"color_pages": null, "duplex_pages": null, "mono_pages": 123992, "received_at": "2026-08-27T10:00:00+00:00", "status": "idle", "total_pages": 123992}, {"color_pages": null, "duplex_pages": null, "mono_pages": 123663, "received_at": "2026-08-26T10:00:00+00:00", "status": "idle", "total_pages": 123663}, {"color_pages": null, "duplex_pages": null, "mono_pages": 123334, "received_at": "2026-08-25T10:00:00+00:00", "status": "idle", "total_pages": 123334}, {"color_pages": null, "duplex_pages": null, "mono_pages": 123005, "received_at": "2026-08-24T10:00:00+00:00", "status": "idle", "total_pages": 123005}, {"color_pages": null, "duplex_pages": null, "mono_pages": 122676, "received_at": "2026-08-23T10:00:00+00:00", "status": "idle", "total_pages": 122676}, {"color_pages": null, "duplex_pages": null, "mono_pages": 122347, "received_at": "2026-08-22T10:00:00+00:00", "status": "idle", "total_pages": 122347}, {"color_pages": null, "duplex_pages": null, "mono_pages": 122018, "received_at": "2026-08-21T10:00:00+00:00", "status": "idle", "total_pages": 122018}, {"color_pages": null, "duplex_pages": null, "mono_pages": 121689, "received_at": "2026-08-20T10:00:00+00:00", "status": "idle", "total_pages": 121689}, {"color_pages": null, "duplex_pages": null, "mono_pages": 121361, "received_at": "2026-08-19T10:00:00+00:00", "status": "idle", "total_pages": 121361}, {"color_pages": null, "duplex_pages": null, "mono_pages": 121032, "received_at": "2026-08-18T10:00:00+00:00", "status": "idle", "total_pages": 121032}, {"color_pages": null, "duplex_pages": null, "mono_pages": 120703, "received_at": "2026-08-17T10:00:00+00:00", "status": "idle", "total_pages": 120703}, {"color_pages": null, "duplex_pages": null, "mono_pages": 120374, "received_at": "2026-08-16T10:00:00+00:00", "status": "idle", "total_pages": 120374}, {"color_pages": null, "duplex_pages": null, "mono_pages": 120045, "received_at": "2026-08-15T10:00:00+00:00", "status": "idle", "total_pages": 120045}, {"color_pages": null, "duplex_pages": null, "mono_pages": 119716, "received_at": "2026-08-14T10:00:00+00:00", "status": "idle", "total_pages": 119716}, {"color_pages": null, "duplex_pages": null, "mono_pages": 119387, "received_at": "2026-08-13T10:00:00+00:00", "status": "idle", "total_pages": 119387}, {"color_pages": null, "duplex_pages": null, "mono_pages": 119058, "received_at": "2026-08-12T10:00:00+00:00", "status": "idle", "total_pages": 119058}, {"color_pages": null, "duplex_pages": null, "mono_pages": 118729, "received_at": "2026-08-11T10:00:00+00:00", "status": "idle", "total_pages": 118729}, {"color_pages": null, "duplex_pages": null, "mono_pages": 118400, "received_at": "2026-08-10T10:00:00+00:00", "status": "idle", "total_pages": 118400}]</script>
+<script>
+(function () {
+  var el = document.getElementById("chart-counter");
+  if (!el) return;
+  var s = JSON.parse(document.getElementById("series-data").textContent || "[]")
+            .filter(function (r) { return r.total_pages != null && r.received_at; })
+            .reverse();  // stored newest-first; chart oldest -> newest
+  if (s.length < 2) { el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>"; return; }
+  var x = s.map(function (r) { return r.received_at; });
+  var y = s.map(function (r) { return r.total_pages; });
+  // B3 3.3: разбивка по цвету/ч-б -- те же строки d.series, поля уже приходят.
+  var yColor = s.map(function (r) { return r.color_pages; });
+  var yMono = s.map(function (r) { return r.mono_pages; });
+  var haveSplit = yColor.some(function (v) { return v != null; }) ||
+                  yMono.some(function (v) { return v != null; });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    var muted = css.getPropertyValue("--muted").trim() || "#7aa8c4";
+    var grid = css.getPropertyValue("--line").trim() || "#132030";
+    var hover = "<b>%{fullData.name}</b><br>%{x}<br><b>%{y}</b> стр<extra></extra>";
+    var traces = [{
+      x: x, y: y, name: "всего", type: "scatter", mode: "lines+markers",
+      line: { color: acc, width: 2 }, marker: { color: acc, size: 4 },
+      hovertemplate: hover,
+    }];
+    if (haveSplit) {
+      traces.push(
+        { x: x, y: yColor, name: "цвет", type: "scatter", mode: "lines",
+          line: { color: acc, width: 2, dash: "dot" }, hovertemplate: hover },
+        { x: x, y: yMono, name: "ч-б", type: "scatter", mode: "lines",
+          line: { color: muted, width: 2 }, hovertemplate: hover }
+      );
+    }
+    Plotly.newPlot(el, traces, {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+      margin: { t: 8, r: 14, b: 40, l: 60 },
+      xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "стр", font: { size: 11 } } },
+      showlegend: haveSplit, legend: { orientation: "h", font: { size: 10 } }, autosize: true,
+      hoverlabel: srpHoverLabel(),
+    }, { responsive: true, displayModeBar: false });
+  }
+  function init() {
+    // Plotly is deferred -- it exists only after DOM parsing, never during it.
+    if (typeof Plotly === "undefined") return;
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+
+
+
+<div class="section-label" style="margin-top:28px">Сеть — топология</div>
+<details class="net-topo" open>
+  <summary>
+    <span class="chip na">неизвестно</span>
+    <span class="pill">неизвестно</span>
+    <span class="muted">HP</span>
+    · <a href="../netdisco/device/nd-demo-prn-hp.html">полная карточка устройства</a>
+  </summary>
+
+  <div class="nt-meta small muted mono">
+    IP 192.168.77.21 · MAC 02:1A:2B:00:00:21 · HP LaserJet M428
+    · впервые 2026-08-29T06:18:45.902139+00:00 · последний раз 2026-08-29T06:18:45.902139+00:00
+  </div>
+
+  
+
+  
+  <ul class="nt-links">
+    
+    
+    <li>
+      <a href="../netdisco/device/nd-switch.html">nd-switch</a>
+      <span class="chip good">high</span>
+      <span class="via muted">link · через demo</span>
+    </li>
+    
+  </ul>
+  
+
+  
+</details>
+<style>
+.net-topo { margin-top: 8px; }
+.net-topo > summary { cursor: pointer; font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.net-topo .nt-meta { margin: 10px 0 2px; }
+.net-topo .nt-links { list-style: none; margin-top: 8px; padding: 0; }
+.net-topo .nt-links li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.net-topo .nt-links .via { font: 500 12px/1 var(--mono); }
+</style>
+
+
+</main>
+<script>
+(function () {
+  var btn = document.getElementById("theme-toggle");
+  var labels = {'': 'Meta', 'meta': 'Vercel', 'vercel': 'Тёмный'};
+  var cur = document.documentElement.getAttribute('data-theme') || '';
+  btn.textContent = labels[cur] || 'Meta';
+})();
+</script>
+</body>
+</html>

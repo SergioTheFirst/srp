@@ -1,0 +1,691 @@
+{% extends "base.html" %}
+{% block title %}Флот · SRP{% endblock %}
+{% block subtitle %}живой мониторинг{% endblock %}
+
+{% block extra_head %}
+{# ОТДЕЛЬНЫЙ админ-секрет (admin_token), никогда не ingest_token: дашборд не
+   аутентифицирован, его HTML доступен любому, кто дотянулся до сервера.
+   Пусто -> кнопки получают честный 401. Autoescape экранирует значение. #}
+<meta name="srp-token" content="{{ admin_token | default('', true) }}">
+<style>
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.search {
+  flex: 1; min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 8px 13px;
+  font: 15px/1.4 inherit;
+  transition: border-color .15s;
+}
+.search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.1); }
+.search::placeholder { color: var(--muted); }
+.live-indicator { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--good); animation: pulse-dot 2.5s infinite;
+}
+.dot.stale { background: var(--warn); animation: none; }
+@keyframes pulse-dot {
+  0%   { box-shadow: 0 0 0 0 rgba(16,217,122,.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(16,217,122,0); }
+  100% { box-shadow: 0 0 0 0 rgba(16,217,122,0); }
+}
+
+/* ── KPI strip ─────────────────────────────────────────────────────────── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px; margin-bottom: 24px;
+}
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 4px; padding: 11px 14px;
+  cursor: pointer; transition: all .12s ease;
+}
+.kpi:hover { background: var(--panel-2); border-left-color: var(--muted); }
+.kpi.active { border-left-color: var(--accent); background: var(--accent-dim); }
+.kpi[data-filter="at_risk"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kpi[data-filter="worsening"].active,
+.kpi[data-filter="stale"].active { border-left-color: var(--warn); background: var(--warn-dim); }
+.kpi[data-filter="unknown"].active,
+.kpi[data-filter="regressed"].active { border-left-color: var(--high); background: var(--high-dim); }
+.kpi[data-filter="expiring"].active,
+.kpi[data-filter="untrusted"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kn { font: 700 24px/1 var(--mono); margin-bottom: 4px; }
+.kn.bad  { color: var(--bad); }
+.kn.warn { color: var(--warn); }
+.kn.high { color: var(--high); }
+.kn.na   { color: var(--muted); }
+.kn.good { color: var(--good); }
+.kl { font: 600 11px/1.2 var(--mono); letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Site groups ───────────────────────────────────────────────────────── */
+.site { margin-bottom: 28px; }
+.site-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 2px; border-bottom: 1px solid var(--line-2); margin-bottom: 0;
+}
+.site-name { font: 600 13px/1 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Sortable headers ──────────────────────────────────────────────────── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+.sort-icon { margin-left: 3px; opacity: .35; font-style: normal; font-size: 11px; }
+th.sortable.asc .sort-icon::after  { content: "↑"; opacity: 1; }
+th.sortable.desc .sort-icon::after { content: "↓"; opacity: 1; }
+th.sortable:not(.asc):not(.desc) .sort-icon::after { content: "↕"; }
+th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
+
+/* ── Device rows ───────────────────────────────────────────────────────── */
+.devrow { transition: background .1s; }
+.devrow.stale-row { opacity: .80; filter: saturate(.7); }
+.devrow.escalated { animation: escalate-flash 2.5s ease-in-out 3; }
+@keyframes escalate-flash {
+  0%,100% { background: transparent; }
+  40%     { background: var(--bad-dim); }
+}
+
+/* ── Alerts / badges ───────────────────────────────────────────────────── */
+.alerts { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge {
+  font: 600 12px/1 var(--mono); padding: 3px 7px;
+  border-radius: 3px; border: 1px solid transparent;
+  white-space: nowrap; letter-spacing: .3px;
+}
+.badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.3); }
+.badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.3); }
+.badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.3); }
+.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: var(--bad-dim); }
+.badge.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(51,78,104,.4); }
+
+/* ── Trend cell ────────────────────────────────────────────────────────── */
+.trend-cell { width: 52px; }
+.trend-up   { color: var(--bad);  font: 700 15px/1 var(--mono); }
+.trend-flat { color: var(--na);   font: 400 15px/1 var(--mono); }
+.trend-none { color: var(--line-2);font: 400 15px/1 var(--mono); }
+
+/* ── Ack button ────────────────────────────────────────────────────────── */
+.ackbtn {
+  font: 600 12px/1 inherit; padding: 5px 10px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.ackbtn:hover { border-color: var(--accent); color: var(--accent); }
+.ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
+
+/* ── Delete + purge controls (ghost cleanup) ───────────────────────────── */
+.delbtn {
+  font: 600 12px/1 inherit; padding: 5px 9px; margin-left: 4px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.delbtn:hover { border-color: var(--bad); color: var(--bad); background: var(--bad-dim); }
+.toolbtn {
+  font: 600 13px/1 inherit; padding: 8px 13px; white-space: nowrap;
+  border-radius: 4px; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.toolbtn:hover { border-color: var(--bad); color: var(--bad); }
+
+/* ── Compact table rows ─────────────────────────────────────────────────── */
+table th { padding: 5px 8px; }
+table td { padding: 4px 8px; }
+tbody td { color: #e8f4ff; font-size: 15px; white-space: nowrap; }
+tbody td a { color: #e8f4ff; font-weight: 600; font-size: 15px; }
+tbody td a:hover { color: var(--accent); text-decoration: none; }
+.dev-sub { color: var(--muted); font: 400 11px/1 var(--mono); margin-left: 5px; }
+.dev-sub2 { color: var(--muted); font: 400 11px/1.3 var(--mono); margin-top: 3px; opacity: .85; }
+.dev-sub2 .ver { margin-left: 6px; opacity: .7; }
+.dev-sub2 .badge { margin-left: 4px; vertical-align: middle; }
+
+/* Score chips */
+tbody td .chip { font: 600 15px/1 var(--mono); padding: 2px 7px; }
+tbody td .chip.good,
+tbody td .chip.warn,
+tbody td .chip.high,
+tbody td .chip.bad,
+tbody td .chip.na,
+tbody td .chip.accent { color: #ffe000; }
+
+/* ── Health verdict cells (ssd3 Ф7) — band-colored, replace the flat scores ── */
+.hidx { font: 700 16px/1 var(--mono); }
+.hidx.good { color: var(--good); }
+.hidx.warn { color: var(--warn); }
+.hidx.bad  { color: var(--bad); }
+.hidx.na   { color: var(--muted); }
+.hdelta { font: 700 11px/1 var(--mono); vertical-align: middle; }
+.hdelta.good { color: var(--good); }
+.hdelta.bad  { color: var(--bad); }
+.hdelta.na   { color: var(--muted); }
+.hstate {
+  display: inline-block; font: 600 12px/1 var(--mono);
+  padding: 3px 8px; border-radius: 3px; letter-spacing: .2px; white-space: nowrap;
+}
+.hstate.good { background: var(--good-dim); color: var(--good); border: 1px solid rgba(16,217,122,.3); }
+.hstate.warn { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.3); }
+.hstate.bad  { background: var(--bad-dim);  color: var(--bad);  border: 1px solid rgba(228,30,63,.35); }
+.hstate.na   { background: var(--na-dim);   color: var(--muted);border: 1px solid rgba(51,78,104,.4); }
+.hfactor { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.hfar {
+  font: 600 11px/1 var(--mono); color: var(--warn);
+  padding: 1px 5px; border-radius: 3px; background: var(--warn-dim); margin-left: 2px;
+}
+
+/* Trend arrows — worsening arrow rendered as a high-contrast highlight */
+tbody td .trend-flat,
+tbody td .trend-none { font-size: 15px; }
+tbody td .trend-up {
+  display: inline-block;
+  font: 800 16px/1 var(--mono);
+  padding: 1px 7px; border-radius: 3px;
+  background: var(--bad); color: #000;
+}
+.ip-copy {
+  cursor: pointer; color: var(--text);
+  border-bottom: 1px dashed var(--line-2); transition: color .12s, border-color .12s;
+}
+.ip-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.ip-copy.copied { color: var(--good); border-bottom-color: var(--good); }
+
+/* Status badges — compact */
+.badge { font-size: 12px; padding: 2px 7px; }
+.badge.warn { background: rgba(245,158,11,.82); color: #fff; border-color: var(--warn); }
+.badge.bad  { background: var(--bad); color: #000; border-color: var(--bad); }
+.badge.high { background: rgba(249,115,22,.82); color: #fff; border-color: var(--high); }
+.badge.good { background: rgba(16,217,122,.82); color: #fff; border-color: var(--good); }
+.badge.na   { background: rgba(88,120,160,.3);  color: #cce4f8; border-color: rgba(88,120,160,.65); }
+
+/* Certificate alert: yellow background, black text — only when < 17d */
+.cert-alert {
+  display: inline-flex; align-items: center;
+  font: 700 15px/1 var(--mono); padding: 2px 7px; border-radius: 3px;
+  background: #ffe000; color: #000; border: 1px solid #d4ba00;
+  white-space: nowrap;
+}
+
+/* ─── Meta theme overrides (fleet) ─────────────────────────────────────── */
+/* Light theme keeps red for "bad" (the no-red rule is dark-theme only). */
+[data-theme="meta"] .badge.bad { background: rgba(228,30,63,.82); color: #fff; border-color: var(--bad); }
+[data-theme="meta"] tbody td .trend-up { background: var(--bad); color: #fff; }
+[data-theme="meta"] tbody td { color: var(--text); }
+[data-theme="meta"] tbody td a { color: var(--text); font-weight: 700; }
+[data-theme="meta"] tbody td a:hover { color: var(--accent); }
+[data-theme="meta"] tbody td .chip.good,
+[data-theme="meta"] tbody td .chip.warn,
+[data-theme="meta"] tbody td .chip.high,
+[data-theme="meta"] tbody td .chip.bad,
+[data-theme="meta"] tbody td .chip.na,
+[data-theme="meta"] tbody td .chip.accent { color: inherit; }
+
+/* ─── Vercel theme overrides (fleet) ────────────────────────────────────── */
+[data-theme="vercel"] .search {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--text);
+  border-radius: var(--r-btn);
+  font: 400 14px/1.4 var(--font-body);
+}
+[data-theme="vercel"] .search:focus {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px rgba(0,0,0,.06);
+}
+[data-theme="vercel"] .kpi {
+  background: var(--panel);
+  border: none;
+  border-left: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .kpi:hover {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12),0 2px 4px rgba(0,0,0,.06);
+}
+[data-theme="vercel"] .kpi.active {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+[data-theme="vercel"] .kpi[data-filter="at_risk"].active,
+[data-theme="vercel"] .kpi[data-filter="expiring"].active,
+[data-theme="vercel"] .kpi[data-filter="untrusted"].active {
+  box-shadow: inset 0 0 0 2px var(--bad);
+}
+[data-theme="vercel"] .kpi[data-filter="worsening"].active,
+[data-theme="vercel"] .kpi[data-filter="stale"].active {
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+[data-theme="vercel"] .kpi[data-filter="unknown"].active,
+[data-theme="vercel"] .kpi[data-filter="regressed"].active {
+  box-shadow: inset 0 0 0 2px var(--high);
+}
+[data-theme="vercel"] .kn {
+  font: 600 24px/1 var(--font-body);
+  letter-spacing: -.8px;
+}
+[data-theme="vercel"] .kl {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .site-head { border-bottom-color: var(--line); }
+[data-theme="vercel"] .site-name {
+  font: 500 12px/1 var(--mono);
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] tbody td { color: var(--text); font-size: 15px; }
+[data-theme="vercel"] tbody td a { color: var(--text); font-weight: 500; }
+[data-theme="vercel"] tbody td a:hover { color: var(--accent); }
+[data-theme="vercel"] tbody td .chip { font: 500 15px/1 var(--font-body); padding: 2px 9px; }
+[data-theme="vercel"] tbody td .chip.good  { color: #0070f3; }
+[data-theme="vercel"] tbody td .chip.warn  { color: #ab570a; }
+[data-theme="vercel"] tbody td .chip.high  { color: #ab570a; }
+[data-theme="vercel"] tbody td .chip.bad   { color: #ee0000; }
+[data-theme="vercel"] tbody td .chip.na    { color: var(--muted); }
+[data-theme="vercel"] tbody td .chip.accent{ color: #0070f3; }
+[data-theme="vercel"] .badge.warn { background: rgba(245,166,35,.12); color: #ab570a; border-color: rgba(245,166,35,.35); }
+[data-theme="vercel"] .badge.bad  { background: rgba(238,0,0,.08);    color: #ee0000; border-color: rgba(238,0,0,.25); }
+[data-theme="vercel"] .badge.high { background: rgba(245,166,35,.12); color: #ab570a; border-color: rgba(245,166,35,.35); }
+[data-theme="vercel"] .badge.good { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .badge.na   { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
+[data-theme="vercel"] .dot { background: #0070f3; animation: vcl-pulse 2.5s infinite; }
+[data-theme="vercel"] .dot.stale { background: var(--warn); animation: none; }
+@keyframes vcl-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(0,112,243,0); }
+  50%     { box-shadow: 0 0 0 7px rgba(0,112,243,0); }
+  0%      { box-shadow: 0 0 0 0 rgba(0,112,243,.55); }
+}
+[data-theme="vercel"] .ackbtn {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--line);
+  border-radius: var(--r-btn);
+  font: 500 12px/1 var(--font-body);
+}
+[data-theme="vercel"] .ackbtn:hover { border-color: var(--text); color: var(--text); }
+[data-theme="vercel"] .ackbtn.acked { color: #0070f3; border-color: rgba(0,112,243,.3); }
+[data-theme="vercel"] .trend-up   { color: var(--bad);  font: 600 15px/1 var(--font-body); }
+[data-theme="vercel"] .trend-flat { color: var(--muted); font: 400 15px/1 var(--font-body); }
+[data-theme="vercel"] .trend-none { color: var(--line-2);font: 400 15px/1 var(--font-body); }
+[data-theme="vercel"] .chart-panel {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .chart-panel .ch-title {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .8px;
+  color: var(--muted);
+}
+[data-theme="vercel"] .ptable th {
+  background: transparent;
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .6px;
+  border-bottom-color: var(--line);
+}
+[data-theme="vercel"] .ptable td { color: var(--text); border-bottom-color: var(--line); }
+[data-theme="vercel"] .ptable td:nth-child(2),
+[data-theme="vercel"] .ptable td:nth-child(3) { color: #0070f3; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="toolbar">
+  <input id="q" class="search" type="search"
+         placeholder="поиск: имя, объект, id…"
+         autocomplete="off" spellcheck="false">
+  <div class="live-indicator">
+    <span class="dot" id="livedot"></span>
+    <span id="liveinfo" class="muted small">обновлено 0с назад</span>
+  </div>
+  <button id="purgebtn" class="toolbtn" type="button"
+          {% if demo_mode() %}disabled title="демо: только чтение"
+          {% else %}title="удалить из базы машины, давно не выходившие на связь"{% endif %}>Очистить офлайн…</button>
+</div>
+
+<div id="fleet">{% include "_fleet_body.html" %}</div>
+
+<script>
+(function () {
+"use strict";
+var POLL_MS = 12000;
+var fleet = document.getElementById("fleet");
+var q = document.getElementById("q");
+var liveinfo = document.getElementById("liveinfo");
+var livedot  = document.getElementById("livedot");
+var activeFilter = null;
+var lastUpdate = Date.now();
+
+// ── Админ-запросы (удаление/очистка) ─────────────────────────────────────
+// Токен приезжает мета-тегом; без него сервер отвечает 401 при включённой
+// аутентификации ingest. Отказ показываем явно, а не выдаём за успех.
+function adminHeaders() {
+  var m = document.querySelector('meta[name=srp-token]');
+  return { "x-srp-token": (m && m.content) || "" };
+}
+function denied(status) {
+  window.alert("Отказано: сервер не принял запрос (код " + status + ").");
+}
+var prevRisk = {};  // device_id → risk_exposure snapshot
+
+// ── Persistence of previous risk levels (newly-escalated detection) ──────
+function loadPrevRisk() {
+  try { var s = localStorage.getItem("srp_risk"); if (s) prevRisk = JSON.parse(s); }
+  catch (e) { prevRisk = {}; }
+}
+function savePrevRisk(cur) {
+  try { localStorage.setItem("srp_risk", JSON.stringify(cur)); } catch (e) {}
+}
+function markEscalated() {
+  var cur = {};
+  fleet.querySelectorAll(".devrow[data-id]").forEach(function (row) {
+    var id   = row.getAttribute("data-id");
+    var risk = parseFloat(row.getAttribute("data-risk") || "0");
+    cur[id] = risk;
+    if (prevRisk[id] !== undefined && prevRisk[id] < 50 && risk >= 50) {
+      row.classList.add("escalated");
+    }
+  });
+  savePrevRisk(cur);
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────
+function applyFilter() {
+  var query = (q.value || "").trim().toLowerCase();
+  fleet.querySelectorAll(".site").forEach(function (site) {
+    var visible = 0;
+    site.querySelectorAll(".devrow").forEach(function (row) {
+      var text  = row.getAttribute("data-text") || "";
+      var flags = (row.getAttribute("data-flags") || "").split(" ");
+      var okText = !query || text.indexOf(query) !== -1;
+      var okFlag = !activeFilter || activeFilter === "all" || flags.indexOf(activeFilter) !== -1;
+      var show = okText && okFlag;
+      row.style.display = show ? "" : "none";
+      if (show) visible++;
+    });
+    site.style.display = visible ? "" : "none";
+  });
+  fleet.querySelectorAll(".kpi[data-filter]").forEach(function (k) {
+    k.classList.toggle("active", k.getAttribute("data-filter") === activeFilter);
+  });
+}
+
+// ── Column sort ───────────────────────────────────────────────────────────
+function makeSortable() {
+  fleet.querySelectorAll("th.sortable").forEach(function (th) {
+    th.addEventListener("click", function () {
+      var table = th.closest("table");
+      var col   = parseInt(th.getAttribute("data-col"), 10);
+      var goAsc = th.classList.contains("asc") ? false :
+                  th.classList.contains("desc") ? null : true;
+      table.querySelectorAll("th.sortable").forEach(function (t) {
+        t.classList.remove("asc", "desc");
+      });
+      if (goAsc === null) return;
+      th.classList.add(goAsc ? "asc" : "desc");
+      var tbody = table.querySelector("tbody");
+      var rows  = Array.from(tbody.querySelectorAll("tr.devrow"));
+      var isText = th.getAttribute("data-sort") === "text";
+      rows.sort(function (a, b) {
+        var tds = function (r) { return r.querySelectorAll("td"); };
+        if (isText) {
+          var an = tds(a)[col].getAttribute("data-name") || "";
+          var bn = tds(b)[col].getAttribute("data-name") || "";
+          return goAsc ? an.localeCompare(bn, "ru") : bn.localeCompare(an, "ru");
+        }
+        var av  = parseFloat(tds(a)[col].getAttribute("data-val") || "0") || 0;
+        var bv  = parseFloat(tds(b)[col].getAttribute("data-val") || "0") || 0;
+        return goAsc ? av - bv : bv - av;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+}
+
+// ── Print column (one fetch → all rows) ──────────────────────────────────
+function refreshPrint() {
+  fetch("/api/v1/fleet/print?today=1")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var map = {};
+      (p.devices || []).forEach(function (d) { map[d.device_id] = d.pages || 0; });
+      fleet.querySelectorAll("td.pprint[data-dev]").forEach(function (td) {
+        var dev = td.getAttribute("data-dev");
+        var pages = map[dev];
+        if (pages !== undefined) {
+          td.innerHTML = pages > 0
+            ? "<span class=\"chip na\">" + pages.toLocaleString("ru") + "</span>"
+            : "<span class=\"chip na\">0</span>";
+        } else {
+          td.innerHTML = "<span class=\"chip na\">—</span>";
+        }
+      });
+    })
+    .catch(function () {});
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────
+function refresh() {
+  fetch("/fleet/fragment").then(function (r) {
+    return r.ok ? r.text() : null;
+  }).then(function (html) {
+    if (html === null) return;
+    fleet.innerHTML = html;
+    lastUpdate = Date.now();
+    applyFilter();
+    markEscalated();
+    makeSortable();
+    refreshPrint();
+  }).catch(function () {});
+}
+
+// ── KPI click + ack (delegated) ───────────────────────────────────────────
+function copyIp(span) {
+  var ip = span.getAttribute("data-ip") || "";
+  if (!ip) return;
+  var done = function () {
+    span.classList.add("copied");
+    setTimeout(function () { span.classList.remove("copied"); }, 1100);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ip).then(done).catch(function () { legacyCopy(ip, done); });
+  } else {
+    legacyCopy(ip, done);
+  }
+}
+function legacyCopy(text, done) {
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); document.body.removeChild(ta); done();
+  } catch (err) {}
+}
+
+fleet.addEventListener("click", function (e) {
+  var ipc = e.target.closest(".ip-copy");
+  if (ipc) { copyIp(ipc); return; }
+  var kpi = e.target.closest(".kpi[data-filter]");
+  if (kpi) {
+    var f = kpi.getAttribute("data-filter");
+    activeFilter = (f === "all" || activeFilter === f) ? null : f;
+    applyFilter();
+    return;
+  }
+  var del = e.target.closest(".delbtn");
+  if (del) {
+    e.preventDefault();
+    var did   = del.getAttribute("data-id");
+    var dname = del.getAttribute("data-name") || did;
+    if (!window.confirm("Удалить «" + dname + "» и все его данные из базы?\nЭто действие необратимо.")) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/delete",
+          { method: "POST", headers: adminHeaders() })
+      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+      .catch(function () {});
+    return;
+  }
+  var ack = e.target.closest(".ackbtn");
+  if (ack) {
+    e.preventDefault();
+    var id   = ack.getAttribute("data-id");
+    var note = window.prompt("Квитирование — заметка (необязательно):", "");
+    if (note === null) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: note })
+    })
+      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+      .catch(function () {});
+  }
+});
+
+// ── Bulk purge of long-silent ghosts (toolbar; outside the polled #fleet) ──
+var purgeBtn = document.getElementById("purgebtn");
+if (purgeBtn) purgeBtn.addEventListener("click", function () {
+  var ans = window.prompt(
+    "Удалить машины, не выходившие на связь дольше N дней.\nВведите N (минимум 1):", "30");
+  if (ans === null) return;
+  var days = parseInt(ans, 10);
+  if (!(days >= 1)) { window.alert("Нужно целое число дней ≥ 1."); return; }
+  var body = function (dry) {
+    var h = adminHeaders();
+    h["Content-Type"] = "application/json";
+    return { method: "POST", headers: h, body: JSON.stringify({ days: days, dry_run: dry }) };
+  };
+  fetch("/api/v1/devices/purge", body(true))
+    .then(function (r) {
+      // Честный разбор: отказ (401/429) НЕ должен читаться как «нет машин».
+      if (!r.ok) { denied(r.status); return null; }
+      return r.json();
+    })
+    .then(function (p) {
+      if (!p) return;
+      var n = p.count || 0;
+      if (n === 0) { window.alert("Нет машин, молчащих дольше " + days + " дн."); return; }
+      if (!window.confirm("Будет удалено машин: " + n + " (молчат дольше " + days + " дн.).\nУдалить безвозвратно?")) return;
+      fetch("/api/v1/devices/purge", body(false))
+        .then(function (r) {
+          if (!r.ok) { denied(r.status); return null; }
+          return r.json();
+        })
+        .then(function (res) {
+          if (!res) return;
+          window.alert("Удалено машин: " + (res.count || 0) + ".");
+          refresh();
+        })
+        .catch(function () {});
+    })
+    .catch(function () {});
+});
+
+q.addEventListener("input", applyFilter);
+setInterval(refresh, POLL_MS);
+setInterval(function () {
+  var s = Math.round((Date.now() - lastUpdate) / 1000);
+  if (s > 20) livedot.classList.add("stale"); else livedot.classList.remove("stale");
+  liveinfo.textContent = "обновлено " + (s < 0 ? 0 : s) + "с назад";
+}, 1000);
+
+// Init
+loadPrevRisk();
+markEscalated();
+makeSortable();
+refreshPrint();
+})();
+</script>
+
+{# ── Print overview ─────────────────────────────────────────────────────── #}
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:30px;margin-bottom:6px">
+  <span class="section-label" style="margin:0">Печать сегодня</span>
+  <a href="/print" style="font:600 12px/1 var(--mono);color:var(--accent);text-decoration:none">→ полная аналитика</a>
+</div>
+<div class="cards" id="fleet-print-kpi" style="margin-bottom:14px">
+  <div class="stat"><div class="n muted" id="fpt-pages">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted" id="fpt-jobs">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted" id="fpt-printers">…</div><div class="l">Принтеров</div></div>
+</div>
+<div class="charts-2col" id="fleet-print-tables" style="display:none">
+  <div class="chart-panel">
+    <div class="ch-title">Топ устройств по страницам</div>
+    <table class="ptable" id="fpt-devices-table">
+      <thead><tr><th>Устройство</th><th>Страниц</th><th>Заданий</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="chart-panel">
+    <div class="ch-title">Топ принтеров по страницам</div>
+    <table class="ptable" id="fpt-printers-table">
+      <thead><tr><th>Принтер</th><th>Страниц</th><th>Устройств</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<style>
+.charts-2col { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+@media (max-width:860px) { .charts-2col { grid-template-columns:1fr; } }
+.chart-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 12px 14px;
+}
+.chart-panel .ch-title {
+  font: 600 11px/1 var(--mono); letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+}
+.ptable { width:100%; border-collapse:collapse; font-size:13px; }
+.ptable th { color:var(--muted); font:600 11px/1 var(--mono); letter-spacing:.8px; text-transform:uppercase; padding:4px 8px; border-bottom:1px solid var(--line-2); text-align:left; }
+.ptable td { padding:5px 8px; border-bottom:1px solid var(--line-2); color:var(--text); font-family:var(--mono); }
+.ptable tr:last-child td { border-bottom:none; }
+.ptable td:nth-child(2), .ptable td:nth-child(3) { text-align:right; color:var(--accent); }
+</style>
+<script>
+(function () {
+  fetch("/api/v1/fleet/print?today=1")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      document.getElementById("fpt-pages").textContent    = (p.total_pages    || 0).toLocaleString("ru");
+      document.getElementById("fpt-jobs").textContent     = (p.total_jobs     || 0).toLocaleString("ru");
+      document.getElementById("fpt-printers").textContent = (p.printer_count  || 0).toLocaleString("ru");
+      ["fpt-pages","fpt-jobs","fpt-printers"].forEach(function(id){ document.getElementById(id).classList.remove("muted"); });
+
+      var devRows  = (p.devices  || []).slice(0, 5);
+      var prnRows  = (p.printers || []).slice(0, 5);
+      if (devRows.length > 0 || prnRows.length > 0) {
+        document.getElementById("fleet-print-tables").style.display = "";
+      }
+
+      var dTbody = document.querySelector("#fpt-devices-table tbody");
+      devRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + srpEsc(r.hostname) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.jobs  || 0) + "</td>";
+        dTbody.appendChild(tr);
+      });
+
+      var pTbody = document.querySelector("#fpt-printers-table tbody");
+      prnRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td title=\"" + srpEsc(r.name || "") + "\">" + srpEsc((r.name || "(unknown)").substring(0,28)) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.devices || 0) + "</td>";
+        pTbody.appendChild(tr);
+      });
+    })
+    .catch(function () {});
+})();
+</script>
+{% endblock %}

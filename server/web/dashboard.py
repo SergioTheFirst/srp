@@ -1,0 +1,1049 @@
+"""Server-rendered dashboard: fleet overview + device detail.
+
+Jinja2 autoescaping is on for .html, so any device-supplied string (hostname,
+model, event message) is HTML-escaped -- no stored XSS from telemetry.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from shared.schema import parse_version
+
+from server import db, limits, org_directory
+from server.analytics.errchain import CRASH as _CRASH_EVENT_IDS
+from server.analytics.health import (
+    _STATE_LABELS,
+    action_for,
+    apply_health_staleness,
+    dominant_label_for,
+    health_staleness,
+    state_label_for,
+)
+from server.analytics.netmap import subnet_context_for, subnet_hint
+from server.netdisco.cache import GraphCache
+from server.netdisco.unified import historical_graph_from_snapshot
+from server.printers import forecast as printer_forecast
+from server.scoring.score100 import band_for_health_score, band_for_risk_score
+from server.updates import get_update_info
+from server.web.health_view import router as _health_router
+
+_TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
+# Регистрирован ВЫЗЫВАЕМЫМ (не снимком значения на импорте): снимок не поддаётся
+# monkeypatch в тестах, а health_view.py читает тот же _TEMPLATES без второй
+# регистрации (единственная точка Jinja2Templates( в репозитории).
+_TEMPLATES.env.globals["demo_mode"] = lambda: limits.DEMO_MODE
+
+_EMPTY_GRAPH = {
+    "nodes": [],
+    "links": [],
+    "subnets": [],
+    "totals": {
+        "nodes": 0,
+        "links": 0,
+        "agents": 0,
+        "printers": 0,
+        "anomalies": 0,
+        "wireless_links": 0,
+    },
+}
+
+
+def _unified_map_graph(request: Request) -> dict:
+    """Ф4: the unified network-map graph for ``/netmap`` (Ф2 assembler via the Ф3
+    GraphCache). Same cache instance the API serves; a well-formed empty graph when
+    the fleet is empty so the SSR inventory/canvas both degrade gracefully. The cache
+    is created up-front in ``create_app``; the fallback only covers an app built
+    outside it."""
+    cache = getattr(request.app.state, "network_map_cache", None) or GraphCache()
+    return cache.get() or _EMPTY_GRAPH
+
+
+def _fleet_available_version(request: Request) -> Optional[str]:
+    """Version currently offered by the update package in ``server/updates``
+    (``request.app.state.updates_dir``). No token/HMAC involved -- this is a
+    read-only version comparison for the dashboard, not package authentication.
+    None when no updates_dir is configured or no valid package is staged."""
+    updates_dir = getattr(request.app.state, "updates_dir", None)
+    if updates_dir is None:
+        return None
+    info = get_update_info(Path(updates_dir))
+    return info["version"] if info else None
+
+
+def health_color(v: Optional[float]) -> str:
+    """CSS class for a raw 0..100 health-style score, via score100.py's single
+    source of truth for the good/watch/bad thresholds (see band_class)."""
+    return band_class(band_for_health_score(v))
+
+
+def risk_color(v: Optional[float]) -> str:
+    """CSS class for a raw 0..100 risk-style score (higher = worse), via
+    score100.py's single source of truth for the good/watch/bad thresholds."""
+    return band_class(band_for_risk_score(v))
+
+
+def level_color(level: Optional[str]) -> str:
+    return {"low": "good", "elevated": "warn", "high": "high", "critical": "bad"}.get(
+        level or "", "na"
+    )
+
+
+def band_class(band: Optional[str]) -> str:
+    """CSS class for a Ф6 band (good/watch/bad/unknown). Public Jinja global shared
+    by Ф7 T7.1 (this page) and T7.2 (device hero) -- one band->class mapping."""
+    return {"good": "good", "watch": "warn", "bad": "bad"}.get(band or "", "na")
+
+
+def _health_index_series(rows: list[dict]) -> list[dict]:
+    """(ts, index) pairs for the device-hero sparkline (T7.2) -- newest-first, as
+    ``get_score_series`` returns; the chart JS reverses to oldest->newest (same
+    convention as this page's own heartbeat-rollup chart, ssd3 Ф5). Rows with no
+    "health" key (pre-Ф6 history) are skipped, never faked as index=0."""
+    out = []
+    for row in rows:
+        health_blob = (row.get("risk") or {}).get("health")
+        if isinstance(health_blob, dict) and health_blob.get("index") is not None:
+            out.append({"ts": row.get("ts"), "index": health_blob["index"]})
+    return out
+
+
+def pct(v: Optional[float]) -> str:
+    return f"{v * 100:.0f}%" if v is not None else "—"
+
+
+def days_until(iso: Optional[str]) -> Optional[int]:
+    """Whole days from now until the given ISO datetime (negative if in the past).
+
+    Returns None if *iso* is None or cannot be parsed.
+    """
+    if not iso:
+        return None
+    s = iso.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = dt - datetime.now(timezone.utc)
+    return int(delta.total_seconds() // 86400)
+
+
+def fmt_age(sec: Optional[int]) -> str:
+    """Compact human age for last-contact: 45с / 12м / 3ч / 5д."""
+    if sec is None:
+        return "—"
+    if sec <= 0:
+        return "0с"
+    if sec < 90:
+        return f"{sec}с"
+    if sec < 5400:
+        return f"{sec // 60}м"
+    if sec < 172800:
+        return f"{sec // 3600}ч"
+    return f"{sec // 86400}д"
+
+
+def printer_status_ru(status: Optional[str], online: Optional[bool]) -> tuple[str, str]:
+    """(chip-class, RU label) for a printer status. Stored value stays English;
+    this is display-only for the operator (Russian dashboard)."""
+    if not online or status == "unreachable":
+        return ("bad", "недоступен")
+    # ponytail: fallback for unknown status codes (not in dict) returns raw code,
+    # aligning with net_type_ru/net_change_ru pattern. Operator sees actual
+    # unmapped value instead of generic placeholder. "other" removed from explicit
+    # dict, now falls through to return ("na", "other").
+    return {
+        "idle": ("good", "готов"),
+        "printing": ("accent", "печать"),
+        "warmup": ("warn", "разогрев"),
+        "stopped": ("bad", "остановлен"),
+        "unknown": ("na", "неизвестно"),
+    }.get(status or "", ("na", status or "—"))
+
+
+def supply_color(pct_left: Optional[int]) -> str:
+    """Chip color for a consumed-supply % remaining (toner/ink running out)."""
+    if pct_left is None:
+        return "na"
+    if pct_left < 10:
+        return "bad"
+    if pct_left < 25:
+        return "warn"
+    return "good"
+
+
+def eta_class(eta_days: Optional[int]) -> str:
+    """CSS class for a supply-ETA badge (B3 3.2): soon .bad, approaching .warn,
+    distant .muted. Callers only render a badge when eta_days is not None."""
+    if eta_days is None or eta_days > 30:
+        return "muted"
+    if eta_days <= 7:
+        return "bad"
+    return "warn"
+
+
+# prtInputStatus (RFC 3805, PrtSubUnitStatusTC) is a bit-summed status, not a
+# flat enum: low 3 bits = availability (0 idle/1 on-request/2 standby/3 broken/
+# 4 active/5 vendor-unknown/6 busy), then non-critical(8)/critical(16)/
+# offline(32)/transitioning(64) flags -- e.g. status 27 = broken(3)+critical(16)
+# +non-critical(8). The raw int alone cannot name a SPECIFIC fault (jam vs cover
+# open live in prtAlertTable, not here), so only the conditions it genuinely
+# proves (broken/critical/offline) surface as .bad; everything else recognized
+# is normal operation, no badge.
+# ponytail: on-request(1)/vendor-unknown(5) availability and a non-critical-only
+# alert (8) read as "normal, no badge" -- promote to .warn if operators need
+# finer granularity than bad/nothing.
+_TRAY_AVAIL_BROKEN = 3
+_TRAY_AVAIL_KNOWN_MAX = 6  # RFC 3805 defines availability 0..6; 7 is reserved
+_TRAY_BIT_CRITICAL = 0x10
+_TRAY_BIT_OFFLINE = 0x20
+_TRAY_STATUS_MAX = 0x7F  # 3-bit availability + 4 flag bits: max legal bit-sum
+
+
+def tray_status_badge(status: Optional[int]) -> Optional[tuple[str, str]]:
+    """(chip-class, RU label) for an ABNORMAL tray status; None = normal, no badge.
+
+    An unrecognized/out-of-range code still returns a badge (neutral, the raw
+    code as text) -- fail-open, never silently hidden."""
+    if status is None:
+        return None
+    if not isinstance(status, int) or status < 0 or status > _TRAY_STATUS_MAX:
+        return ("na", str(status))
+    avail = status & 0x07
+    broken = avail == _TRAY_AVAIL_BROKEN
+    critical = bool(status & _TRAY_BIT_CRITICAL)
+    offline = bool(status & _TRAY_BIT_OFFLINE)
+    if broken or critical or offline:
+        parts = []
+        if broken:
+            parts.append("неисправен")
+        if critical:
+            parts.append("критическая ошибка")
+        if offline:
+            parts.append("офлайн")
+        return ("bad", ", ".join(parts))
+    if avail > _TRAY_AVAIL_KNOWN_MAX:
+        # in-range (0..127) but availability bits 7 are undefined by RFC 3805 --
+        # review B3 LOW: this fell through to "normal, no badge" before, hiding
+        # a genuinely unrecognized code instead of showing it fail-open.
+        return ("na", str(status))
+    return None
+
+
+# B4-review MEDIUM: an envelope can carry up to STORAGE_DISKS_MAX (64) disks
+# (shared/schema.py) -- unbounded, that's 64 get_disk_series() SELECTs/
+# connections and up to 64*200 JSON rows on every single device-page render.
+# A sparkline is 36px tall; it never needed the DB's own default of 200
+# points. Caps the per-disk query AND how many disks get history at all (the
+# card itself, drawn straight from the already-in-memory envelope, stays
+# unbounded -- only the DB fan-out is capped).
+_DISK_HISTORY_POINTS_MAX = 60
+_DISK_HISTORY_DISKS_MAX = 16
+
+
+# B4: disk SMART chip colours -- boundaries copied verbatim from
+# server/analytics/storage.py's _score_disk (legacy + ssd3 rules) so the UI
+# never invents a threshold the risk engine doesn't already score on. Keep the
+# cited branch in sync if that engine's numbers ever move.
+def disk_temp_color(temp_c: Optional[float]) -> str:
+    """storage.py: >70 "тепловой стресс" (bad-tier), >60 "нагрев" (warn)."""
+    if temp_c is None:
+        return "na"
+    if temp_c > 70:
+        return "bad"
+    if temp_c > 60:
+        return "warn"
+    return "good"
+
+
+def disk_wear_color(wear_pct: Optional[float], nvme_pct: Optional[float] = None) -> str:
+    """storage.py scores wear via TWO rules with DIFFERENT warn cutoffs, not
+    one shared boundary: legacy wear_pct -- >95 bad, >70 warn (260-267). ssd3
+    nvme_percentage_used -- folded with wear_pct via max() exactly like
+    wear_level in storage.py:381-387 -- >95 bad, >85 warn, no 70 tier (a
+    pct_used-only disk in 70..85 scores ZERO). Painting a shared >70 cutoff
+    over both used to colour that zero-risk case .warn. Returns the worse of
+    whichever rule(s) actually apply."""
+
+    def _tier(value: float, warn_over: float) -> str:
+        if value > 95:
+            return "bad"
+        return "warn" if value > warn_over else "good"
+
+    colors = []
+    if wear_pct is not None:
+        colors.append(_tier(wear_pct, 70))
+    if nvme_pct is not None:
+        level = max(nvme_pct, wear_pct) if wear_pct is not None else nvme_pct
+        colors.append(_tier(level, 85))
+    if not colors:
+        return "na"
+    if "bad" in colors:
+        return "bad"
+    return "warn" if "warn" in colors else "good"
+
+
+def disk_poh_color(hours: Optional[float]) -> str:
+    """storage.py: power_on_hours > 25000 starts adding risk points (both its
+    bands stay well under any "bad" cutoff, so this UI collapses to one)."""
+    if hours is None:
+        return "na"
+    return "warn" if hours > 25000 else "good"
+
+
+def disk_pending_color(pending: Optional[float]) -> str:
+    """storage.py smart_attrs['197']: >10 bad, >0 already a damage hit (warn)."""
+    if pending is None or pending <= 0:
+        return "na"
+    return "bad" if pending > 10 else "warn"
+
+
+def disk_realloc_color(realloc: Optional[float]) -> str:
+    """storage.py reallocated_sectors: >100 "диск отказывает" bad, >0 warn."""
+    if realloc is None or realloc <= 0:
+        return "na"
+    return "bad" if realloc > 100 else "warn"
+
+
+def disk_uncorrected_color(count: Optional[float]) -> str:
+    """storage.py read/write_errors_uncorrected: any >0 is a flat damage hit."""
+    return "bad" if count and count > 0 else "na"
+
+
+# Stored dev_type / status / confidence stay English (machine values, tests pin
+# them); these map them to operator-facing Russian + a chip colour at render time.
+_NET_TYPE_RU = {
+    "router": "маршрутизатор",
+    "switch": "коммутатор",
+    "ap": "точка доступа",
+    "agent": "агент",
+    "printer": "принтер",
+    "endpoint": "устройство",
+    "unknown": "неизвестно",
+}
+
+_NET_STATUS_RU = {
+    "up": ("good", "на связи"),
+    "down": ("bad", "недоступен"),
+    "unreachable": ("warn", "за недоступным узлом"),
+    "missing": ("na", "пропал"),
+    # Активное обнаружение (scheduler/adapter_merge) до первой классификации.
+    "discovered": ("na", "обнаружен"),
+}
+
+_NET_CHANGE_RU = {
+    "device_new": "появилось устройство",
+    "device_gone": "устройство пропало",
+    "type_changed": "сменился тип",
+    "link_new": "новая связь",
+    "link_gone": "связь исчезла",
+    "status_changed": "сменился статус",
+    "scan_saturated": "диапазон отброшен: почти все адреса отвечают (VPN/прокси на сервере?)",
+}
+
+
+def net_type_ru(dev_type: Optional[str]) -> str:
+    return _NET_TYPE_RU.get(dev_type or "", dev_type or "неизвестно")
+
+
+def net_status_ru(status: Optional[str]) -> tuple[str, str]:
+    """(chip-class, RU label) for a network-device reachability status."""
+    return _NET_STATUS_RU.get(status or "", ("na", "неизвестно"))
+
+
+def net_conf_color(confidence: Optional[str]) -> str:
+    """Chip colour for an edge/link confidence band."""
+    return {"high": "good", "medium": "warn", "low": "na"}.get(confidence or "", "na")
+
+
+def net_change_ru(kind: Optional[str]) -> str:
+    return _NET_CHANGE_RU.get(kind or "", kind or "изменение")
+
+
+_TEMPLATES.env.globals.update(
+    health_color=health_color,
+    risk_color=risk_color,
+    level_color=level_color,
+    band_class=band_class,
+    action_for=action_for,
+    state_label_for=state_label_for,
+    dominant_label_for=dominant_label_for,
+    pct=pct,
+    days_until=days_until,
+    fmt_age=fmt_age,
+    printer_status_ru=printer_status_ru,
+    eta_class=eta_class,
+    tray_status_badge=tray_status_badge,
+    supply_color=supply_color,
+    net_type_ru=net_type_ru,
+    net_status_ru=net_status_ru,
+    net_conf_color=net_conf_color,
+    net_change_ru=net_change_ru,
+    disk_temp_color=disk_temp_color,
+    disk_wear_color=disk_wear_color,
+    disk_poh_color=disk_poh_color,
+    disk_pending_color=disk_pending_color,
+    disk_realloc_color=disk_realloc_color,
+    disk_uncorrected_color=disk_uncorrected_color,
+)
+
+
+def _printer_kpis(printers: list) -> dict:
+    return {
+        "total": len(printers),
+        "online": sum(1 for p in printers if p.get("online")),
+        "pages": sum(p.get("total_pages") or 0 for p in printers),
+        "low_supply": sum(
+            1 for p in printers if p.get("low_supply_pct") is not None and p["low_supply_pct"] < 15
+        ),
+        "errors": sum(1 for p in printers if p.get("error_count")),
+    }
+
+
+def _device_flags(d: dict) -> list[str]:
+    """Filterable status flags for one device (drive the dashboard search/KPIs)."""
+    flags = []
+    if band_for_risk_score(d.get("risk_exposure")) == "bad":
+        flags.append("at_risk")
+    if d.get("worsening_count"):
+        flags.append("worsening")
+    if d.get("unknown_domains"):
+        flags.append("unknown")
+    if d.get("regressed_count"):
+        flags.append("regressed")
+    if d.get("stale"):
+        flags.append("stale")
+    if d.get("cert_expiring"):
+        flags.append("expiring")
+    if d.get("device_trust") == "untrusted":
+        flags.append("untrusted")
+    if d.get("version_outdated"):
+        flags.append("outdated")
+    if d.get("update_available_version"):
+        flags.append("update_pending")
+    if d.get("is_new"):
+        flags.append("new")
+    return flags
+
+
+def _fleet_summary(devices: list) -> dict:
+    return {
+        "total": len(devices),
+        "at_risk": sum(1 for d in devices if band_for_risk_score(d.get("risk_exposure")) == "bad"),
+        "worsening": sum(1 for d in devices if d.get("worsening_count")),
+        "unknown": sum(1 for d in devices if d.get("unknown_domains")),
+        "regressed": sum(1 for d in devices if d.get("regressed_count")),
+        "stale": sum(1 for d in devices if d.get("stale")),
+        "expiring": sum(1 for d in devices if d.get("cert_expiring")),
+        "untrusted": sum(1 for d in devices if d.get("device_trust") == "untrusted"),
+        "new7d": sum(1 for d in devices if d.get("is_new")),
+        "outdated": sum(1 for d in devices if d.get("version_outdated")),
+        # D3: агент видит обновление, но не применяет его (dev-сборка/нет секрета).
+        "update_pending": sum(1 for d in devices if d.get("update_available_version")),
+    }
+
+
+def _group_by_site(devices: list) -> list:
+    """Group devices by site (object/firm); riskiest site first — scales the fleet."""
+    groups: dict[str, list] = {}
+    for d in devices:
+        label = d.get("site_name") or d.get("site_code") or "— без объекта —"
+        groups.setdefault(label, []).append(d)
+    return sorted(
+        groups.items(),
+        key=lambda kv: -max((x.get("risk_exposure") or 0) for x in kv[1]),
+    )
+
+
+def _identity_labels(d: dict, *, check_reload: bool = True) -> dict:
+    """Decode org/dept codes to display labels via the directory (render-time).
+
+    ``check_reload=False`` skips this call's own directory reload check (an
+    mtime ``stat()``) -- for a batch caller that already reloaded once up
+    front (P3-7: ``_enrich_fleet``'s per-device loop), so N devices cost 1
+    ``stat()`` per poll cycle, not N.
+    """
+    directory = org_directory.get_directory()
+    org = directory.org_display(d.get("org_code"), check_reload=check_reload)
+    dept = directory.dept_display(
+        d.get("org_code"), d.get("dept_code"), d.get("department"), check_reload=check_reload
+    )
+    return {
+        "org_label": {"text": org.text, "known": org.known},
+        "dept_label": {"text": dept.text, "known": dept.known},
+    }
+
+
+def _is_recent(iso: Optional[str], *, days: int) -> bool:
+    """True if *iso* falls within the last *days* (first_seen -> 'new' chip)."""
+    age = days_until(iso)  # negative = in the past
+    return age is not None and -days <= age <= 0
+
+
+def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
+    """Decorate each device with decoded identity labels + version/new flags.
+
+    'Outdated' compares against ``available`` (the version staged in
+    ``server/updates``) when given -- the server-authoritative "latest". Without a
+    staged package, falls back to the highest agent_version present in the fleet,
+    so a half-finished rollout is still visible with no update channel configured.
+    """
+    parsed = [parse_version(d.get("agent_version")) for d in devices]
+    current = parse_version(available) or max([v for v in parsed if v is not None], default=None)
+    now = datetime.now(timezone.utc)
+    # P3-7: reload the org directory ONCE per poll cycle here, then tell every
+    # per-device _identity_labels call to skip its own reload check -- N
+    # devices previously cost N mtime stat() calls per ~12s poll for a check
+    # that only needs to happen once per cycle.
+    org_directory.get_directory().reload_if_changed()
+    enriched = []
+    for d, ver in zip(devices, parsed):
+        # ssd3 Ф7: apply the read-side staleness overlay here (same helper the
+        # device page uses) so the fleet's «Индекс/Состояние» never disagree with
+        # the device card. >10d -> state/band forced "unknown"; None when the
+        # device predates Ф6 / has no stored verdict.
+        health_raw = d.get("health")
+        health = (
+            apply_health_staleness(health_raw, d.get("score_ts"), now)
+            if isinstance(health_raw, dict)
+            else None
+        )
+        enriched.append(
+            {
+                **d,
+                **_identity_labels(d, check_reload=False),
+                "health": health,
+                "version_outdated": bool(current is not None and ver is not None and ver < current),
+                "is_new": _is_recent(d.get("first_seen"), days=7),
+            }
+        )
+    return enriched
+
+
+_DUPES_RENDER_CAP = 50  # ponytail: только предел рендера; поднять, если реальному парку мало
+
+# Флаги, при которых строку НЕ прячем: устройство сигналит о проблеме, а это
+# инструмент раннего предупреждения об отказах -- реальный сбой не должен
+# исчезать из списка/KPI под видом «дубля переустановки». stale здесь НЕТ
+# (это и есть повод для свёртки), outdated/update_pending/new -- тоже (не сбой).
+_DUPE_KEEP_VISIBLE_FLAGS = frozenset(
+    {"at_risk", "worsening", "regressed", "unknown", "untrusted", "expiring"}
+)
+
+
+def _dupe_key(d: dict) -> tuple:
+    """Ключ группировки тёзок: одинаковое имя В ПРЕДЕЛАХ одного объекта/орг/отдела.
+    Разные объекты с одинаковым generic-именем (PC-01, KASSA) -- РАЗНЫЕ машины,
+    не дубли (регистр/пробелы не в счёт)."""
+    return (
+        (d.get("org_code") or "").strip().casefold(),
+        (d.get("site_code") or "").strip().casefold(),
+        (d.get("dept_code") or "").strip().casefold(),
+        (d.get("hostname") or "").strip().casefold(),
+    )
+
+
+def _split_duplicates(devices: list) -> tuple[list, list]:
+    """(видимые, скрытые тёзки) для fleet-вида.
+
+    Переустановка агента с потерей config.json минтит новый device_id -> старая
+    строка того же ПК висит дублем. Свёртка ПРОИЗВОДНАЯ, ничего не пишется и не
+    удаляется (ingest НИКОГДА не трогает чужую строку, adversarial review
+    2026-08-27; удаление осталось на ✕ / bulk purge / 30-дневном clock-свипе);
+    вернувшееся устройство само выходит из блока следующим конвертом.
+
+    Строку прячем ТОЛЬКО когда это почти наверняка призрак переустановки, а не
+    другой реальный ПК:
+      * совпали (org, site, dept, hostname) -- один объект, не разные организации;
+      * есть ЖИВОЙ более свежий тёзка (keeper НЕ stale) -- доказательство, что
+        машина сейчас на связи под новым id; все offline -> не прячем (не
+        доказано, UNKNOWN over false confidence);
+      * сама строка stale и НЕ сигналит о проблеме (_DUPE_KEEP_VISIBLE_FLAGS) --
+        падающую машину не прячем никогда.
+    last_seen_age_sec is None (непарсибельно) -> строка вне сравнения. Порядок
+    входа сохраняется в обоих списках.
+    """
+    groups: dict[tuple, list] = {}
+    for d in devices:
+        if (d.get("hostname") or "").strip():
+            groups.setdefault(_dupe_key(d), []).append(d)
+    hidden: set[int] = set()
+    for group in groups.values():
+        aged = [d for d in group if d.get("last_seen_age_sec") is not None]
+        if len(aged) < 2:
+            continue  # сравнивать не с чем -> скрывать нечего
+        keeper = min(aged, key=lambda d: d["last_seen_age_sec"])
+        if keeper.get("stale"):
+            continue  # нет живого преемника -> не доказано, что это переустановка
+        for d in aged:
+            if d is keeper or not d.get("stale"):
+                continue
+            if _DUPE_KEEP_VISIBLE_FLAGS.intersection(d.get("flags") or ()):
+                continue  # машина сигналит о проблеме -> оставляем на виду
+            hidden.add(id(d))
+    live = [d for d in devices if id(d) not in hidden]
+    dupes = [d for d in devices if id(d) in hidden]
+    return live, dupes
+
+
+def _live_devices(devices: list, available: Optional[str] = None) -> tuple[list, list]:
+    """(живые, скрытые тёзки) -- общий источник правды для /fleet summary и
+    /deploy version_counts, чтобы обе страницы одинаково отвечали на «кого
+    обновлять»: считать по СЫРОЙ таблице devices означало бы заново включать
+    дублей-призраков переустановки, которых /fleet уже свернул на чтении
+    (review B2, [[ingest-never-deletes-others]]).
+
+    Build enriched copies (do not mutate db-owned dicts) -- immutable pattern.
+    """
+    decorated = _enrich_fleet(devices, available)
+    enriched = [{**d, "flags": _device_flags(d)} for d in decorated]
+    return _split_duplicates(enriched)
+
+
+def _fleet_context(devices: list, available: Optional[str] = None) -> dict:
+    live, dupes = _live_devices(devices, available)
+    return {
+        "summary": _fleet_summary(live),
+        "groups": _group_by_site(live),
+        "dupes": dupes[:_DUPES_RENDER_CAP],
+        "dupes_total": len(dupes),
+        "device_limit": limits.MAX_DEVICES,
+        # Задача 6 fix (review finding 1): guard в /ingest считает db.count_devices()
+        # -- СЫРЫЕ строки devices, включая призраков переустановки, которых
+        # summary.total (де-дуплицированный live) уже скрыл. Плашка должна
+        # сравниваться с тем же числом, что и guard, иначе она молчит ровно
+        # тогда, когда владельцу реально отказывают в новом устройстве.
+        # `devices` здесь -- то, что вернул db.get_devices() один-к-одному,
+        # так что len() без лишнего запроса равен db.count_devices().
+        "device_count_raw": len(devices),
+    }
+
+
+def _admin_token(request: Request) -> str:
+    """Секрет для кнопок удаления/очистки, отдаваемый мета-тегом страницы.
+
+    ТОЛЬКО `admin_token`, никогда `ingest_token`: дашборд не аутентифицирован,
+    поэтому его HTML доступен любому, кто может обратиться к серверу, а
+    ingest-ключ служит ещё и запасным ключом подписи обновлений агента (P0-4).
+    Пусто -> кнопки получают честный 401 с понятным текстом.
+    """
+    return str(getattr(request.app.state, "admin_token", "") or "")
+
+
+def _attach_printers_to_netmap(m: dict, printers: list) -> dict:
+    """Place discovered printers into their subnet cluster (by IP /24) so the map
+    shows them as nodes. A printer that duplicates an ARP 'other' node replaces it
+    (no double node); printers whose subnet has no cluster go to a loose list.
+    Pure over already-read inputs (mutates the fresh build_netmap result)."""
+    by_subnet: dict[str, list] = {}
+    for p in printers:
+        sub = subnet_hint(p.get("ip"))
+        if not sub:
+            continue
+        by_subnet.setdefault(sub, []).append(
+            {
+                "ip": p.get("ip"),
+                "printer_id": p.get("printer_id"),
+                "label": p.get("model") or p.get("hostname") or p.get("ip"),
+                "vendor": p.get("vendor"),
+                "status": p.get("status"),
+                "online": p.get("online"),
+                "total_pages": p.get("total_pages"),
+            }
+        )
+    placed: set = set()
+    for c in m.get("clusters", []):
+        cps = by_subnet.get(c.get("subnet_hint"), [])
+        if cps:
+            ips = {n["ip"] for n in cps}
+            c["others"] = [o for o in c.get("others", []) if o.get("ip") not in ips]
+            placed.update(ips)
+        c["printers"] = cps
+    m["printers_unclustered"] = [
+        n for lst in by_subnet.values() for n in lst if n["ip"] not in placed
+    ]
+    return m
+
+
+router = APIRouter()
+# Ф7 T7.1: the /health page's route + helpers live in their own module
+# (server/web/health_view.py) to keep this file under the 800-line cap --
+# merged in here so server/main.py still only needs to import THIS router.
+router.include_router(_health_router)
+
+
+@router.get("/", response_class=HTMLResponse)
+def fleet(request: Request):
+    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    ctx["admin_token"] = _admin_token(request)
+    return _TEMPLATES.TemplateResponse(request, "fleet.html", ctx)
+
+
+@router.get("/fleet/fragment", response_class=HTMLResponse)
+def fleet_fragment(request: Request):
+    """KPI + table partial, polled by the dashboard for near-real-time updates."""
+    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    return _TEMPLATES.TemplateResponse(request, "_fleet_body.html", ctx)
+
+
+@router.get("/pipeline", response_class=HTMLResponse)
+def pipeline_health(request: Request):
+    """§6 pipeline health page — ingest rate, source health, DB sizes."""
+    return _TEMPLATES.TemplateResponse(request, "pipeline.html", {"m": db.get_pipeline_metrics()})
+
+
+def _device_health_context(
+    d: dict, device_id: str
+) -> tuple[Optional[dict], Optional[str], list[dict]]:
+    """ssd3 Ф7 T7.2: device-hero health coordinates. Read-side staleness overlay
+    applied here (never baked into the stored blob -- Ф6's own design); None
+    when this device predates Ф6 / hasn't been recomputed since Ф6 shipped."""
+    scores = d.get("scores") or {}
+    health_raw = (scores.get("risk") or {}).get("health")
+    if health_raw is None:
+        return None, None, []
+    score_ts = scores.get("ts")
+    now = datetime.now(timezone.utc)
+    health = apply_health_staleness(health_raw, score_ts, now)
+    health_stale_msg = health_staleness(score_ts, now) if score_ts is not None else None
+    health_series = (
+        _health_index_series(db.get_score_series(device_id, limit=200))
+        if health.get("state") != "unknown"
+        else []
+    )
+    return health, health_stale_msg, health_series
+
+
+@router.get("/device/{device_id}", response_class=HTMLResponse)
+def device(request: Request, device_id: str):
+    d = db.get_device(device_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    age = db.age_seconds(d.get("last_seen"))
+    d = {
+        **d,
+        "last_seen_age_sec": age,
+        "stale": age is not None and age > db.STALE_AFTER_SEC,
+        "update_checked_at_age_sec": db.age_seconds(d.get("update_checked_at")),
+        "version_changed_at_age_sec": db.age_seconds(d.get("version_changed_at")),
+        "display_name": db.display_name(
+            d.get("hostname"), model=d.get("model"), chassis=d.get("chassis")
+        ),
+        **_identity_labels(d),
+    }
+    # Phase 2 (D8): if the whole subnet degrades, tell the operator it is the
+    # infrastructure, not this PC. Read-side fleet query — page views only.
+    net_note = subnet_context_for(db.get_network_snapshots(), device_id)
+    # Ф6: the ONE canonical card. If this agent has a topology twin (FK from Ф1),
+    # embed its network section here instead of a separate /netdisco/device card.
+    nd = db.get_linked_net_device(device_id=device_id)
+    # З.3: the unified identity card (agent+printer+net_device knowledge merged)
+    # -- lets the device page fill IP/MAC gaps that historical telemetry hasn't
+    # reported yet, from what the network map already knows about this MAC.
+    card = db.get_identity_card(device_id=device_id)
+    health, health_stale_msg, health_series = _device_health_context(d, device_id)
+    # B4 4.2: per-disk SMART sparkline history, keyed by the disk's POSITION in
+    # hist.storage (0,1,2..) -- never by serial_hash, so the hash itself never
+    # rides into the template/JSON at all. Only disks that reported a
+    # serial_hash are queryable (same convention as storage.worst_disk_key: a
+    # disk keyed only by the name/media/index fallback hash is skipped, never
+    # guessed at here). Each row is trimmed to just the two plotted fields --
+    # the full row (as get_disk_series returns it) still carries serial_hash
+    # and the raw disk-model string, neither of which needs to leave the server
+    # a second time (both are already shown, current-value-only, in the card).
+    disks = (d.get("historical") or {}).get("storage") or []
+    disk_series = {
+        str(i): [
+            {
+                "received_at": row.get("received_at"),
+                "temperature_c": row.get("temperature_c"),
+                "wear_pct": row.get("wear_pct"),
+                "nvme_percentage_used": row.get("nvme_percentage_used"),
+            }
+            for row in db.get_disk_series(
+                device_id, disk["serial_hash"], limit=_DISK_HISTORY_POINTS_MAX
+            )
+        ]
+        for i, disk in enumerate(disks[:_DISK_HISTORY_DISKS_MAX])
+        if isinstance(disk, dict) and disk.get("serial_hash")
+    }
+    # B6 6.3: cohort comparison reuses the trajectory already computed by the
+    # pipeline and persisted in scores.risk (no new storage) -- see
+    # get_cohort_slope_verdict's docstring for the full read-side design.
+    trajectory = ((d.get("scores") or {}).get("risk") or {}).get("trajectory") or {}
+    cohort_slope_verdict = db.get_cohort_slope_verdict(d.get("model"), trajectory)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "device.html",
+        {
+            "d": d,
+            "net_subnet_note": net_note,
+            "nd": nd,
+            "card": card,
+            "available_version": _fleet_available_version(request),
+            # ssd3 Ф5: 90d daily rollup for the disk-latency chart under "Прогноз".
+            "heartbeat_rollups": db.get_heartbeat_rollups(device_id, 90),
+            # B1: 30d daily event-count rollup for the "События в день" bar chart.
+            "event_rollups": db.get_event_rollups(device_id, 30),
+            # BSOD/KP41 event ids -- same source of truth as errchain's stage
+            # detector, so the chart's red-day rule never drifts from the engine.
+            "crash_event_ids": sorted(_CRASH_EVENT_IDS),
+            "health": health,
+            "health_stale_msg": health_stale_msg,
+            "health_series": health_series,
+            "state_labels": _STATE_LABELS,
+            "disk_series": disk_series,
+            "cohort_slope_verdict": cohort_slope_verdict,
+        },
+    )
+
+
+@router.get("/netmap", response_class=HTMLResponse)
+def network_map(request: Request, at: Optional[str] = None):
+    """Network map page (SSR + the unified canvas engine). Ф4: ``/netmap`` now serves
+    the ONE unified graph (Ф2 assembler via the Ф3 GraphCache) -- real L2/L3 links +
+    agent-uplink + ICMP quality + subnet/anomaly overlays -- through ``_netgraph``.
+    The old ephemeral cluster model (``build_netmap``) is retired here; the unified
+    superset is the single contract for the canvas and the API. Inventory rows link to
+    the canonical card (``card_url``, agent>printer>net-infra). All agent/SNMP strings
+    reach the DOM only via ``| tojson`` (autoescape on) / ``textContent``.
+
+    Ф5: ``?at=<snapshot_id>`` renders a HISTORICAL frame instead -- read straight from
+    the snapshot store (never the live cache), with a plaque identifying it as a past
+    frame. The slider list (``snapshots``) is always passed so the time-machine panel
+    works on the live page too."""
+    history = None
+    if at is not None and at != "":
+        try:
+            sid = int(at)
+        except (TypeError, ValueError):
+            sid = -1
+        snap = db.get_topology_snapshot(sid)
+        if snap is not None:
+            # ONE source of truth: the same normaliser the API uses, so the canvas
+            # ``history_at`` marker (=> the time-machine plaque) renders on the SSR
+            # route too -- the two paths can never drift.
+            graph = historical_graph_from_snapshot(snap)
+            history = {
+                "at": snap.get("id"),
+                "received_at": snap.get("received_at"),
+                "label": "исторический кадр",
+            }
+    if history is None:
+        graph = _unified_map_graph(request)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "netmap.html",
+        {
+            "graph": graph,
+            "changes": db.get_net_changes(days=7),
+            "snapshots": db.list_topology_snapshots(limit=200),
+            "history": history,
+        },
+    )
+
+
+@router.get("/topology")
+def topology() -> RedirectResponse:
+    """Ф10: «Топология» is demolished -- the unified «Карта сети» (/netmap) is the
+    single entry point and a strict superset (SSR inventory + the L2/L3 graph + the
+    control panel + time machine). A permanent redirect keeps old bookmarks working."""
+    return RedirectResponse("/netmap", status_code=301)
+
+
+@router.get("/netdisco/device/{device_nid}", response_class=HTMLResponse)
+def net_device(request: Request, device_nid: str):
+    """One network device: interfaces, incident links, reachability status and its
+    slice of the change journal. Distinct from /device/{id} (SRP agents)."""
+    d = db.get_net_device(device_nid)
+    if d is None:
+        raise HTTPException(status_code=404, detail="network device not found")
+    # Ф6: never two cards for one physical device. A node FK-linked (Ф1) to an
+    # agent / printer redirects to that canonical card (which embeds the topology
+    # section). Redirect is one-way (net -> canonical), so no loop. Standalone
+    # infrastructure (no twin) keeps its own net card below.
+    if d.get("device_id"):
+        return RedirectResponse(f"/device/{d['device_id']}", status_code=302)
+    if d.get("printer_id"):
+        return RedirectResponse(f"/printers/{d['printer_id']}", status_code=302)
+    changes = [c for c in db.get_net_changes(days=90) if c.get("device_nid") == device_nid]
+    return _TEMPLATES.TemplateResponse(request, "net_device.html", {"d": d, "changes": changes})
+
+
+# B5 5.3: full change-journal page. /netmap's own inline changelog is hardcoded to
+# 7 days (dashboard.py's network_map() route) -- this is the "весь журнал" drill-down.
+_CHANGES_DAY_CHOICES: tuple[int, ...] = (7, 30, 90, 365)
+_CHANGES_DAYS_DEFAULT = 30
+
+
+@router.get("/netmap/changes", response_class=HTMLResponse)
+def netmap_changes(request: Request, days: int = _CHANGES_DAYS_DEFAULT):
+    """Topology change-journal page: reuses db.get_net_changes() -- the exact same
+    query /api/v1/topology/changes calls -- so the SQL never forks in two places.
+    *days* is allowlist-validated (7/30/90/365); anything else falls back to the
+    30-day default rather than 422ing a bookmarked/mistyped link."""
+    period = days if days in _CHANGES_DAY_CHOICES else _CHANGES_DAYS_DEFAULT
+    changes = db.get_net_changes(days=period, limit=2000)
+    # One bulk read for a hostname/IP label per device_nid -- avoids an N+1 lookup
+    # per change row (a busy fleet's journal can hold thousands of rows).
+    names = {dv["device_nid"]: (dv.get("hostname") or dv.get("ip")) for dv in db.get_net_devices()}
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "net_changes.html",
+        {"changes": changes, "names": names, "days": period, "day_choices": _CHANGES_DAY_CHOICES},
+    )
+
+
+@router.get("/print", response_class=HTMLResponse)
+def print_analytics(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    device: str = "",
+    printer: str = "",
+    ip: str = "",
+):
+    """Print analytics page (printview rework). Renders the shell + filter panel;
+    all data is pulled client-side from the /fleet/print/* endpoints. Filter state
+    lives in the URL so it survives reload (values are pre-filled here, escaped by
+    autoescape; JS reads the same query string)."""
+    days = max(days, 0)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "print.html",
+        {
+            "days": days,
+            "f_date_from": date_from,
+            "f_date_to": date_to,
+            "f_device": device,
+            "f_printer": printer,
+            "f_ip": ip,
+            "counter_devices": db.get_print_counter_mode_devices(),
+        },
+    )
+
+
+@router.get("/printers", response_class=HTMLResponse)
+def printers(request: Request, days: int = 30):
+    """Network-printer dashboard: hardware counters/supplies/errors + IP + dates +
+    reconcile with print_jobs (which PCs printed). SSR (autoescape) + a Plotly bar."""
+    days = min(max(days, 0), 365)
+    ov = db.get_printers_overview(days=days)
+    # B3 3.2: worst (soonest) supply-ETA badge per printer -- one fleet-wide
+    # history query (db.get_printers_supply_history), not N+1 per printer.
+    supply_history = db.get_printers_supply_history()
+    for p in ov["printers"]:
+        p["worst_supply_eta_days"] = printer_forecast.worst_eta_days(
+            supply_history.get(p["printer_id"], [])
+        )
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "printers.html",
+        {
+            "days": days,
+            "ov": ov,
+            "kpis": _printer_kpis(ov["printers"]),
+            "pages_series": db.get_printers_pages_series(days=days),
+        },
+    )
+
+
+@router.get("/printers/{printer_id}", response_class=HTMLResponse)
+def printer_card(request: Request, printer_id: str, days: int = 30):
+    """One printer: counter history + supplies/trays/errors + source PCs."""
+    days = min(max(days, 0), 365)
+    d = db.get_printer_detail(printer_id, days=days)
+    if d is None:
+        raise HTTPException(status_code=404, detail="printer not found")
+    # B3 3.2: per-supply ETA (days to 0%) from this printer's own reading history.
+    eta_by_name = printer_forecast.eta_by_supply(d["series"])
+    for s in d["supplies"]:
+        # review B1-B5 final MEDIUM: eta_by_name is keyed by the WRITE-side
+        # name, truncated to db._SUPPLY_NAME_CAP (db._consumed_supply_points) --
+        # s.get("name") here comes from the untruncated latest `detail` blob, so
+        # any supply name over the cap (routine on Lexmark/Brother/Ricoh) never
+        # matched and the badge silently never rendered. Truncate the lookup
+        # key the same way the write side did.
+        s["eta_days"] = eta_by_name.get((s.get("name") or "")[: db._SUPPLY_NAME_CAP])
+    # review B3 MEDIUM: the per-row supply history was only ever needed for the
+    # ETA computed above -- the chart JS reads total/color/mono_pages only.
+    # Drop it before the series is embedded into the page (x500 rows otherwise).
+    for r in d["series"]:
+        r.pop("supplies", None)
+    # Ф6: embed the topology section of this printer's network twin (FK from Ф1).
+    nd = db.get_linked_net_device(printer_id=printer_id)
+    # З.10-P1: dominant/supplementary IPP job history (may be empty -- printer
+    # doesn't answer Get-Jobs, or ipp_jobs is off in server/config.json).
+    ipp_jobs = db.get_printer_ipp_jobs(printer_id)
+    return _TEMPLATES.TemplateResponse(
+        request, "printer_detail.html", {"d": d, "days": days, "nd": nd, "ipp_jobs": ipp_jobs}
+    )
+
+
+def _version_counts(devices: list[dict]) -> list[dict]:
+    """«версия -> N устройств» среди *devices*, самые частые версии первыми.
+
+    Python-side счётчик по уже свёрнутым live-устройствам (``_live_devices``),
+    а не сырой SQL COUNT по таблице devices -- иначе распределение на /deploy
+    заново включает дублей-призраков переустановки, которых KPI «агенты
+    устарели» на /fleet уже свернул (review B2, [[ingest-never-deletes-others]])."""
+    counts: dict[str, int] = {}
+    for d in devices:
+        v = d.get("agent_version") or "—"
+        counts[v] = counts.get(v, 0) + 1
+    return sorted(({"v": v, "n": n} for v, n in counts.items()), key=lambda r: -r["n"])
+
+
+def _deploy_version_rows(counts: list[dict], available: Optional[str]) -> list[dict]:
+    """Attach a 0..100 CSS-bar width + 'behind the staged package' flag to each
+    ``_version_counts()`` row. *available* is the version staged in
+    server/updates (``_fleet_available_version``) -- None -> nothing to compare
+    against, so every row stays neutral (UNKNOWN over false confidence)."""
+    current = parse_version(available)
+    max_n = max((r["n"] for r in counts), default=0) or 1
+    out = []
+    for r in counts:
+        ver = parse_version(r["v"])
+        out.append(
+            {
+                **r,
+                "pct": round(r["n"] * 100 / max_n),
+                "outdated": bool(current is not None and ver is not None and ver < current),
+            }
+        )
+    return out
+
+
+@router.get("/deploy", response_class=HTMLResponse)
+def deploy(request: Request):
+    """Deploy-command generator (tray spec §7).
+
+    Pick an org/dept from the directory and get a ready ``setup.exe`` command with
+    the right codes + server URL; the password/token stay ``<ПАРОЛЬ>``/``<ТОКЕН>``
+    placeholders (the open, auth-less dashboard never holds real secrets).
+    Read-only: reflects the directory + the request host, writes nothing.
+    """
+    orgs = org_directory.get_directory().as_picker()
+    default_server = str(request.base_url).rstrip("/")
+    updates_dir = getattr(request.app.state, "updates_dir", "server/updates")
+    live, _ = _live_devices(db.get_devices())
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "deploy.html",
+        {
+            "orgs": orgs,
+            "default_server": default_server,
+            "update_info": get_update_info(Path(updates_dir)),
+            "version_counts": _deploy_version_rows(
+                _version_counts(live), _fleet_available_version(request)
+            ),
+        },
+    )

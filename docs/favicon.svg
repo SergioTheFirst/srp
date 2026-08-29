@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SRP">
+  <rect width="64" height="64" rx="14" fill="#040810"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#132030" stroke-width="3"/>
+  <text x="32" y="41" text-anchor="middle" font-family="'JetBrains Mono',Consolas,monospace"
+        font-size="21" font-weight="700" letter-spacing="-0.5" fill="#0ea5e9">SRP</text>
+</svg>

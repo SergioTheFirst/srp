@@ -1,0 +1,193 @@
+{# ── B4: «Диски (SMART)» — per-disk карточки из hist.storage (тот же day-1
+   SMART-скан, что storage_risk уже использует для скоринга — server/
+   analytics/storage.py). Блок ПОЛНОСТЬЮ отсутствует без данных (UNKNOWN over
+   false confidence — никаких «0°C» при отсутствии показания). Цвета — только
+   по существующим порогам storage.py (disk_*_color в dashboard.py, пороги
+   процитированы в докстринге каждой функции), без единого нового порога.
+   Спарклайны переиспользуют srpSpark (объявлена в _device_vitals.html, теперь
+   безусловно — см. её комментарий); serial_hash в разметку и в JSON для JS не
+   идёт вовсе — диски подписаны моделью + порядковым номером, disk_series уже
+   проиндексирован позицией диска в dashboard.py. Вынесен из device.html
+   только ради лимита 800 строк на файл (как _device_vitals.html). #}
+{% set hist = d.historical %}
+{% set disks = (hist.storage if hist else []) or [] %}
+{% if disks %}
+<div class="section-label" style="margin-top:24px">Диски (SMART)</div>
+{# review B1-B5 final MEDIUM: these are the same current values (темп./износ/
+   наработка/секторы/predict_fail) that "Требует внимания" above already lists
+   as factors once they cross a risk-порог -- a one-line note explains the
+   overlap instead of it looking like an unexplained repeat (spec forbids
+   removing либо блок, only recomposition). #}
+<p class="muted small" style="margin:2px 0 8px">Текущие показания SMART по каждому диску — часть значений уже могла войти в «Требует внимания» выше, если превышен порог риска.</p>
+<div class="disk-grid">
+{% for disk in disks %}
+{% set i = loop.index0 %}
+{# .get() everywhere below, never dot-access: a disk dict only carries the keys
+   ITS agent/media actually sent (HDD has no wear_pct, SATA has no nvme_*,
+   pre-Ф1 has neither pending/realloc/uncorrected) -- dot-access on a MISSING
+   key returns Jinja Undefined, and "Undefined is not none" is True, which
+   silently fed a phantom value into |max/|int/arithmetic below (live-caught
+   by the RED test run: a plain fixture disk with no nvme_percentage_used blew
+   up the |max filter on [12.0, Undefined]). #}
+{# review B1-B5 final HIGH: historical is the RAW envelope dict (pipeline.py
+   passes env.payload straight to db.store_historical, no pydantic coercion --
+   same reason _device_net.html's link_mbps needed |float, review B5 commit
+   1f74401). A legit numeric STRING here (e.g. "temperature_c": "75") used to
+   reach disk_*_color()'s raw Python `>` comparisons -- and Jinja's OWN
+   `pending > 0` checks below -- and crash with TypeError, taking down the
+   WHOLE device page. |float right after .get(), guarded on "is not none" so
+   a genuinely missing value stays None (never becomes an invented 0.0). #}
+{% set temp = disk.get('temperature_c') %}
+{% set temp = (temp|float) if temp is not none else none %}
+{% set wear_pct = disk.get('wear_pct') %}
+{% set wear_pct = (wear_pct|float) if wear_pct is not none else none %}
+{% set nvme_pct = disk.get('nvme_percentage_used') %}
+{% set nvme_pct = (nvme_pct|float) if nvme_pct is not none else none %}
+{% set wear_vals = [] %}
+{% if wear_pct is not none %}{% set _ = wear_vals.append(wear_pct) %}{% endif %}
+{% if nvme_pct is not none %}{% set _ = wear_vals.append(nvme_pct) %}{% endif %}
+{% set wear = (wear_vals|max) if wear_vals else none %}
+{% set poh = disk.get('power_on_hours') %}
+{% set poh = (poh|float) if poh is not none else none %}
+{% set attrs = disk.get('smart_attrs') or {} %}
+{% set pending = attrs.get('197') %}
+{% set pending = (pending|float) if pending is not none else none %}
+{% set realloc = disk.get('reallocated_sectors') %}
+{% set realloc = (realloc|float) if realloc is not none else none %}
+{% set uncorrectable = attrs.get('198') %}
+{% set uncorrectable = (uncorrectable|float) if uncorrectable is not none else none %}
+{% set uncorr_r = disk.get('read_errors_uncorrected') %}
+{% set uncorr_r = (uncorr_r|float) if uncorr_r is not none else none %}
+{% set uncorr_w = disk.get('write_errors_uncorrected') %}
+{% set uncorr_w = (uncorr_w|float) if uncorr_w is not none else none %}
+{% set has_uncorr_data = uncorr_r is not none or uncorr_w is not none %}
+{% set uncorr = ((uncorr_r or 0) + (uncorr_w or 0)) if has_uncorr_data else none %}
+{# B4-review MEDIUM: the green "ошибок нет" claim needs ALL FOUR counters
+   known -- one known field (e.g. only reallocated_sectors=0 from a pre-Ф1
+   agent) used to be enough, falsely claiming health while pending/
+   uncorrectable(attr 198)/uncorr stayed genuinely UNKNOWN. A KNOWN active
+   error still shows its own chip regardless (has_err below, each chip
+   self-gated on its own "and count > 0") -- only the all-clear claim is
+   gated this strictly. #}
+{% set has_err_data = pending is not none and realloc is not none and uncorrectable is not none and has_uncorr_data %}
+{% set has_err = (pending and pending > 0) or (realloc and realloc > 0) or (uncorrectable and uncorrectable > 0) or (uncorr and uncorr > 0) %}
+  <div class="disk-card{% if disk.smart_predict_fail %} bad{% endif %}">
+    <div class="disk-head">
+      <div class="disk-model">{{ disk.disk or "Диск" }} #{{ loop.index }}</div>
+      <div class="disk-bus">{{ disk.media_type or "" }}{% if disk.bus_type %}{% if disk.media_type %} · {% endif %}{{ disk.bus_type }}{% endif %}</div>
+    </div>
+    {% if disk.smart_predict_fail %}
+    <div class="chip bad disk-fail-badge"
+         title="Прошивка диска (MSStorageDriver_FailurePredictStatus) сама предсказывает скорый отказ — самый сильный из сигналов SMART">
+      SMART: предсказан отказ
+    </div>
+    {% endif %}
+    <div class="disk-metrics">
+      <div>
+        <div class="disk-m-l" title="Температура диска сейчас. Устойчиво высокая температура ускоряет износ и повышает риск отказа">Темп.</div>
+        <div class="disk-m-v {{ disk_temp_color(temp) }}">{% if temp is not none %}{{ temp|int }}°C{% else %}—{% endif %}</div>
+      </div>
+      <div>
+        <div class="disk-m-l" title="Износ ресурса SSD/NVMe в % — 100% значит ресурс перезаписи исчерпан (для HDD обычно не сообщается)">Износ</div>
+        <div class="disk-m-v {{ disk_wear_color(wear_pct, nvme_pct) }}">{% if wear is not none %}{{ "%.0f"|format(wear) }}%{% else %}—{% endif %}</div>
+      </div>
+      <div>
+        <div class="disk-m-l" title="Power-On Hours — суммарное время работы диска под питанием с завода">Наработка</div>
+        <div class="disk-m-v {{ disk_poh_color(poh) }}">
+          {% if poh is not none %}{% if poh >= 8760 %}{{ (poh // 8760)|int }} г {{ (poh % 8760)|int }} ч{% else %}{{ poh|int }} ч{% endif %}{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+    {% if has_err or has_err_data %}
+    <div class="disk-errs">
+      {% if has_err %}
+        {% if pending and pending > 0 %}<span class="chip {{ disk_pending_color(pending) }}" title="Секторы, помеченные на переназначение, но ещё не переназначенные (SMART attr 197) — ранний признак деградации поверхности">ожидают переназначения: {{ pending|int }}</span>{% endif %}
+        {% if realloc and realloc > 0 %}<span class="chip {{ disk_realloc_color(realloc) }}" title="Уже переназначенные секторы — диск расходует резерв подмены">переназначено: {{ realloc|int }}</span>{% endif %}
+        {% if uncorrectable and uncorrectable > 0 %}<span class="chip {{ disk_uncorrected_color(uncorrectable) }}" title="Неисправимые секторы (SMART attr 198) — данные в них потеряны безвозвратно">неисправимых секторов: {{ uncorrectable|int }}</span>{% endif %}
+        {% if uncorr and uncorr > 0 %}<span class="chip {{ disk_uncorrected_color(uncorr) }}" title="Ошибки чтения/записи, которые диск не смог исправить сам — под угрозой сохранность данных">неисправлено чтение/запись: {{ uncorr|int }}</span>{% endif %}
+      {% elif has_err_data %}
+        <span class="chip good" title="Секторы-кандидаты на переназначение, уже переназначенные, неисправимые секторы и неисправленные ошибки чтения/записи — по всем счёт нулевой">ошибок нет</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    <div class="disk-sparks">
+      <div>
+        <div class="disk-m-l">Темп., история</div>
+        <div id="disk-spark-temp-{{ i }}" class="disk-spark"></div>
+      </div>
+      <div>
+        <div class="disk-m-l">Износ, история</div>
+        <div id="disk-spark-wear-{{ i }}" class="disk-spark"></div>
+      </div>
+    </div>
+    {% if disk.smart_attrs %}
+    <details style="margin-top:8px">
+      <summary>Все атрибуты SMART ({{ disk.smart_attrs|length }})</summary>
+      <table style="margin-top:6px">
+        <tbody>
+        {% for attr_id, raw in disk.smart_attrs.items() %}
+        <tr><td class="muted small mono">{{ attr_id }}</td><td class="small mono">{{ raw }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+<style>
+.disk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 4px 0 20px; }
+.disk-card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--na); border-radius: var(--r-card); padding: 13px 16px; box-shadow: var(--shadow-card); }
+.disk-card.bad { border-left-color: var(--bad); }
+.disk-model { font-weight: 600; font-size: 15px; }
+.disk-bus { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.disk-fail-badge { display: inline-block; font-size: 14px; padding: 6px 12px; margin: 8px 0; }
+.disk-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+.disk-m-l { font: 600 10px/1.3 var(--mono); letter-spacing: .6px; text-transform: uppercase; color: var(--muted); border-bottom: 1px dotted var(--muted); display: inline-block; }
+.disk-m-v { font: 700 16px/1.3 var(--mono); margin-top: 2px; }
+.disk-m-v.good { color: var(--good); }
+.disk-m-v.warn { color: var(--warn); }
+.disk-m-v.bad  { color: var(--bad); }
+.disk-m-v.na   { color: var(--na); }
+.disk-errs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.disk-sparks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.disk-spark { height: 36px; }
+</style>
+<script id="disk-series-data" type="application/json">{{ disk_series|tojson }}</script>
+<script>
+(function () {
+  function init() {
+    var dataEl = document.getElementById("disk-series-data");
+    if (!dataEl) return;
+    var bySlot = JSON.parse(dataEl.textContent || "{}");
+    // B4-review LOW: loop by disk COUNT, not Object.keys(bySlot) -- a disk
+    // beyond the history cap (or without a serial_hash) has no entry in
+    // bySlot at all, so it was skipped outright, leaving its labelled 36px
+    // slot permanently blank instead of showing srpSpark's own "мало данных".
+    var diskCount = {{ disks|length }};
+    for (var idx = 0; idx < diskCount; idx++) {
+      var rows = (bySlot[idx] || []).slice().reverse();  // stored newest-first -> oldest->newest
+      var dates = rows.map(function (r) { return r.received_at; });
+      srpSpark(document.getElementById("disk-spark-temp-" + idx), dates,
+        rows.map(function (r) { return r.temperature_c; }));
+      srpSpark(document.getElementById("disk-spark-wear-" + idx), dates,
+        // review B1-B5 final HIGH: must match the header's own formula
+        // (wear_vals|max above) -- picking wear_pct whenever present and
+        // IGNORING a higher nvme_percentage_used made the sparkline
+        // contradict the bigger number shown right above it on the same card.
+        rows.map(function (r) {
+          var w = r.wear_pct, n = r.nvme_percentage_used;
+          if (w == null) return n;
+          if (n == null) return w;
+          return Math.max(w, n);
+        }));
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+{% endif %}

@@ -1,0 +1,2268 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Флот · SRP</title>
+
+
+<meta name="srp-token" content="">
+<style>
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.search {
+  flex: 1; min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 8px 13px;
+  font: 15px/1.4 inherit;
+  transition: border-color .15s;
+}
+.search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.1); }
+.search::placeholder { color: var(--muted); }
+.live-indicator { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--good); animation: pulse-dot 2.5s infinite;
+}
+.dot.stale { background: var(--warn); animation: none; }
+@keyframes pulse-dot {
+  0%   { box-shadow: 0 0 0 0 rgba(16,217,122,.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(16,217,122,0); }
+  100% { box-shadow: 0 0 0 0 rgba(16,217,122,0); }
+}
+
+/* ── KPI strip ─────────────────────────────────────────────────────────── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px; margin-bottom: 24px;
+}
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 4px; padding: 11px 14px;
+  cursor: pointer; transition: all .12s ease;
+}
+.kpi:hover { background: var(--panel-2); border-left-color: var(--muted); }
+.kpi.active { border-left-color: var(--accent); background: var(--accent-dim); }
+.kpi[data-filter="at_risk"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kpi[data-filter="worsening"].active,
+.kpi[data-filter="stale"].active { border-left-color: var(--warn); background: var(--warn-dim); }
+.kpi[data-filter="unknown"].active,
+.kpi[data-filter="regressed"].active { border-left-color: var(--high); background: var(--high-dim); }
+.kpi[data-filter="expiring"].active,
+.kpi[data-filter="untrusted"].active { border-left-color: var(--bad); background: var(--bad-dim); }
+.kn { font: 700 24px/1 var(--mono); margin-bottom: 4px; }
+.kn.bad  { color: var(--bad); }
+.kn.warn { color: var(--warn); }
+.kn.high { color: var(--high); }
+.kn.na   { color: var(--muted); }
+.kn.good { color: var(--good); }
+.kl { font: 600 11px/1.2 var(--mono); letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Site groups ───────────────────────────────────────────────────────── */
+.site { margin-bottom: 28px; }
+.site-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 2px; border-bottom: 1px solid var(--line-2); margin-bottom: 0;
+}
+.site-name { font: 600 13px/1 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+
+/* ── Sortable headers ──────────────────────────────────────────────────── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+.sort-icon { margin-left: 3px; opacity: .35; font-style: normal; font-size: 11px; }
+th.sortable.asc .sort-icon::after  { content: "↑"; opacity: 1; }
+th.sortable.desc .sort-icon::after { content: "↓"; opacity: 1; }
+th.sortable:not(.asc):not(.desc) .sort-icon::after { content: "↕"; }
+th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
+
+/* ── Device rows ───────────────────────────────────────────────────────── */
+.devrow { transition: background .1s; }
+.devrow.stale-row { opacity: .80; filter: saturate(.7); }
+.devrow.escalated { animation: escalate-flash 2.5s ease-in-out 3; }
+@keyframes escalate-flash {
+  0%,100% { background: transparent; }
+  40%     { background: var(--bad-dim); }
+}
+
+/* ── Alerts / badges ───────────────────────────────────────────────────── */
+.alerts { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge {
+  font: 600 12px/1 var(--mono); padding: 3px 7px;
+  border-radius: 3px; border: 1px solid transparent;
+  white-space: nowrap; letter-spacing: .3px;
+}
+.badge.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.3); }
+.badge.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.3); }
+.badge.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.3); }
+.badge.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: var(--bad-dim); }
+.badge.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(51,78,104,.4); }
+
+/* ── Trend cell ────────────────────────────────────────────────────────── */
+.trend-cell { width: 52px; }
+.trend-up   { color: var(--bad);  font: 700 15px/1 var(--mono); }
+.trend-flat { color: var(--na);   font: 400 15px/1 var(--mono); }
+.trend-none { color: var(--line-2);font: 400 15px/1 var(--mono); }
+
+/* ── Ack button ────────────────────────────────────────────────────────── */
+.ackbtn {
+  font: 600 12px/1 inherit; padding: 5px 10px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.ackbtn:hover { border-color: var(--accent); color: var(--accent); }
+.ackbtn.acked { color: var(--good); border-color: rgba(16,217,122,.4); }
+
+/* ── Delete + purge controls (ghost cleanup) ───────────────────────────── */
+.delbtn {
+  font: 600 12px/1 inherit; padding: 5px 9px; margin-left: 4px;
+  border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.delbtn:hover { border-color: var(--bad); color: var(--bad); background: var(--bad-dim); }
+.toolbtn {
+  font: 600 13px/1 inherit; padding: 8px 13px; white-space: nowrap;
+  border-radius: 4px; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.toolbtn:hover { border-color: var(--bad); color: var(--bad); }
+
+/* ── Compact table rows ─────────────────────────────────────────────────── */
+table th { padding: 5px 8px; }
+table td { padding: 4px 8px; }
+tbody td { color: #e8f4ff; font-size: 15px; white-space: nowrap; }
+tbody td a { color: #e8f4ff; font-weight: 600; font-size: 15px; }
+tbody td a:hover { color: var(--accent); text-decoration: none; }
+.dev-sub { color: var(--muted); font: 400 11px/1 var(--mono); margin-left: 5px; }
+.dev-sub2 { color: var(--muted); font: 400 11px/1.3 var(--mono); margin-top: 3px; opacity: .85; }
+.dev-sub2 .ver { margin-left: 6px; opacity: .7; }
+.dev-sub2 .badge { margin-left: 4px; vertical-align: middle; }
+
+/* Score chips */
+tbody td .chip { font: 600 15px/1 var(--mono); padding: 2px 7px; }
+tbody td .chip.good,
+tbody td .chip.warn,
+tbody td .chip.high,
+tbody td .chip.bad,
+tbody td .chip.na,
+tbody td .chip.accent { color: #ffe000; }
+
+/* ── Health verdict cells (ssd3 Ф7) — band-colored, replace the flat scores ── */
+.hidx { font: 700 16px/1 var(--mono); }
+.hidx.good { color: var(--good); }
+.hidx.warn { color: var(--warn); }
+.hidx.bad  { color: var(--bad); }
+.hidx.na   { color: var(--muted); }
+.hdelta { font: 700 11px/1 var(--mono); vertical-align: middle; }
+.hdelta.good { color: var(--good); }
+.hdelta.bad  { color: var(--bad); }
+.hdelta.na   { color: var(--muted); }
+.hstate {
+  display: inline-block; font: 600 12px/1 var(--mono);
+  padding: 3px 8px; border-radius: 3px; letter-spacing: .2px; white-space: nowrap;
+}
+.hstate.good { background: var(--good-dim); color: var(--good); border: 1px solid rgba(16,217,122,.3); }
+.hstate.warn { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.3); }
+.hstate.bad  { background: var(--bad-dim);  color: var(--bad);  border: 1px solid rgba(228,30,63,.35); }
+.hstate.na   { background: var(--na-dim);   color: var(--muted);border: 1px solid rgba(51,78,104,.4); }
+.hfactor { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.hfar {
+  font: 600 11px/1 var(--mono); color: var(--warn);
+  padding: 1px 5px; border-radius: 3px; background: var(--warn-dim); margin-left: 2px;
+}
+
+/* Trend arrows — worsening arrow rendered as a high-contrast highlight */
+tbody td .trend-flat,
+tbody td .trend-none { font-size: 15px; }
+tbody td .trend-up {
+  display: inline-block;
+  font: 800 16px/1 var(--mono);
+  padding: 1px 7px; border-radius: 3px;
+  background: var(--bad); color: #000;
+}
+.ip-copy {
+  cursor: pointer; color: var(--text);
+  border-bottom: 1px dashed var(--line-2); transition: color .12s, border-color .12s;
+}
+.ip-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.ip-copy.copied { color: var(--good); border-bottom-color: var(--good); }
+
+/* Status badges — compact */
+.badge { font-size: 12px; padding: 2px 7px; }
+.badge.warn { background: rgba(245,158,11,.82); color: #fff; border-color: var(--warn); }
+.badge.bad  { background: var(--bad); color: #000; border-color: var(--bad); }
+.badge.high { background: rgba(249,115,22,.82); color: #fff; border-color: var(--high); }
+.badge.good { background: rgba(16,217,122,.82); color: #fff; border-color: var(--good); }
+.badge.na   { background: rgba(88,120,160,.3);  color: #cce4f8; border-color: rgba(88,120,160,.65); }
+
+/* Certificate alert: yellow background, black text — only when < 17d */
+.cert-alert {
+  display: inline-flex; align-items: center;
+  font: 700 15px/1 var(--mono); padding: 2px 7px; border-radius: 3px;
+  background: #ffe000; color: #000; border: 1px solid #d4ba00;
+  white-space: nowrap;
+}
+
+/* ─── Meta theme overrides (fleet) ─────────────────────────────────────── */
+/* Light theme keeps red for "bad" (the no-red rule is dark-theme only). */
+[data-theme="meta"] .badge.bad { background: rgba(228,30,63,.82); color: #fff; border-color: var(--bad); }
+[data-theme="meta"] tbody td .trend-up { background: var(--bad); color: #fff; }
+[data-theme="meta"] tbody td { color: var(--text); }
+[data-theme="meta"] tbody td a { color: var(--text); font-weight: 700; }
+[data-theme="meta"] tbody td a:hover { color: var(--accent); }
+[data-theme="meta"] tbody td .chip.good,
+[data-theme="meta"] tbody td .chip.warn,
+[data-theme="meta"] tbody td .chip.high,
+[data-theme="meta"] tbody td .chip.bad,
+[data-theme="meta"] tbody td .chip.na,
+[data-theme="meta"] tbody td .chip.accent { color: inherit; }
+
+/* ─── Vercel theme overrides (fleet) ────────────────────────────────────── */
+[data-theme="vercel"] .search {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--text);
+  border-radius: var(--r-btn);
+  font: 400 14px/1.4 var(--font-body);
+}
+[data-theme="vercel"] .search:focus {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px rgba(0,0,0,.06);
+}
+[data-theme="vercel"] .kpi {
+  background: var(--panel);
+  border: none;
+  border-left: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .kpi:hover {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12),0 2px 4px rgba(0,0,0,.06);
+}
+[data-theme="vercel"] .kpi.active {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+[data-theme="vercel"] .kpi[data-filter="at_risk"].active,
+[data-theme="vercel"] .kpi[data-filter="expiring"].active,
+[data-theme="vercel"] .kpi[data-filter="untrusted"].active {
+  box-shadow: inset 0 0 0 2px var(--bad);
+}
+[data-theme="vercel"] .kpi[data-filter="worsening"].active,
+[data-theme="vercel"] .kpi[data-filter="stale"].active {
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+[data-theme="vercel"] .kpi[data-filter="unknown"].active,
+[data-theme="vercel"] .kpi[data-filter="regressed"].active {
+  box-shadow: inset 0 0 0 2px var(--high);
+}
+[data-theme="vercel"] .kn {
+  font: 600 24px/1 var(--font-body);
+  letter-spacing: -.8px;
+}
+[data-theme="vercel"] .kl {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .site-head { border-bottom-color: var(--line); }
+[data-theme="vercel"] .site-name {
+  font: 500 12px/1 var(--mono);
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] tbody td { color: var(--text); font-size: 15px; }
+[data-theme="vercel"] tbody td a { color: var(--text); font-weight: 500; }
+[data-theme="vercel"] tbody td a:hover { color: var(--accent); }
+[data-theme="vercel"] tbody td .chip { font: 500 15px/1 var(--font-body); padding: 2px 9px; }
+[data-theme="vercel"] tbody td .chip.good  { color: #0070f3; }
+[data-theme="vercel"] tbody td .chip.warn  { color: #ab570a; }
+[data-theme="vercel"] tbody td .chip.high  { color: #ab570a; }
+[data-theme="vercel"] tbody td .chip.bad   { color: #ee0000; }
+[data-theme="vercel"] tbody td .chip.na    { color: var(--muted); }
+[data-theme="vercel"] tbody td .chip.accent{ color: #0070f3; }
+[data-theme="vercel"] .badge.warn { background: rgba(245,166,35,.12); color: #ab570a; border-color: rgba(245,166,35,.35); }
+[data-theme="vercel"] .badge.bad  { background: rgba(238,0,0,.08);    color: #ee0000; border-color: rgba(238,0,0,.25); }
+[data-theme="vercel"] .badge.high { background: rgba(245,166,35,.12); color: #ab570a; border-color: rgba(245,166,35,.35); }
+[data-theme="vercel"] .badge.good { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .badge.na   { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
+[data-theme="vercel"] .dot { background: #0070f3; animation: vcl-pulse 2.5s infinite; }
+[data-theme="vercel"] .dot.stale { background: var(--warn); animation: none; }
+@keyframes vcl-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(0,112,243,0); }
+  50%     { box-shadow: 0 0 0 7px rgba(0,112,243,0); }
+  0%      { box-shadow: 0 0 0 0 rgba(0,112,243,.55); }
+}
+[data-theme="vercel"] .ackbtn {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--line);
+  border-radius: var(--r-btn);
+  font: 500 12px/1 var(--font-body);
+}
+[data-theme="vercel"] .ackbtn:hover { border-color: var(--text); color: var(--text); }
+[data-theme="vercel"] .ackbtn.acked { color: #0070f3; border-color: rgba(0,112,243,.3); }
+[data-theme="vercel"] .trend-up   { color: var(--bad);  font: 600 15px/1 var(--font-body); }
+[data-theme="vercel"] .trend-flat { color: var(--muted); font: 400 15px/1 var(--font-body); }
+[data-theme="vercel"] .trend-none { color: var(--line-2);font: 400 15px/1 var(--font-body); }
+[data-theme="vercel"] .chart-panel {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .chart-panel .ch-title {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .8px;
+  color: var(--muted);
+}
+[data-theme="vercel"] .ptable th {
+  background: transparent;
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .6px;
+  border-bottom-color: var(--line);
+}
+[data-theme="vercel"] .ptable td { color: var(--text); border-bottom-color: var(--line); }
+[data-theme="vercel"] .ptable td:nth-child(2),
+[data-theme="vercel"] .ptable td:nth-child(3) { color: #0070f3; }
+</style>
+
+<style>
+/* ─── Dark theme (default) ─────────────────────────────────────────── */
+:root {
+  --bg:          #040810;
+  --panel:       #07101e;
+  --panel-2:     #0b1828;
+  --line:        #132030;
+  --line-2:      #1d3250;
+  --text:        #deeef8;
+  --muted:       #7aa8c4;
+  --accent:      #0ea5e9;
+  --accent-dim:  rgba(14,165,233,.12);
+  --good:        #10d97a;
+  --good-dim:    rgba(16,217,122,.12);
+  --warn:        #f59e0b;
+  --warn-dim:    rgba(245,158,11,.12);
+  --high:        #f97316;
+  --high-dim:    rgba(249,115,22,.12);
+  /* Dark theme: no red — "bad" reads as a high-contrast yellow highlight. */
+  --bad:         #ffe000;
+  --bad-dim:     rgba(255,224,0,.14);
+  --na:          #5878a0;
+  --na-dim:      rgba(88,120,160,.12);
+  --mono:        "JetBrains Mono","Cascadia Code","Fira Code",Consolas,monospace;
+  --font-body:   -apple-system,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+  --r-card:      5px;
+  --r-chip:      3px;
+  --r-btn:       4px;
+  --r-pill:      100px;
+  --shadow-card: none;
+  --header-h:    44px;
+}
+
+/* ─── Meta theme ────────────────────────────────────────────────────── */
+[data-theme="meta"] {
+  --bg:          #ffffff;
+  --panel:       #f1f4f7;
+  --panel-2:     #ffffff;
+  --line:        #ced0d4;
+  --line-2:      #dee3e9;
+  --text:        #0a1317;
+  --muted:       #5d6c7b;
+  --accent:      #0064e0;
+  --accent-dim:  rgba(0,100,224,.10);
+  --good:        #31a24c;
+  --good-dim:    rgba(49,162,76,.10);
+  --warn:        #f7b928;
+  --warn-dim:    rgba(247,185,40,.12);
+  --high:        #f2a918;
+  --high-dim:    rgba(242,169,24,.12);
+  --bad:         #e41e3f;
+  --bad-dim:     rgba(228,30,63,.10);
+  --na:          #8595a4;
+  --na-dim:      rgba(133,149,164,.10);
+  --font-body:   "Helvetica Neue",Helvetica,"Segoe UI",Arial,sans-serif;
+  --r-card:      16px;
+  --r-chip:      100px;
+  --r-btn:       100px;
+  --shadow-card: rgba(20,22,26,.08) 0 1px 4px 0;
+  --header-h:    64px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 var(--font-body);
+  min-height: 100vh;
+  transition: background .2s, color .2s;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ─── Header ─────────────────────────────────────────────────────────── */
+header.top {
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 28px;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--line-2);
+  background: var(--panel);
+  position: sticky; top: 0; z-index: 100;
+  transition: background .2s, border-color .2s;
+}
+.brand {
+  font: 700 17px/1 var(--mono);
+  letter-spacing: .4px;
+  flex-shrink: 0;
+}
+.brand em { color: var(--accent); font-style: normal; }
+.sub { color: var(--muted); font-size: 14px; }
+header.top nav { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+
+/* Dark nav: plain links */
+header.top nav a {
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: var(--r-btn);
+  transition: color .15s;
+}
+header.top nav a:hover { color: var(--accent); text-decoration: none; }
+
+/* Meta nav: pill tabs */
+[data-theme="meta"] header.top .brand {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+[data-theme="meta"] header.top nav a {
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--bg);
+}
+[data-theme="meta"] header.top nav a:hover {
+  color: var(--text);
+  border-color: var(--text);
+  text-decoration: none;
+}
+[data-theme="meta"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+}
+
+/* ─── Theme toggle button ────────────────────────────────────────────── */
+#theme-toggle {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 700 13px/1 var(--font-body);
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  letter-spacing: .2px;
+  transition: border-color .15s, color .15s, background .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+[data-theme="meta"] #theme-toggle {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+[data-theme="meta"] #theme-toggle:hover {
+  background: #444950;
+  border-color: #444950;
+}
+
+main { padding: 24px 28px; max-width: 1220px; margin: 0 auto; }
+
+/* ─── Section headings ───────────────────────────────────────────────── */
+h2, .section-label {
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+  margin: 30px 0 14px;
+}
+h2::after, .section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.section-label.predictive { color: var(--accent); }
+.section-label.predictive::after { background: rgba(14,165,233,.25); }
+.section-label.incident { color: var(--warn); }
+.section-label.incident::after { background: rgba(245,158,11,.2); }
+
+/* Meta section labels: drop uppercase mono, use clean style */
+[data-theme="meta"] h2,
+[data-theme="meta"] .section-label {
+  font: 700 13px/1 var(--font-body);
+  letter-spacing: .3px;
+  text-transform: none;
+  color: var(--muted);
+}
+[data-theme="meta"] .section-label.predictive { color: var(--accent); }
+[data-theme="meta"] .section-label.incident   { color: var(--high); }
+
+/* ─── Utility ────────────────────────────────────────────────────────── */
+.muted { color: var(--muted); }
+.mono  { font-family: var(--mono); }
+.small { font-size: 14px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill {
+  font: 600 12px/1 var(--mono);
+  padding: 2px 7px; border-radius: 20px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+
+/* ─── Chips ──────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 700 13px/1 var(--mono);
+  padding: 3px 8px; border-radius: var(--r-chip);
+  letter-spacing: .3px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+[data-theme="meta"] .chip {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.chip.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.35); }
+.chip.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.35); }
+.chip.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.35); }
+.chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
+.chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
+.chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+/* "not in directory" chip — a typo'd org/dept code, surfaced not rejected (§7) */
+.chip-unk {
+  display: inline-block; font: 600 10px/1 var(--mono); vertical-align: middle;
+  padding: 2px 5px; border-radius: 3px;
+  background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.35);
+}
+
+/* ─── Score grid ─────────────────────────────────────────────────────── */
+.scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.scorecard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 15px 18px;
+  box-shadow: var(--shadow-card);
+  transition: border-radius .2s, box-shadow .2s;
+}
+[data-theme="meta"] .scorecard {
+  background: #fff;
+  border-left-width: 1px;
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="meta"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 16px; right: 16px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--line);
+}
+[data-theme="meta"] .scorecard.good::before { background: var(--good); }
+[data-theme="meta"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="meta"] .scorecard.high::before { background: var(--high); }
+[data-theme="meta"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="meta"] .scorecard.na::before   { background: var(--na); }
+
+.scorecard.good { border-left-color: var(--good); }
+.scorecard.warn { border-left-color: var(--warn); }
+.scorecard.high { border-left-color: var(--high); }
+.scorecard.bad  { border-left-color: var(--bad); }
+.scorecard.na   { border-left-color: var(--na); }
+
+.scorecard .lab {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted);
+}
+[data-theme="meta"] .scorecard .lab {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+.scorecard .val {
+  font: 700 40px/1 var(--mono); margin: 8px 0 4px;
+}
+[data-theme="meta"] .scorecard .val {
+  font: 500 40px/1 var(--font-body);
+}
+.val.good { color: var(--good); }
+.val.warn { color: var(--warn); }
+.val.high { color: var(--high); }
+.val.bad  { color: var(--bad); }
+.val.na   { color: var(--na); }
+.scorecard .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 12px; }
+.scorecard .bar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.scorecard.good .bar > i { background: var(--good); }
+.scorecard.warn .bar > i { background: var(--warn); }
+.scorecard.high .bar > i { background: var(--high); }
+.scorecard.bad  .bar > i { background: var(--bad); }
+.scorecard.na   .bar > i { background: var(--na); }
+
+/* ─── Risk rows ──────────────────────────────────────────────────────── */
+.riskrow {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 14px 16px; margin-bottom: 8px;
+  box-shadow: var(--shadow-card);
+}
+.riskrow .head {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 12px;
+}
+.riskrow .name { font-weight: 600; font-size: 16px; }
+[data-theme="meta"] .riskrow { background: #fff; }
+.riskbar { height: 6px; background: var(--line); border-radius: 2px; margin: 10px 0 6px; overflow: hidden; }
+.riskbar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.riskbar.good > i { background: var(--good); }
+.riskbar.warn > i { background: var(--warn); }
+.riskbar.high > i { background: var(--high); }
+.riskbar.bad  > i { background: var(--bad); }
+.riskbar.na   > i { background: var(--na); }
+
+/* ─── Factors list ───────────────────────────────────────────────────── */
+.factors { list-style: none; font-size: 14px; margin-top: 8px; }
+.factors li {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted);
+}
+.factors li .w { font-family: var(--mono); }
+.w.pos { color: var(--bad); }
+.w.neg { color: var(--good); }
+
+/* ─── Table ──────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th {
+  color: var(--muted); font: 600 12px/1 var(--mono);
+  letter-spacing: 1px; text-transform: uppercase;
+  background: var(--panel);
+  position: sticky; top: var(--header-h); z-index: 10;
+}
+/* .table-wrap (printers.html, device.html + _device_net.html, print.html) sets
+   overflow-x:auto, which per the CSS Overflow spec forces overflow-y's computed
+   value to auto too (CSS Overflow §3.5) -- silently turning the div into a scroll
+   container, which becomes the sticky positioning ancestor for `th` above instead
+   of the page. Without this override the header sticks var(--header-h) INSIDE the
+   wrapper and its opaque background paints over the first data row underneath.
+   Shared here (not per-template) so every current and future .table-wrap picks it
+   up automatically -- do not remove without re-checking this interaction. */
+.table-wrap th { top: 0; }
+[data-theme="meta"] th {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+tbody tr { transition: background .1s; }
+tbody tr:hover { background: var(--panel-2); }
+[data-theme="meta"] tbody tr:hover { background: var(--panel); }
+
+/* ─── Stat cards ─────────────────────────────────────────────────────── */
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.stat {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 12px 16px; min-width: 110px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="meta"] .stat { background: #fff; }
+.stat .n { font: 700 24px/1 var(--mono); }
+[data-theme="meta"] .stat .n { font: 500 24px/1 var(--font-body); }
+.stat .l { color: var(--muted); font: 600 11px/1.2 var(--mono); letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+[data-theme="meta"] .stat .l { font: 700 12px/1.2 var(--font-body); letter-spacing: .2px; text-transform: none; }
+
+/* ─── Alert banners ──────────────────────────────────────────────────── */
+.alert-banner {
+  padding: 11px 15px; border-radius: var(--r-card); margin-bottom: 10px;
+  font-size: 15px; border-left: 3px solid;
+}
+[data-theme="meta"] .alert-banner {
+  border-left: none;
+  border-radius: var(--r-card);
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.alert-bad  { background: var(--bad-dim);  border-color: var(--bad);  color: var(--bad); }
+.alert-warn { background: var(--warn-dim); border-color: var(--warn); color: var(--warn); }
+
+/* ─── Misc ───────────────────────────────────────────────────────────── */
+details > summary { cursor: pointer; color: var(--muted); font-size: 15px; list-style: none; }
+details > summary::before { content: "▶ "; font-size: 12px; }
+details[open] > summary::before { content: "▼ "; }
+code {
+  font-family: var(--mono); background: var(--panel-2);
+  padding: 1px 5px; border-radius: 3px; font-size: 14px;
+}
+
+/* ─── Vercel theme ──────────────────────────────────────────────────────── */
+[data-theme="vercel"] {
+  --bg:          #fafafa;
+  --panel:       #ffffff;
+  --panel-2:     #f5f5f5;
+  --line:        #ebebeb;
+  --line-2:      #a1a1a1;
+  --text:        #171717;
+  --muted:       #4d4d4d;
+  --accent:      #0070f3;
+  --accent-dim:  rgba(0,112,243,.07);
+  --good:        #0070f3;
+  --good-dim:    rgba(0,112,243,.07);
+  --warn:        #f5a623;
+  --warn-dim:    rgba(245,166,35,.10);
+  --high:        #f5a623;
+  --high-dim:    rgba(245,166,35,.10);
+  --bad:         #ee0000;
+  --bad-dim:     rgba(238,0,0,.07);
+  --na:          #888888;
+  --na-dim:      rgba(136,136,136,.10);
+  --font-body:   system-ui,-apple-system,"Segoe UI Variable","Segoe UI",sans-serif;
+  --r-card:      8px;
+  --r-chip:      100px;
+  --r-btn:       6px;
+  --shadow-card: inset 0 0 0 1px rgba(0,0,0,.08),0 1px 1px rgba(0,0,0,.02),0 2px 2px rgba(0,0,0,.04);
+  --header-h:    64px;
+}
+[data-theme="vercel"] header.top {
+  background: rgba(255,255,255,.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding-top: 2px;
+}
+[data-theme="vercel"] header.top::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,#007cf0,#00dfd8,#7928ca,#ff0080,#ff4d4d,#f9cb28);
+  z-index: 1;
+}
+[data-theme="vercel"] .brand {
+  font: 600 16px/1 var(--font-body);
+  letter-spacing: -.4px;
+  color: var(--text);
+}
+[data-theme="vercel"] .brand em {
+  background: linear-gradient(90deg,#007cf0,#7928ca,#ff0080);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+[data-theme="vercel"] header.top nav a {
+  color: var(--muted);
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font: 400 14px/1 var(--font-body);
+}
+[data-theme="vercel"] header.top nav a:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+[data-theme="vercel"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+}
+[data-theme="vercel"] #theme-toggle {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+  border-radius: var(--r-btn);
+  font: 500 14px/1 var(--font-body);
+  height: 28px;
+  padding: 0 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] #theme-toggle:hover {
+  background: #333;
+  border-color: #333;
+}
+[data-theme="vercel"] h2,
+[data-theme="vercel"] .section-label {
+  font: 400 12px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .section-label.predictive { color: var(--accent); }
+[data-theme="vercel"] .section-label.predictive::after { background: rgba(0,112,243,.15); }
+[data-theme="vercel"] .section-label.incident   { color: var(--warn); }
+[data-theme="vercel"] .section-label.incident::after   { background: rgba(245,166,35,.2); }
+[data-theme="vercel"] .scorecard {
+  background: var(--panel);
+  border: none;
+  border-left: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="vercel"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  border-radius: var(--r-card) var(--r-card) 0 0;
+  background: var(--line);
+}
+[data-theme="vercel"] .scorecard.good::before { background: var(--good); }
+[data-theme="vercel"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="vercel"] .scorecard.high::before { background: var(--high); }
+[data-theme="vercel"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="vercel"] .scorecard .lab {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .scorecard .val {
+  font: 600 40px/1 var(--font-body);
+  letter-spacing: -1.5px;
+}
+[data-theme="vercel"] .chip {
+  font: 500 12px/1 var(--font-body);
+  border-radius: var(--r-chip);
+  padding: 3px 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] .chip.good  { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .chip.warn  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.high  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.bad   { background: rgba(238,0,0,.07);    color: #ee0000; border-color: rgba(238,0,0,.2); }
+[data-theme="vercel"] .chip.na    { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
+[data-theme="vercel"] .chip.accent{ background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .riskrow {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat .n {
+  font: 600 24px/1 var(--font-body);
+  letter-spacing: -.8px;
+}
+[data-theme="vercel"] .stat .l {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+[data-theme="vercel"] th {
+  background: var(--bg);
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] td { border-bottom-color: var(--line); }
+[data-theme="vercel"] tbody tr:hover { background: rgba(0,0,0,.02); }
+[data-theme="vercel"] .alert-bad  { background: rgba(238,0,0,.06);    border-color: var(--bad);  color: #ee0000; }
+[data-theme="vercel"] .alert-warn { background: rgba(245,166,35,.08); border-color: var(--warn); color: #ab570a; }
+[data-theme="vercel"] .pill { background: var(--panel-2); border-color: var(--line); color: var(--muted); }
+[data-theme="vercel"] code { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+</style>
+<script>
+(function () {
+  var saved = localStorage.getItem("srp-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+})();
+// XSS defense (one source of truth): HTML-escape any agent/operator-controlled
+// string before it reaches an innerHTML or Plotly pseudo-HTML sink. Plotly renders
+// a <b>/<a>/<span> tag subset inside tick + hover text, so an un-escaped value there
+// executes just like innerHTML would. Escaped entities still round-trip to the
+// correct glyph for display, so legitimate names render unchanged.
+// HTML-context only: safe for innerHTML / double-quoted attributes / Plotly text.
+// NOT sufficient for a JS-string, URL/href, or unquoted-attribute sink — those need
+// their own encoding.
+window.srpEsc = function (s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
+</script>
+</head>
+<body>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Статичная копия демо от 2026-08-29. <a style="color:#0ea5e9" href="https://srp-demo.onrender.com/">Открыть живую версию</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a></div>
+<script id="mirror-data" type="application/json">{"/fleet/fragment": "\n\n\n\u003cdiv class=\"kpi-strip\">\n  \u003cdiv class=\"kpi\" data-filter=\"all\">\n    \u003cdiv class=\"kn\">10\u003c/div>\n    \u003cdiv class=\"kl\">устройств\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"at_risk\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">в зоне риска\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"worsening\">\n    \u003cdiv class=\"kn warn\">10\u003c/div>\n    \u003cdiv class=\"kl\">тренд ↑\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"unknown\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">unknown\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"regressed\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">пропал\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"stale\">\n    \u003cdiv class=\"kn warn\">10\u003c/div>\n    \u003cdiv class=\"kl\">не на связи\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"expiring\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">cert ≤30д\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"untrusted\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">untrusted\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"update_pending\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">не применяют обновл.\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"outdated\"\n       title=\"Версия агента ниже выложенной на сервере — устройства ждут обновления\">\n    \u003cdiv class=\"kn na\">0 из 10\u003c/div>\n    \u003cdiv class=\"kl\">агенты устарели\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"new\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">новых ≤7д\u003c/div>\n  \u003c/div>\n\u003c/div>\n\n\n\n\n\n\u003cdiv class=\"site\">\n  \u003cdiv class=\"site-head\">\n    \u003cspan class=\"site-name\">Объект: — без объекта —\u003c/span>\n    \u003cspan class=\"muted small mono\">10\u003c/span>\n  \u003c/div>\n  \u003ctable>\n    \u003cthead>\n      \u003ctr>\n        \u003cth class=\"sortable\" data-col=\"0\" data-sort=\"text\">\u003cspan>Устройство\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth>Статус\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"2\" title=\"сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше\">\u003cspan>Индекс\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"3\" title=\"состояние по координатной модели: от «здоров» до «предотказ»\">\u003cspan>Состояние\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth title=\"главный фактор деградации и прогноз окна до ухудшения\">Главный фактор\u003c/th>\n        \u003cth>Сертификат\u003c/th>\n        \u003cth title=\"страниц за сегодня\">Печать\u003c/th>\n        \u003cth>Связь\u003c/th>\n        \u003cth title=\"локальный IP — клик копирует\">IP\u003c/th>\n        \u003cth>\u003c/th>\n      \u003c/tr>\n    \u003c/thead>\n    \u003ctbody>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"kadry-01 demo-kadry-01 — без объекта — ооо «ромашка» служба персонала\"\n        data-id=\"demo-kadry-01\"\n        data-risk=\"30.0\">\n\n      \n      \u003ctd data-name=\"kadry-01\">\n        \u003ca href=\"/device/demo-kadry-01\" title=\"demo-kadry-01\">KADRY-01\u003c/a>\u003cspan class=\"dev-sub\">, Белова Марина Юрьевна, Специалист по кадрам, +7 900 000-04-41\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Atlas H336\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Служба персонала\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"35.0\">\n          \u003cspan class=\"hidx bad\">35\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"3\">\n          \u003cspan class=\"hstate bad\">ускоренная деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"ускоренная деградация — прогноз горизонта 30 дней\">≤30дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-kadry-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.15\" title=\"скопировать IP\">192.168.77.15\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-kadry-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-kadry-01\"\n                data-name=\"KADRY-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"buh-02 demo-buh-02 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-02\"\n        data-risk=\"25.0\">\n\n      \n      \u003ctd data-name=\"buh-02\">\n        \u003ca href=\"/device/demo-buh-02\" title=\"demo-buh-02\">BUH-02\u003c/a>\u003cspan class=\"dev-sub\">, Кузьмина Ольга Ивановна, Бухгалтер-кассир, +7 900 000-01-12\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O240\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"0.0\">\n          \u003cspan class=\"hidx bad\">0\u003c/span> \u003cspan class=\"hdelta bad\" title=\"изменение индекса за 7 дней\">▼2\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"4\">\n          \u003cspan class=\"hstate bad\">предотказ\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"предотказ — прогноз горизонта 7 дней\">≤7дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.12\" title=\"скопировать IP\">192.168.77.12\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-02\"\n                data-name=\"BUH-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"sklad-01 demo-sklad-01 — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-sklad-01\"\n        data-risk=\"15.0\">\n\n      \n      \u003ctd data-name=\"sklad-01\">\n        \u003ca href=\"/device/demo-sklad-01\" title=\"demo-sklad-01\">SKLAD-01\u003c/a>\u003cspan class=\"dev-sub\">, Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton X2665G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"69.8\">\n          \u003cspan class=\"hidx warn\">70\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sklad-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.13\" title=\"скопировать IP\">192.168.77.13\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sklad-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sklad-01\"\n                data-name=\"SKLAD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"prod-02 demo-prod-02 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-02\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"prod-02\">\n        \u003ca href=\"/device/demo-prod-02\" title=\"demo-prod-02\">PROD-02\u003c/a>\u003cspan class=\"dev-sub\">, Тарасов Виктор Ильич, Оператор станка, +7 900 000-06-62\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton M2640G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"96.4\">\n          \u003cspan class=\"hidx warn\">96\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.19\" title=\"скопировать IP\">192.168.77.19\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-02\"\n                data-name=\"PROD-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"staryi-pc demo-old-pc — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-old-pc\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"staryi-pc\">\n        \u003ca href=\"/device/demo-old-pc\" title=\"demo-old-pc\">STARYI-PC\u003c/a>\u003cspan class=\"dev-sub\">, Фомин Аркадий Степанович, Приёмщик товара, +7 900 000-02-22\u003c/span>\u003cspan class=\"dev-sub\"> · desktop HP Compaq Pro 6300\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"80.5\">\n          \u003cspan class=\"hidx warn\">80\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-old-pc\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.20\" title=\"скопировать IP\">192.168.77.20\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-old-pc\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-old-pc\"\n                data-name=\"STARYI-PC\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"buh-01 demo-buh-01 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"buh-01\">\n        \u003ca href=\"/device/demo-buh-01\" title=\"demo-buh-01\">BUH-01\u003c/a>\u003cspan class=\"dev-sub\">, Петрова Анна Сергеевна, Бухгалтер, +7 900 000-01-11\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M70q G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.11\" title=\"скопировать IP\">192.168.77.11\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-01\"\n                data-name=\"BUH-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"dir-nb demo-dir-nb — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-dir-nb\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"dir-nb\">\n        \u003ca href=\"/device/demo-dir-nb\" title=\"demo-dir-nb\">DIR-NB\u003c/a>\u003cspan class=\"dev-sub\">, Соколов Игорь Валентинович, Директор, +7 900 000-03-31\u003c/span>\u003cspan class=\"dev-sub\"> · laptop EliteBook 840 G8\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"96.4\">\n          \u003cspan class=\"hidx warn\">96\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-dir-nb\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.14\" title=\"скопировать IP\">192.168.77.14\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-dir-nb\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-dir-nb\"\n                data-name=\"DIR-NB\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"sekr-01 demo-sekr-01 — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-sekr-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"sekr-01\">\n        \u003ca href=\"/device/demo-sekr-01\" title=\"demo-sekr-01\">SEKR-01\u003c/a>\u003cspan class=\"dev-sub\">, Романова Дарья Олеговна, Секретарь, +7 900 000-03-32\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M720t\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"96.4\">\n          \u003cspan class=\"hidx warn\">96\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sekr-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.16\" title=\"скопировать IP\">192.168.77.16\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sekr-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sekr-01\"\n                data-name=\"SEKR-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"it-01 demo-it-01 — без объекта — ооо «ромашка» ит-отдел\"\n        data-id=\"demo-it-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"it-01\">\n        \u003ca href=\"/device/demo-it-01\" title=\"demo-it-01\">IT-01\u003c/a>\u003cspan class=\"dev-sub\">, Ерохин Максим Андреевич, Системный администратор, +7 900 000-05-51\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ExpertCenter D700M\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / ИТ-отдел\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-it-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.17\" title=\"скопировать IP\">192.168.77.17\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-it-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-it-01\"\n                data-name=\"IT-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow stale-row\"\n        data-flags=\"worsening stale\"\n        data-text=\"prod-01 demo-prod-01 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"prod-01\">\n        \u003ca href=\"/device/demo-prod-01\" title=\"demo-prod-01\">PROD-01\u003c/a>\u003cspan class=\"dev-sub\">, Дмитриев Сергей Львович, Мастер участка, +7 900 000-06-61\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O246\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v0.3.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \u003cspan class=\"badge warn\">OFFLINE\u003c/span>\n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"74.7\">\n          \u003cspan class=\"hidx warn\">75\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n            системная причина \u003cspan class=\"hfar\" title=\"истощение компенсации — прогноз горизонта 90 дней\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-08-29T06:28:50.974197+00:00\">\n        55м\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.18\" title=\"скопировать IP\">192.168.77.18\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-01\"\n                data-name=\"PROD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003c/tbody>\n  \u003c/table>\n\u003c/div>\n\n\n\n\n", "/api/v1/fleet/print?today=1": {"period_days": 0, "today": true, "total_pages": 355, "total_jobs": 53, "printer_count": 3, "devices": [{"device_id": "demo-sekr-01", "hostname": "SEKR-01", "pages": 149, "jobs": 21}, {"device_id": "demo-kadry-01", "hostname": "KADRY-01", "pages": 69, "jobs": 12}, {"device_id": "demo-buh-01", "hostname": "BUH-01", "pages": 31, "jobs": 6}, {"device_id": "demo-buh-02", "hostname": "BUH-02", "pages": 31, "jobs": 5}, {"device_id": "demo-dir-nb", "hostname": "DIR-NB", "pages": 24, "jobs": 3}, {"device_id": "demo-it-01", "hostname": "IT-01", "pages": 19, "jobs": 2}, {"device_id": "demo-prod-01", "hostname": "PROD-01", "pages": 17, "jobs": 2}, {"device_id": "demo-prod-02", "hostname": "PROD-02", "pages": 15, "jobs": 2}], "printers": [{"name": "Kyocera ECOSYS P3145dn", "pages": 235, "devices": 3}, {"name": "HP LaserJet Pro M404dn", "pages": 81, "devices": 3}, {"name": "Canon iR-ADV C3520", "pages": 39, "devices": 2}]}}</script>
+<script>
+(function () {
+  var D = JSON.parse(document.getElementById("mirror-data").textContent);
+  window.fetch = function (url) {
+    var key = String(url), hit = null;
+    Object.keys(D).forEach(function (k) { if (key.indexOf(k) !== -1) { hit = k; } });
+    var v = hit === null ? null : D[hit];
+    return Promise.resolve({
+      ok: hit !== null,
+      status: hit === null ? 404 : 200,
+      json: function () { return Promise.resolve(v); },
+      text: function () {
+        return Promise.resolve(typeof v === "string" ? v : JSON.stringify(v));
+      }
+    });
+  };
+})();
+</script>
+<header class="top">
+  <div class="brand">SRP <em>//</em> раннее предупреждение</div>
+  <div class="sub">живой мониторинг</div>
+  <nav>
+    <a href="./index.html">флот</a>
+    <a href="./health.html">здоровье</a>
+    <a href="./pipeline.html">пайплайн</a>
+    <a href="./print.html">печать</a>
+    <a href="./printers.html">принтеры</a>
+    <a href="./netmap.html">карта сети</a>
+    <a href="https://srp-demo.onrender.com/deploy">развёртывание</a>
+    <a href="https://srp-demo.onrender.com/api/v1/devices">API</a>
+    <button id="theme-toggle" onclick="(function(){
+      var h=document.documentElement;
+      var themes=['','meta','vercel'];
+      var labels={'':'Meta','meta':'Vercel','vercel':'Тёмный'};
+      var cur=h.getAttribute('data-theme')||'';
+      var next=themes[(themes.indexOf(cur)+1)%themes.length];
+      h.setAttribute('data-theme',next);
+      localStorage.setItem('srp-theme',next);
+      document.getElementById('theme-toggle').textContent=labels[next];
+    })()" title="Переключить тему"></button>
+    
+    <span class="chip accent" title="Публичное демо: данные вымышленные, изменение отключено">ДЕМО · только чтение</span>
+  </nav>
+</header>
+<main>
+
+
+
+<div class="toolbar">
+  <input id="q" class="search" type="search"
+         placeholder="поиск: имя, объект, id…"
+         autocomplete="off" spellcheck="false">
+  <div class="live-indicator">
+    <span class="dot" id="livedot"></span>
+    <span id="liveinfo" class="muted small">обновлено 0с назад</span>
+  </div>
+  <button id="purgebtn" class="toolbtn" type="button"
+          disabled title="демо: только чтение"
+          >Очистить офлайн…</button>
+</div>
+
+<div id="fleet">
+
+
+<div class="kpi-strip">
+  <div class="kpi" data-filter="all">
+    <div class="kn">10</div>
+    <div class="kl">устройств</div>
+  </div>
+  <div class="kpi" data-filter="at_risk">
+    <div class="kn na">0</div>
+    <div class="kl">в зоне риска</div>
+  </div>
+  <div class="kpi" data-filter="worsening">
+    <div class="kn warn">10</div>
+    <div class="kl">тренд ↑</div>
+  </div>
+  <div class="kpi" data-filter="unknown">
+    <div class="kn na">0</div>
+    <div class="kl">unknown</div>
+  </div>
+  <div class="kpi" data-filter="regressed">
+    <div class="kn na">0</div>
+    <div class="kl">пропал</div>
+  </div>
+  <div class="kpi" data-filter="stale">
+    <div class="kn warn">10</div>
+    <div class="kl">не на связи</div>
+  </div>
+  <div class="kpi" data-filter="expiring">
+    <div class="kn na">0</div>
+    <div class="kl">cert ≤30д</div>
+  </div>
+  <div class="kpi" data-filter="untrusted">
+    <div class="kn na">0</div>
+    <div class="kl">untrusted</div>
+  </div>
+  <div class="kpi" data-filter="update_pending">
+    <div class="kn na">0</div>
+    <div class="kl">не применяют обновл.</div>
+  </div>
+  <div class="kpi" data-filter="outdated"
+       title="Версия агента ниже выложенной на сервере — устройства ждут обновления">
+    <div class="kn na">0 из 10</div>
+    <div class="kl">агенты устарели</div>
+  </div>
+  <div class="kpi" data-filter="new">
+    <div class="kn na">0</div>
+    <div class="kl">новых ≤7д</div>
+  </div>
+</div>
+
+
+
+
+
+<div class="site">
+  <div class="site-head">
+    <span class="site-name">Объект: — без объекта —</span>
+    <span class="muted small mono">10</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th class="sortable" data-col="0" data-sort="text"><span>Устройство</span><span class="sort-icon"></span></th>
+        <th>Статус</th>
+        <th class="sortable" data-col="2" title="сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше"><span>Индекс</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="3" title="состояние по координатной модели: от «здоров» до «предотказ»"><span>Состояние</span><span class="sort-icon"></span></th>
+        <th title="главный фактор деградации и прогноз окна до ухудшения">Главный фактор</th>
+        <th>Сертификат</th>
+        <th title="страниц за сегодня">Печать</th>
+        <th>Связь</th>
+        <th title="локальный IP — клик копирует">IP</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="kadry-01 demo-kadry-01 — без объекта — ооо «ромашка» служба персонала"
+        data-id="demo-kadry-01"
+        data-risk="30.0">
+
+      
+      <td data-name="kadry-01">
+        <a href="./device/demo-kadry-01.html" title="demo-kadry-01">KADRY-01</a><span class="dev-sub">, Белова Марина Юрьевна, Специалист по кадрам, +7 900 000-04-41</span><span class="dev-sub"> · desktop Atlas H336</span>
+        <div class="dev-sub2">ООО «Ромашка» / Служба персонала<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="35.0">
+          <span class="hidx bad">35</span>
+        </td>
+        <td data-val="3">
+          <span class="hstate bad">ускоренная деградация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="ускоренная деградация — прогноз горизонта 30 дней">≤30дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-kadry-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.15" title="скопировать IP">192.168.77.15</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-kadry-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-kadry-01"
+                data-name="KADRY-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="buh-02 demo-buh-02 — без объекта — ооо «ромашка» финансовый отдел"
+        data-id="demo-buh-02"
+        data-risk="25.0">
+
+      
+      <td data-name="buh-02">
+        <a href="./device/demo-buh-02.html" title="demo-buh-02">BUH-02</a><span class="dev-sub">, Кузьмина Ольга Ивановна, Бухгалтер-кассир, +7 900 000-01-12</span><span class="dev-sub"> · desktop Aquilon O240</span>
+        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="0.0">
+          <span class="hidx bad">0</span> <span class="hdelta bad" title="изменение индекса за 7 дней">▼2</span>
+        </td>
+        <td data-val="4">
+          <span class="hstate bad">предотказ</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="предотказ — прогноз горизонта 7 дней">≤7дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-buh-02">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.12" title="скопировать IP">192.168.77.12</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-buh-02"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-buh-02"
+                data-name="BUH-02"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="sklad-01 demo-sklad-01 — без объекта — ооо «ромашка» логистика"
+        data-id="demo-sklad-01"
+        data-risk="15.0">
+
+      
+      <td data-name="sklad-01">
+        <a href="./device/demo-sklad-01.html" title="demo-sklad-01">SKLAD-01</a><span class="dev-sub">, Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21</span><span class="dev-sub"> · desktop Veriton X2665G</span>
+        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="69.8">
+          <span class="hidx warn">70</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-sklad-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.13" title="скопировать IP">192.168.77.13</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-sklad-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-sklad-01"
+                data-name="SKLAD-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="prod-02 demo-prod-02 — без объекта — ооо «ромашка» цех №1"
+        data-id="demo-prod-02"
+        data-risk="10.0">
+
+      
+      <td data-name="prod-02">
+        <a href="./device/demo-prod-02.html" title="demo-prod-02">PROD-02</a><span class="dev-sub">, Тарасов Виктор Ильич, Оператор станка, +7 900 000-06-62</span><span class="dev-sub"> · desktop Veriton M2640G</span>
+        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="96.4">
+          <span class="hidx warn">96</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-prod-02">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.19" title="скопировать IP">192.168.77.19</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-prod-02"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-prod-02"
+                data-name="PROD-02"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="staryi-pc demo-old-pc — без объекта — ооо «ромашка» логистика"
+        data-id="demo-old-pc"
+        data-risk="10.0">
+
+      
+      <td data-name="staryi-pc">
+        <a href="./device/demo-old-pc.html" title="demo-old-pc">STARYI-PC</a><span class="dev-sub">, Фомин Аркадий Степанович, Приёмщик товара, +7 900 000-02-22</span><span class="dev-sub"> · desktop HP Compaq Pro 6300</span>
+        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="80.5">
+          <span class="hidx warn">80</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-old-pc">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.20" title="скопировать IP">192.168.77.20</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-old-pc"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-old-pc"
+                data-name="STARYI-PC"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="buh-01 demo-buh-01 — без объекта — ооо «ромашка» финансовый отдел"
+        data-id="demo-buh-01"
+        data-risk="0">
+
+      
+      <td data-name="buh-01">
+        <a href="./device/demo-buh-01.html" title="demo-buh-01">BUH-01</a><span class="dev-sub">, Петрова Анна Сергеевна, Бухгалтер, +7 900 000-01-11</span><span class="dev-sub"> · desktop ThinkCentre M70q G</span>
+        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="100.0">
+          <span class="hidx good">100</span>
+        </td>
+        <td data-val="0">
+          <span class="hstate good">здоров</span>
+        </td>
+        <td class="hfactor">
+          <span class="muted">—</span>
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-buh-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.11" title="скопировать IP">192.168.77.11</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-buh-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-buh-01"
+                data-name="BUH-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="dir-nb demo-dir-nb — без объекта — ооо «ромашка» дирекция"
+        data-id="demo-dir-nb"
+        data-risk="0">
+
+      
+      <td data-name="dir-nb">
+        <a href="./device/demo-dir-nb.html" title="demo-dir-nb">DIR-NB</a><span class="dev-sub">, Соколов Игорь Валентинович, Директор, +7 900 000-03-31</span><span class="dev-sub"> · laptop EliteBook 840 G8</span>
+        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="96.4">
+          <span class="hidx warn">96</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-dir-nb">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.14" title="скопировать IP">192.168.77.14</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-dir-nb"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-dir-nb"
+                data-name="DIR-NB"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="sekr-01 demo-sekr-01 — без объекта — ооо «ромашка» дирекция"
+        data-id="demo-sekr-01"
+        data-risk="0">
+
+      
+      <td data-name="sekr-01">
+        <a href="./device/demo-sekr-01.html" title="demo-sekr-01">SEKR-01</a><span class="dev-sub">, Романова Дарья Олеговна, Секретарь, +7 900 000-03-32</span><span class="dev-sub"> · desktop ThinkCentre M720t</span>
+        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="96.4">
+          <span class="hidx warn">96</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-sekr-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.16" title="скопировать IP">192.168.77.16</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-sekr-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-sekr-01"
+                data-name="SEKR-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="it-01 demo-it-01 — без объекта — ооо «ромашка» ит-отдел"
+        data-id="demo-it-01"
+        data-risk="0">
+
+      
+      <td data-name="it-01">
+        <a href="./device/demo-it-01.html" title="demo-it-01">IT-01</a><span class="dev-sub">, Ерохин Максим Андреевич, Системный администратор, +7 900 000-05-51</span><span class="dev-sub"> · desktop ExpertCenter D700M</span>
+        <div class="dev-sub2">ООО «Ромашка» / ИТ-отдел<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="100.0">
+          <span class="hidx good">100</span>
+        </td>
+        <td data-val="0">
+          <span class="hstate good">здоров</span>
+        </td>
+        <td class="hfactor">
+          <span class="muted">—</span>
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-it-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.17" title="скопировать IP">192.168.77.17</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-it-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-it-01"
+                data-name="IT-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    <tr class="devrow stale-row"
+        data-flags="worsening stale"
+        data-text="prod-01 demo-prod-01 — без объекта — ооо «ромашка» цех №1"
+        data-id="demo-prod-01"
+        data-risk="0">
+
+      
+      <td data-name="prod-01">
+        <a href="./device/demo-prod-01.html" title="demo-prod-01">PROD-01</a><span class="dev-sub">, Дмитриев Сергей Львович, Мастер участка, +7 900 000-06-61</span><span class="dev-sub"> · desktop Aquilon O246</span>
+        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v0.3.0</span>
+        </div>
+      </td>
+
+      
+      <td>
+        <div class="alerts">
+          <span class="badge warn">OFFLINE</span>
+          
+          
+          
+          
+        </div>
+      </td>
+
+      
+      
+      
+      
+        
+        
+        
+        
+        
+        <td data-val="74.7">
+          <span class="hidx warn">75</span>
+        </td>
+        <td data-val="2">
+          <span class="hstate warn">компенсация</span>
+        </td>
+        <td class="hfactor">
+          
+            системная причина <span class="hfar" title="истощение компенсации — прогноз горизонта 90 дней">≤90дн</span>
+          
+        </td>
+      
+
+      
+      <td>
+        
+          <span class="chip na">—</span>
+        
+      </td>
+
+      
+      <td class="pprint" data-dev="demo-prod-01">
+        <span class="chip na">…</span>
+      </td>
+
+      
+      <td class="mono" title="2026-08-29T06:28:50.974197+00:00">
+        55м
+      </td>
+
+      
+      <td class="mono">
+        
+          <span class="ip-copy" data-ip="192.168.77.18" title="скопировать IP">192.168.77.18</span>
+        
+      </td>
+
+      
+      <td>
+        <button class="ackbtn "
+                data-id="demo-prod-01"
+                disabled title="демо: только чтение"
+                >
+          ·
+        </button>
+        <button class="delbtn"
+                data-id="demo-prod-01"
+                data-name="PROD-01"
+                disabled title="демо: только чтение"
+                >✕</button>
+      </td>
+    </tr>
+    
+    </tbody>
+  </table>
+</div>
+
+
+
+
+</div>
+
+<script>
+(function () {
+"use strict";
+var POLL_MS = 12000;
+var fleet = document.getElementById("fleet");
+var q = document.getElementById("q");
+var liveinfo = document.getElementById("liveinfo");
+var livedot  = document.getElementById("livedot");
+var activeFilter = null;
+var lastUpdate = Date.now();
+
+// ── Админ-запросы (удаление/очистка) ─────────────────────────────────────
+// Токен приезжает мета-тегом; без него сервер отвечает 401 при включённой
+// аутентификации ingest. Отказ показываем явно, а не выдаём за успех.
+function adminHeaders() {
+  var m = document.querySelector('meta[name=srp-token]');
+  return { "x-srp-token": (m && m.content) || "" };
+}
+function denied(status) {
+  window.alert("Отказано: сервер не принял запрос (код " + status + ").");
+}
+var prevRisk = {};  // device_id → risk_exposure snapshot
+
+// ── Persistence of previous risk levels (newly-escalated detection) ──────
+function loadPrevRisk() {
+  try { var s = localStorage.getItem("srp_risk"); if (s) prevRisk = JSON.parse(s); }
+  catch (e) { prevRisk = {}; }
+}
+function savePrevRisk(cur) {
+  try { localStorage.setItem("srp_risk", JSON.stringify(cur)); } catch (e) {}
+}
+function markEscalated() {
+  var cur = {};
+  fleet.querySelectorAll(".devrow[data-id]").forEach(function (row) {
+    var id   = row.getAttribute("data-id");
+    var risk = parseFloat(row.getAttribute("data-risk") || "0");
+    cur[id] = risk;
+    if (prevRisk[id] !== undefined && prevRisk[id] < 50 && risk >= 50) {
+      row.classList.add("escalated");
+    }
+  });
+  savePrevRisk(cur);
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────
+function applyFilter() {
+  var query = (q.value || "").trim().toLowerCase();
+  fleet.querySelectorAll(".site").forEach(function (site) {
+    var visible = 0;
+    site.querySelectorAll(".devrow").forEach(function (row) {
+      var text  = row.getAttribute("data-text") || "";
+      var flags = (row.getAttribute("data-flags") || "").split(" ");
+      var okText = !query || text.indexOf(query) !== -1;
+      var okFlag = !activeFilter || activeFilter === "all" || flags.indexOf(activeFilter) !== -1;
+      var show = okText && okFlag;
+      row.style.display = show ? "" : "none";
+      if (show) visible++;
+    });
+    site.style.display = visible ? "" : "none";
+  });
+  fleet.querySelectorAll(".kpi[data-filter]").forEach(function (k) {
+    k.classList.toggle("active", k.getAttribute("data-filter") === activeFilter);
+  });
+}
+
+// ── Column sort ───────────────────────────────────────────────────────────
+function makeSortable() {
+  fleet.querySelectorAll("th.sortable").forEach(function (th) {
+    th.addEventListener("click", function () {
+      var table = th.closest("table");
+      var col   = parseInt(th.getAttribute("data-col"), 10);
+      var goAsc = th.classList.contains("asc") ? false :
+                  th.classList.contains("desc") ? null : true;
+      table.querySelectorAll("th.sortable").forEach(function (t) {
+        t.classList.remove("asc", "desc");
+      });
+      if (goAsc === null) return;
+      th.classList.add(goAsc ? "asc" : "desc");
+      var tbody = table.querySelector("tbody");
+      var rows  = Array.from(tbody.querySelectorAll("tr.devrow"));
+      var isText = th.getAttribute("data-sort") === "text";
+      rows.sort(function (a, b) {
+        var tds = function (r) { return r.querySelectorAll("td"); };
+        if (isText) {
+          var an = tds(a)[col].getAttribute("data-name") || "";
+          var bn = tds(b)[col].getAttribute("data-name") || "";
+          return goAsc ? an.localeCompare(bn, "ru") : bn.localeCompare(an, "ru");
+        }
+        var av  = parseFloat(tds(a)[col].getAttribute("data-val") || "0") || 0;
+        var bv  = parseFloat(tds(b)[col].getAttribute("data-val") || "0") || 0;
+        return goAsc ? av - bv : bv - av;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+}
+
+// ── Print column (one fetch → all rows) ──────────────────────────────────
+function refreshPrint() {
+  fetch("/api/v1/fleet/print?today=1")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var map = {};
+      (p.devices || []).forEach(function (d) { map[d.device_id] = d.pages || 0; });
+      fleet.querySelectorAll("td.pprint[data-dev]").forEach(function (td) {
+        var dev = td.getAttribute("data-dev");
+        var pages = map[dev];
+        if (pages !== undefined) {
+          td.innerHTML = pages > 0
+            ? "<span class=\"chip na\">" + pages.toLocaleString("ru") + "</span>"
+            : "<span class=\"chip na\">0</span>";
+        } else {
+          td.innerHTML = "<span class=\"chip na\">—</span>";
+        }
+      });
+    })
+    .catch(function () {});
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────
+function refresh() {
+  fetch("/fleet/fragment").then(function (r) {
+    return r.ok ? r.text() : null;
+  }).then(function (html) {
+    if (html === null) return;
+    fleet.innerHTML = html;
+    lastUpdate = Date.now();
+    applyFilter();
+    markEscalated();
+    makeSortable();
+    refreshPrint();
+  }).catch(function () {});
+}
+
+// ── KPI click + ack (delegated) ───────────────────────────────────────────
+function copyIp(span) {
+  var ip = span.getAttribute("data-ip") || "";
+  if (!ip) return;
+  var done = function () {
+    span.classList.add("copied");
+    setTimeout(function () { span.classList.remove("copied"); }, 1100);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ip).then(done).catch(function () { legacyCopy(ip, done); });
+  } else {
+    legacyCopy(ip, done);
+  }
+}
+function legacyCopy(text, done) {
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); document.body.removeChild(ta); done();
+  } catch (err) {}
+}
+
+fleet.addEventListener("click", function (e) {
+  var ipc = e.target.closest(".ip-copy");
+  if (ipc) { copyIp(ipc); return; }
+  var kpi = e.target.closest(".kpi[data-filter]");
+  if (kpi) {
+    var f = kpi.getAttribute("data-filter");
+    activeFilter = (f === "all" || activeFilter === f) ? null : f;
+    applyFilter();
+    return;
+  }
+  var del = e.target.closest(".delbtn");
+  if (del) {
+    e.preventDefault();
+    var did   = del.getAttribute("data-id");
+    var dname = del.getAttribute("data-name") || did;
+    if (!window.confirm("Удалить «" + dname + "» и все его данные из базы?\nЭто действие необратимо.")) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/delete",
+          { method: "POST", headers: adminHeaders() })
+      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+      .catch(function () {});
+    return;
+  }
+  var ack = e.target.closest(".ackbtn");
+  if (ack) {
+    e.preventDefault();
+    var id   = ack.getAttribute("data-id");
+    var note = window.prompt("Квитирование — заметка (необязательно):", "");
+    if (note === null) return;
+    fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: note })
+    })
+      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+      .catch(function () {});
+  }
+});
+
+// ── Bulk purge of long-silent ghosts (toolbar; outside the polled #fleet) ──
+var purgeBtn = document.getElementById("purgebtn");
+if (purgeBtn) purgeBtn.addEventListener("click", function () {
+  var ans = window.prompt(
+    "Удалить машины, не выходившие на связь дольше N дней.\nВведите N (минимум 1):", "30");
+  if (ans === null) return;
+  var days = parseInt(ans, 10);
+  if (!(days >= 1)) { window.alert("Нужно целое число дней ≥ 1."); return; }
+  var body = function (dry) {
+    var h = adminHeaders();
+    h["Content-Type"] = "application/json";
+    return { method: "POST", headers: h, body: JSON.stringify({ days: days, dry_run: dry }) };
+  };
+  fetch("/api/v1/devices/purge", body(true))
+    .then(function (r) {
+      // Честный разбор: отказ (401/429) НЕ должен читаться как «нет машин».
+      if (!r.ok) { denied(r.status); return null; }
+      return r.json();
+    })
+    .then(function (p) {
+      if (!p) return;
+      var n = p.count || 0;
+      if (n === 0) { window.alert("Нет машин, молчащих дольше " + days + " дн."); return; }
+      if (!window.confirm("Будет удалено машин: " + n + " (молчат дольше " + days + " дн.).\nУдалить безвозвратно?")) return;
+      fetch("/api/v1/devices/purge", body(false))
+        .then(function (r) {
+          if (!r.ok) { denied(r.status); return null; }
+          return r.json();
+        })
+        .then(function (res) {
+          if (!res) return;
+          window.alert("Удалено машин: " + (res.count || 0) + ".");
+          refresh();
+        })
+        .catch(function () {});
+    })
+    .catch(function () {});
+});
+
+q.addEventListener("input", applyFilter);
+setInterval(refresh, POLL_MS);
+setInterval(function () {
+  var s = Math.round((Date.now() - lastUpdate) / 1000);
+  if (s > 20) livedot.classList.add("stale"); else livedot.classList.remove("stale");
+  liveinfo.textContent = "обновлено " + (s < 0 ? 0 : s) + "с назад";
+}, 1000);
+
+// Init
+loadPrevRisk();
+markEscalated();
+makeSortable();
+refreshPrint();
+})();
+</script>
+
+
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:30px;margin-bottom:6px">
+  <span class="section-label" style="margin:0">Печать сегодня</span>
+  <a href="./print.html" style="font:600 12px/1 var(--mono);color:var(--accent);text-decoration:none">→ полная аналитика</a>
+</div>
+<div class="cards" id="fleet-print-kpi" style="margin-bottom:14px">
+  <div class="stat"><div class="n muted" id="fpt-pages">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted" id="fpt-jobs">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted" id="fpt-printers">…</div><div class="l">Принтеров</div></div>
+</div>
+<div class="charts-2col" id="fleet-print-tables" style="display:none">
+  <div class="chart-panel">
+    <div class="ch-title">Топ устройств по страницам</div>
+    <table class="ptable" id="fpt-devices-table">
+      <thead><tr><th>Устройство</th><th>Страниц</th><th>Заданий</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="chart-panel">
+    <div class="ch-title">Топ принтеров по страницам</div>
+    <table class="ptable" id="fpt-printers-table">
+      <thead><tr><th>Принтер</th><th>Страниц</th><th>Устройств</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<style>
+.charts-2col { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+@media (max-width:860px) { .charts-2col { grid-template-columns:1fr; } }
+.chart-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 12px 14px;
+}
+.chart-panel .ch-title {
+  font: 600 11px/1 var(--mono); letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+}
+.ptable { width:100%; border-collapse:collapse; font-size:13px; }
+.ptable th { color:var(--muted); font:600 11px/1 var(--mono); letter-spacing:.8px; text-transform:uppercase; padding:4px 8px; border-bottom:1px solid var(--line-2); text-align:left; }
+.ptable td { padding:5px 8px; border-bottom:1px solid var(--line-2); color:var(--text); font-family:var(--mono); }
+.ptable tr:last-child td { border-bottom:none; }
+.ptable td:nth-child(2), .ptable td:nth-child(3) { text-align:right; color:var(--accent); }
+</style>
+<script>
+(function () {
+  fetch("/api/v1/fleet/print?today=1")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      document.getElementById("fpt-pages").textContent    = (p.total_pages    || 0).toLocaleString("ru");
+      document.getElementById("fpt-jobs").textContent     = (p.total_jobs     || 0).toLocaleString("ru");
+      document.getElementById("fpt-printers").textContent = (p.printer_count  || 0).toLocaleString("ru");
+      ["fpt-pages","fpt-jobs","fpt-printers"].forEach(function(id){ document.getElementById(id).classList.remove("muted"); });
+
+      var devRows  = (p.devices  || []).slice(0, 5);
+      var prnRows  = (p.printers || []).slice(0, 5);
+      if (devRows.length > 0 || prnRows.length > 0) {
+        document.getElementById("fleet-print-tables").style.display = "";
+      }
+
+      var dTbody = document.querySelector("#fpt-devices-table tbody");
+      devRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + srpEsc(r.hostname) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.jobs  || 0) + "</td>";
+        dTbody.appendChild(tr);
+      });
+
+      var pTbody = document.querySelector("#fpt-printers-table tbody");
+      prnRows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td title=\"" + srpEsc(r.name || "") + "\">" + srpEsc((r.name || "(unknown)").substring(0,28)) + "</td>"
+          + "<td>" + (r.pages || 0).toLocaleString("ru") + "</td>"
+          + "<td>" + (r.devices || 0) + "</td>";
+        pTbody.appendChild(tr);
+      });
+    })
+    .catch(function () {});
+})();
+</script>
+
+</main>
+<script>
+(function () {
+  var btn = document.getElementById("theme-toggle");
+  var labels = {'': 'Meta', 'meta': 'Vercel', 'vercel': 'Тёмный'};
+  var cur = document.documentElement.getAttribute('data-theme') || '';
+  btn.textContent = labels[cur] || 'Meta';
+})();
+</script>
+</body>
+</html>

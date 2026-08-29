@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Журнал изменений сети · SRP{% endblock %}
+{% block subtitle %}журнал изменений сети{% endblock %}
+
+{% block body %}
+<p class="small"><a href="/netmap">← карта сети</a></p>
+
+<h1 style="font:700 22px/1.2 var(--mono);margin:14px 0 6px">Журнал изменений сети</h1>
+<p class="small muted" style="margin-bottom:14px">Появления/пропажи узлов и связей, смены типа и IP — вся история, не только последние 7 дней панели карты.</p>
+
+<div class="small" style="margin-bottom:14px" title="Глубина журнала: сколько последних дней показывать">
+  Период:
+  {% for choice in day_choices %}
+  {% if choice == days %}<strong>{{ choice }} дн</strong>{% else %}<a href="/netmap/changes?days={{ choice }}">{{ choice }} дн</a>{% endif %}{% if not loop.last %} · {% endif %}
+  {% endfor %}
+</div>
+
+{% if changes %}
+<table>
+  <thead><tr><th>Время</th><th>Тип изменения</th><th>Что именно</th></tr></thead>
+  <tbody>
+  {% for c in changes %}
+  <tr>
+    <td class="small mono muted">{{ c.ts or "—" }}</td>
+    <td class="small">{{ net_change_ru(c.kind) }}</td>
+    <td class="small">
+      {% if c.device_nid %}
+        {{ names.get(c.device_nid) or c.device_nid }}{% if names.get(c.device_nid) %} <span class="muted mono">({{ c.device_nid }})</span>{% endif %}
+      {% elif c.detail.get('a') and c.detail.get('b') %}
+        {{ names.get(c.detail.get('a')) or c.detail.get('a') }} ↔ {{ names.get(c.detail.get('b')) or c.detail.get('b') }}
+      {% else %}<span class="muted">—</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted small">За выбранный период изменений топологии не зафиксировано.</p>
+{% endif %}
+{% endblock %}

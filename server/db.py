@@ -1,0 +1,6137 @@
+"""SQLite storage for SRP (MVP).
+
+One file DB, zero-config. Latest-wins for slow-changing identity (inventory,
+devices); append+cap longitudinal history for everything time-varying
+(heartbeats, events, historical, scores). History is the P0 foundation for
+trend detection ("is it getting worse?") and future label loops -- overwriting
+latest-wins would erase the very signal early-warning depends on (W0.1).
+
+All queries are parameterized. Table names in schema/prune/migration helpers are
+module constants, never user input.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import ipaddress
+import json
+import sqlite3
+import threading
+import time
+import zlib
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterator, Optional
+
+from shared.schema import parse_version
+
+from server.analytics import rulestats
+from server.analytics.oui import normalize_mac
+from server.netdisco.identity import device_nid as _ip_only_nid
+
+_db_path: Optional[Path] = None
+# Флаг «WAL уже выставлен для этого пути»: сбрасывается в init_db (тесты
+# переставляют путь БД между прогонами).
+_wal_set = False
+_retain_hb = 500
+_retain_ev = 1000
+_retain_hist = 500  # historical readings kept per device (окно читателей 200 строк, х2.5 запас)
+_retain_scores = 5000  # defensive row-cap; реальный срез -- prune_aged(scores_raw_days)
+# Спека 2026-08-27 (минимальный рост БД): полный вердикт scores.risk (~21 КБ)
+# нужен только карточке устройства -- она читает ПОСЛЕДНЮЮ строку; глубже
+# новейших N строк история ужимается до slim-вердикта (см. _slim_risk).
+_SCORES_KEEP_FULL = 10
+# printer_readings.detail читают только из последней строки на принтер
+# (db.py: get-* с ORDER BY id DESC LIMIT 1); глубже новейших N -- detail=NULL.
+# supplies_pct (B3, прогноз тонера) НЕ входит в это обнуление -- удерживается
+# как соседние скалярные колонки (total_pages и т.п.), на всю глубину _retain_prn:
+# это и есть история % расходника, по которой считается ETA.
+_PRINTER_DETAIL_KEEP = 5
+_retain_prn = 2000  # printer readings kept per printer (phase 4; downsample TBD)
+_retain_net = 2000  # netdisco device readings kept per device (phase 2)
+_retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
+# Журнал изменений топологии: единственная таблица netdisco без обрезки --
+# «мигающий» порт может писать в неё бесконечно.
+_retain_net_changes = 20000
+_retain_disk = 2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2), config-driven
+_CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
+
+
+class _TimedLock:
+    """threading.Lock со счётом ожидания для /metrics (§6 «ожидание write-лока»).
+
+    Счётчики мутируются только ПОД замком -- доп. синхронизация не нужна;
+    stats() терпит рваное чтение (это мониторинг, а не финансовый учёт).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.acquisitions = 0
+        self.wait_total_sec = 0.0
+        self.wait_max_sec = 0.0
+
+    def __enter__(self) -> "_TimedLock":
+        t0 = time.perf_counter()
+        self._lock.acquire()
+        waited = time.perf_counter() - t0
+        self.acquisitions += 1
+        self.wait_total_sec += waited
+        if waited > self.wait_max_sec:
+            self.wait_max_sec = waited
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+    def stats(self) -> dict[str, float]:
+        n = self.acquisitions
+        return {
+            "acquisitions": float(n),
+            "wait_avg_ms": (self.wait_total_sec / n * 1000.0) if n else 0.0,
+            "wait_max_ms": self.wait_max_sec * 1000.0,
+        }
+
+
+_lock = _TimedLock()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json_c(obj: Any) -> str:
+    """Компактная сериализация для ХРАНЕНИЯ (спека 2026-08-27): кириллица как
+    есть (дефолтный ensure_ascii раздувает каждую букву в 6 байт `\\u0441`) и
+    без пробелов после ``,``/``:``. ``json.loads`` не различает варианты --
+    потери нет по построению. Только для записи в БД; API-ответы сериализует
+    FastAPI."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _slim_risk(risk: dict[str, Any]) -> dict[str, Any]:
+    """Slim-вердикт для ИСТОРИИ scores: ровно те поля, что читает хоть один
+    потребитель старых строк -- ``health`` целиком (спарклайны dashboard/health_view,
+    delta-7d в pipeline, fleet-deltas ``json_extract('$.health.state')``),
+    ``score100.storage_risk.band``+``coords.flags`` и ``errchain.stage``
+    (rulestats). Всё остальное (classes/domains/day1_factors/...) читается
+    только из ПОСЛЕДНЕЙ строки устройства, которая всегда остаётся полной.
+    Маркер ``slim`` -- ключ идемпотентности для повторных проходов."""
+
+    def _d(obj: Any) -> dict[str, Any]:
+        # `x or {}` не спасает от present-but-wrong-type (список/строка) --
+        # valid-JSON-не-dict не должен ронять запись вердиктов (ревью 2026-08-27).
+        return obj if isinstance(obj, dict) else {}
+
+    score100 = _d(risk.get("score100"))
+    storage = _d(score100.get("storage_risk"))
+    return {
+        "slim": 1,
+        "health": risk.get("health"),
+        "score100": {
+            "storage_risk": {
+                "band": storage.get("band"),
+                "coords": {"flags": _d(storage.get("coords")).get("flags")},
+            }
+        },
+        "errchain": {"stage": _d(risk.get("errchain")).get("stage", 0)},
+    }
+
+
+def _slim_stale_scores(conn: sqlite3.Connection, device_id: str) -> int:
+    """Ужать до slim строку, пересёкшую границу ``_SCORES_KEEP_FULL``.
+
+    O(1) на вставку по существующему индексу device_id (ревью 2026-08-27:
+    прежний вариант сканировал json_extract'ом всю историю устройства под
+    глобальным write-локом). Каждая вставка сдвигает границу ровно на одну
+    строку, поэтому одной граничной строки достаточно в стационаре; массовый
+    бэклог до-slim'ливает офлайн ``server.shrink``. Никакого json_extract:
+    sqlite БРОСАЕТ OperationalError на невалидном JSON (не возвращает NULL),
+    и одна битая строка навсегда останавливала бы скоринг устройства."""
+    row = conn.execute(
+        "SELECT id, risk FROM scores WHERE device_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
+        (device_id, _SCORES_KEEP_FULL),
+    ).fetchone()
+    if row is None or row["risk"] is None:
+        return 0
+    try:
+        obj = json.loads(row["risk"])
+        if not isinstance(obj, dict) or obj.get("slim") == 1:
+            return 0
+        slim = _slim_risk(obj)
+    except (ValueError, TypeError, AttributeError):
+        return 0  # нечитаемый вердикт остаётся инертным, скоринг живёт
+    conn.execute("UPDATE scores SET risk=? WHERE id=?", (_json_c(slim), row["id"]))
+    return 1
+
+
+def _cutoff_iso(**delta: float) -> str:
+    """`_now_iso()`-format cutoff N units ago (P0-7).
+
+    Must stay format-identical to stored `received_at`/`last_seen` values.
+    SQLite compares TEXT lexicographically; a space-separated
+    `datetime('now', ...)` cutoff and a `T`-separated stored value sort
+    incorrectly against each other whenever they share the same calendar
+    date (`'T'` 0x54 > `' '` 0x20), silently breaking same-day
+    staleness/retention windows regardless of actual time-of-day.
+    """
+    return (datetime.now(timezone.utc) - timedelta(**delta)).isoformat()
+
+
+# --------------------------------------------------------------------------- #
+# Printer-IP resolution (printview): map a print queue NAME to its printer IP.
+# print_jobs stores only the spooler queue name; the agent separately ships
+# {name -> RFC1918 ip} spooler hints in HistoricalPayload.printer_ports. We
+# persist them in printer_ip_map so print views resolve (device_id, queue) -> ip
+# with a plain SQL JOIN. Defense-in-depth: re-validate RFC1918 server-side (the
+# agent already drops public IPs/names, but a direct token-authed poster is not
+# the agent). A queue with no TCP/IP port (WSD/USB/share) has no ip -> stays NULL.
+# --------------------------------------------------------------------------- #
+_PRINTER_PORTS_CAP = 256  # mirrors shared.schema PRINTER_PORTS_MAX
+# Кап на число КЛЮЧЕЙ (очередей) одного устройства, не на строки: имя очереди
+# приходит от агента, поэтому свежее имя в каждом конверте растило бы таблицу без
+# предела -- ровно та же дыра, что закрыта у disk_readings (_MAX_DISK_KEYS_PER_DEVICE).
+# Реальная машина оседает на единицах очередей, потолок щедрый и инертный.
+_MAX_PRINTER_KEYS_PER_DEVICE = 64
+_PRINTER_NAME_CAP = 256  # mirrors PrinterPortHint.name max_length
+_RFC1918_NETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_PIM_UPSERT = (
+    "INSERT INTO printer_ip_map (device_id, printer, ip, updated_at) VALUES (?,?,?,?) "
+    "ON CONFLICT(device_id, printer) DO UPDATE SET ip=excluded.ip, updated_at=excluded.updated_at"
+)
+# o5-B3: narrow per-device network projection (same read-side caps that used to
+# live in get_network_snapshots), written on every historical ingest so map
+# builds read this table instead of json.loads-ing the full historical payload.
+_NET_ADAPTERS_CAP = 64
+_NET_NEIGHBORS_CAP = 512
+_NET_QUALITY_CAP = 16
+_NET_ROUTES_CAP = 64  # T1: internal routing-table entries (mirrors NET_ROUTES_MAX)
+_NET_LAN_HINTS_CAP = 128  # P1: relayed mDNS/SSDP/WSD captures (mirrors NET_LAN_HINTS_MAX)
+_NET_SNAP_UPSERT = (
+    "INSERT INTO net_snapshots (device_id, ts, adapters, neighbors, quality, routes, lan_hints) "
+    "VALUES (?,?,?,?,?,?,?) "
+    "ON CONFLICT(device_id) DO UPDATE SET "
+    "ts=excluded.ts, adapters=excluded.adapters, neighbors=excluded.neighbors, "
+    "quality=excluded.quality, routes=excluded.routes, lan_hints=excluded.lan_hints"
+)
+
+
+def _is_rfc1918(host: Optional[str]) -> bool:
+    """True only for a literal RFC1918 IPv4 address; names/public/loopback/v6 -> False."""
+    if not host or not isinstance(host, str):
+        return False
+    try:
+        addr = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address):
+        mapped = addr.ipv4_mapped
+        if mapped is None:
+            return False
+        addr = mapped
+    return any(addr in net for net in _RFC1918_NETS)
+
+
+def _clean_port_hint(hint: Any) -> Optional[tuple[str, str]]:
+    """Validate one spooler hint -> (queue_name, rfc1918_ip), or None if unusable."""
+    if not isinstance(hint, dict):
+        return None
+    name = hint.get("name")
+    ip = hint.get("ip")
+    if not isinstance(name, str) or not name or not isinstance(ip, str):
+        return None
+    clean = ip.strip()
+    if not _is_rfc1918(clean):
+        return None
+    return name[:_PRINTER_NAME_CAP], clean
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS devices (
+  device_id       TEXT PRIMARY KEY,
+  hostname        TEXT,
+  manufacturer    TEXT,
+  model           TEXT,
+  chassis         TEXT,
+  agent_version   TEXT,
+  first_seen      TEXT,
+  last_seen       TEXT,
+  site_code       TEXT,
+  site_name       TEXT,
+  org_code        TEXT,
+  dept_code       TEXT,
+  comment         TEXT,
+  -- D6: правка оператора. NULL = полем управляет агент; непустое значение
+  -- побеждает агентский конверт навсегда, пока оператор не очистит поле.
+  comment_operator TEXT,
+  -- F2 (o5 блок F): персональные данные владельца ПК, тот же механизм D6.
+  owner_full_name TEXT,
+  owner_position  TEXT,
+  owner_phone     TEXT,
+  owner_full_name_operator TEXT,
+  owner_position_operator  TEXT,
+  owner_phone_operator     TEXT,
+  last_reported_ts TEXT,
+  clock_drift_sec REAL,
+  update_state    TEXT,
+  update_error    TEXT,
+  update_checked_at TEXT,
+  -- D3: версия, которую видит агент, но не применяет (dev-сборка/нет секрета).
+  -- Перезатирается каждым update_status; NULL, когда агент актуален.
+  update_available_version TEXT,
+  version_changed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS inventory (
+  device_id TEXT PRIMARY KEY,
+  ts        TEXT,
+  payload   TEXT
+);
+CREATE TABLE IF NOT EXISTS historical (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  payload      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
+);
+CREATE INDEX IF NOT EXISTS idx_hist_device ON historical(device_id, id);
+CREATE TABLE IF NOT EXISTS disk_readings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT NOT NULL,
+  disk_key     TEXT NOT NULL,
+  ts           TEXT,
+  received_at  TEXT NOT NULL,
+  media_type   TEXT,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diskread ON disk_readings(device_id, disk_key, id);
+CREATE TABLE IF NOT EXISTS heartbeats (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  payload      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
+);
+CREATE INDEX IF NOT EXISTS idx_hb_device ON heartbeats(device_id, id);
+CREATE TABLE IF NOT EXISTS events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    TEXT,
+  ts           TEXT,
+  log          TEXT,
+  source       TEXT,
+  event_id     INTEGER,
+  level        TEXT,
+  message      TEXT,
+  received_at  TEXT,
+  clock_drift_sec REAL
+);
+CREATE INDEX IF NOT EXISTS idx_ev_device ON events(device_id, id);
+CREATE TABLE IF NOT EXISTS scores (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id     TEXT,
+  ts            TEXT,
+  performance   REAL,
+  reliability   REAL,
+  wear          REAL,
+  risk_exposure REAL,
+  risk          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scores_device ON scores(device_id, id);
+CREATE TABLE IF NOT EXISTS source_last_good (
+  device_id TEXT,
+  source    TEXT,
+  reading   TEXT,
+  ts        TEXT,
+  PRIMARY KEY (device_id, source)
+);
+CREATE TABLE IF NOT EXISTS trust (
+  device_id TEXT PRIMARY KEY,
+  ts        TEXT,
+  result    TEXT
+);
+CREATE TABLE IF NOT EXISTS acknowledgements (
+  device_id TEXT PRIMARY KEY,
+  note      TEXT,
+  acked_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS device_source_trust (
+  device_id         TEXT,
+  source            TEXT,
+  state             TEXT,
+  weight            REAL,
+  collector_status  TEXT,
+  semantic_status   TEXT,
+  reason            TEXT,
+  ts                TEXT,
+  evidence_seen_at  TEXT,
+  PRIMARY KEY (device_id, source)
+);
+CREATE TABLE IF NOT EXISTS print_jobs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id   TEXT NOT NULL,
+  job_id      INTEGER,
+  ts          TEXT NOT NULL,
+  received_at TEXT,
+  printer     TEXT,
+  user_name   TEXT,
+  pages       INTEGER,
+  size_bytes  INTEGER,
+  source      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_print_device_ts ON print_jobs(device_id, ts);
+CREATE INDEX IF NOT EXISTS idx_print_ts ON print_jobs(ts);
+CREATE INDEX IF NOT EXISTS idx_print_printer ON print_jobs(printer);
+-- Дедуп повторно доставленного прохода. День в ключе обязателен: JobId спулера --
+-- счётчик в памяти службы печати, после её перезапуска он начинается заново, и
+-- глобально-уникальный (device_id, job_id) молча выбрасывал бы все задания
+-- следующего дня. Повтор одного прохода приходит в тот же день -> дедуп работает.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_print_dedup_day
+  ON print_jobs(device_id, job_id, substr(ts, 1, 10)) WHERE job_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS printer_ip_map (
+  device_id  TEXT NOT NULL,
+  printer    TEXT NOT NULL,
+  ip         TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (device_id, printer)
+);
+CREATE INDEX IF NOT EXISTS idx_pim_ip ON printer_ip_map(ip);
+CREATE TABLE IF NOT EXISTS net_snapshots (
+  device_id  TEXT PRIMARY KEY,
+  ts         TEXT,
+  adapters   TEXT,
+  neighbors  TEXT,
+  quality    TEXT,
+  routes     TEXT,
+  lan_hints  TEXT
+);
+CREATE TABLE IF NOT EXISTS printers (
+  printer_id   TEXT PRIMARY KEY,
+  ip           TEXT,
+  hostname     TEXT,
+  mac          TEXT,
+  vendor       TEXT,
+  model        TEXT,
+  serial       TEXT,
+  status       TEXT,
+  total_pages  INTEGER,
+  first_seen   TEXT,
+  last_seen    TEXT
+);
+CREATE TABLE IF NOT EXISTS printer_readings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  printer_id   TEXT,
+  ip           TEXT,
+  received_at  TEXT,
+  status       TEXT,
+  total_pages  INTEGER,
+  color_pages  INTEGER,
+  mono_pages   INTEGER,
+  duplex_pages INTEGER,
+  detail       TEXT,
+  supplies_pct TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_prn_readings ON printer_readings(printer_id, id);
+CREATE TABLE IF NOT EXISTS printer_ipp_jobs (
+  printer_id  TEXT NOT NULL,
+  job_id      INTEGER NOT NULL,
+  name        TEXT,
+  user_name   TEXT,
+  impressions INTEGER,
+  received_at TEXT,
+  PRIMARY KEY (printer_id, job_id)
+);
+CREATE TABLE IF NOT EXISTS net_devices (
+  device_nid    TEXT PRIMARY KEY,
+  ip            TEXT,
+  hostname      TEXT,
+  mac           TEXT,
+  vendor        TEXT,
+  dev_type      TEXT,
+  sys_object_id TEXT,
+  model         TEXT,
+  serial        TEXT,
+  site_code     TEXT,
+  status        TEXT,
+  subtype       TEXT,
+  first_seen    TEXT,
+  last_seen     TEXT,
+  device_id     TEXT,
+  printer_id    TEXT,
+  snmp_mute_until TEXT,
+  sys_descr     TEXT
+);
+CREATE TABLE IF NOT EXISTS net_interfaces (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_nid  TEXT,
+  if_index    INTEGER,
+  name        TEXT,
+  if_type     INTEGER,
+  speed_mbps  REAL,
+  oper_up     INTEGER,
+  phys_mac    TEXT,
+  if_alias    TEXT,
+  last_seen   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netif_device ON net_interfaces(device_nid);
+CREATE INDEX IF NOT EXISTS idx_netif_phys ON net_interfaces(phys_mac);
+CREATE TABLE IF NOT EXISTS net_links (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  a_nid       TEXT,
+  b_nid       TEXT,
+  a_if        INTEGER,
+  b_if        INTEGER,
+  link_kind   TEXT,
+  via_source  TEXT,
+  confidence  TEXT,
+  medium      TEXT,
+  vlan        INTEGER,
+  a_port      TEXT,
+  b_port      TEXT,
+  first_seen  TEXT,
+  last_seen   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_netlink_uniq ON net_links(a_nid, b_nid, link_kind);
+CREATE INDEX IF NOT EXISTS idx_netlink_a ON net_links(a_nid);
+CREATE INDEX IF NOT EXISTS idx_netlink_b ON net_links(b_nid);
+CREATE TABLE IF NOT EXISTS net_device_readings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_nid  TEXT,
+  received_at TEXT,
+  status      TEXT,
+  detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netread_device ON net_device_readings(device_nid, id);
+CREATE TABLE IF NOT EXISTS net_routes (
+  device_nid  TEXT,
+  cidr        TEXT,
+  next_hop    TEXT,
+  ifindex     INTEGER,
+  first_seen  TEXT,
+  last_seen   TEXT,
+  PRIMARY KEY (device_nid, cidr)
+);
+CREATE TABLE IF NOT EXISTS net_topology_snapshots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  received_at TEXT,
+  node_count  INTEGER,
+  link_count  INTEGER,
+  graph       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nettopo_ts ON net_topology_snapshots(id);
+CREATE TABLE IF NOT EXISTS net_changes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          TEXT,
+  device_nid  TEXT,
+  kind        TEXT,
+  detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_netchg_ts ON net_changes(id);
+CREATE TABLE IF NOT EXISTS heartbeat_rollup_daily (
+  device_id   TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  cpu_p50 REAL, cpu_p95 REAL, mem_avail_min REAL, pagefile_p95 REAL,
+  disk_read_ms_p95 REAL, disk_write_ms_p95 REAL, disk_queue_p95 REAL,
+  handles_max INTEGER, free_space_min REAL, uptime_max REAL,
+  -- B6 6.1: committed-memory p95 (%) + max NIC errors/day, same additive
+  -- idiom as the columns above -- a fresh DB gets them here, a pre-existing
+  -- one via _ADD_COLUMNS below.
+  committed_pct_p95 REAL, nic_errors_max INTEGER,
+  PRIMARY KEY (device_id, day)
+);
+CREATE TABLE IF NOT EXISTS event_rollup_daily (
+  device_id   TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  event_key   TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  PRIMARY KEY (device_id, day, event_key)
+);
+CREATE TABLE IF NOT EXISTS raw_archive (
+  device_id  TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  rows_n     INTEGER NOT NULL,
+  blob       BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, day, kind)
+);
+CREATE TABLE IF NOT EXISTS maintenance_log (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts     TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_stats (
+  rule_key   TEXT PRIMARY KEY,  -- closed list: pending_high|media_recurrence|early_chain
+  confirmed  INTEGER NOT NULL DEFAULT 0,
+  refuted    INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rule_episodes (
+  rule_key  TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  end_ts    TEXT NOT NULL,
+  outcome   TEXT NOT NULL,
+  PRIMARY KEY (rule_key, device_id, end_ts)
+);
+"""
+
+
+def init_db(
+    db_path: Path,
+    retain_heartbeats: int = 500,
+    retain_events: int = 1000,
+    retain_historical: int = 500,
+    retain_scores: int = 5000,
+    retain_printer_readings: int = 2000,
+    retain_net_readings: int = 2000,
+    retain_net_snapshots: int = 500,
+    retain_disk_readings: int = 2000,
+) -> None:
+    global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores, _retain_prn, _wal_set
+    global _retain_net, _retain_net_topo, _retain_disk
+    _db_path = Path(db_path)
+    _wal_set = False
+    _retain_hb = retain_heartbeats
+    _retain_ev = retain_events
+    _retain_hist = retain_historical
+    _retain_scores = retain_scores
+    _retain_prn = retain_printer_readings
+    _retain_net = retain_net_readings
+    _retain_net_topo = retain_net_snapshots
+    _retain_disk = retain_disk_readings
+    _db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect() as conn:
+        _migrate_legacy_latest_wins(conn)
+        conn.executescript(_SCHEMA)
+        _migrate_add_columns(conn)
+        # net_devices link columns exist now on both paths (fresh: schema above;
+        # legacy: ALTER in _migrate_add_columns) -- index device_id only after that.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_netdev_mac ON net_devices(mac)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_netdev_device_id ON net_devices(device_id)")
+        # Легаси-индекс без дня в ключе: ослабляется до idx_print_dedup_day выше
+        # (новый ключ строго шире, поэтому пересоздание не может конфликтовать).
+        conn.execute("DROP INDEX IF EXISTS idx_print_dedup")
+        # received_at мог появиться миграцией -> индекс только после _migrate_add_columns.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_print_received ON print_jobs(received_at)")
+        # Когортные запросы (модель/площадка) ведут по devices -- без этих индексов
+        # SQLite сканирует весь парк ради когорты из нескольких машин.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_model ON devices(model)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site_code)")
+        # Возрастная обрезка и архивация фильтруют по received_at. В _SCHEMA класть
+        # нельзя: на старой БД колонка появляется только миграцией выше.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hb_received ON heartbeats(received_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ev_received ON events(received_at)")
+        _backfill_printer_ip_map(conn)
+        _backfill_net_snapshots(conn)
+
+
+@contextlib.contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    if _db_path is None:
+        raise RuntimeError("db not initialized; call init_db() first")
+    global _wal_set
+    conn = sqlite3.connect(str(_db_path), timeout=10.0)
+    try:
+        conn.row_factory = sqlite3.Row
+        # WAL -- свойство ФАЙЛА, а не соединения: достаточно выставить один раз
+        # на путь БД, иначе это лишний служебный запрос на КАЖДЫЙ запрос сервера.
+        if not _wal_set:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            # Только фактическое переключение: иначе один неудачный PRAGMA
+            # (сетевой путь, чужой лок) навсегда оставил бы БД в rollback-журнале.
+            _wal_set = bool(mode) and str(mode[0]).lower() == "wal"
+        # 10000, а не 5000: меньшее значение ПОНИЖАЛО бы уже заданный
+        # sqlite3.connect(timeout=10.0) -- писатель сдавался вдвое раньше.
+        conn.execute("PRAGMA busy_timeout=10000")
+        with conn:  # commits on clean exit, rolls back on exception (unchanged)
+            yield conn
+    finally:
+        conn.close()  # P3-1: sqlite3.Connection.__exit__ never closed the fd
+
+
+# --------------------------------------------------------------------------- #
+# Schema migration (pre-W0.1 latest-wins -> append-only)
+# --------------------------------------------------------------------------- #
+_APPEND_ONLY_TABLES = ("historical", "scores")
+
+# Legacy historical/scores used PRIMARY KEY(device_id) (<=1 row per device), so
+# copying every row into the new id-keyed shape is lossless.
+_REBUILD: dict[str, str] = {
+    "historical": """
+        DROP TABLE IF EXISTS historical__new;
+        BEGIN;
+        CREATE TABLE historical__new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT, ts TEXT, payload TEXT);
+        INSERT INTO historical__new (device_id, ts, payload)
+          SELECT device_id, ts, payload FROM historical;
+        DROP TABLE historical;
+        ALTER TABLE historical__new RENAME TO historical;
+        COMMIT;
+    """,
+    "scores": """
+        DROP TABLE IF EXISTS scores__new;
+        BEGIN;
+        CREATE TABLE scores__new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT, ts TEXT,
+          performance REAL, reliability REAL, wear REAL, risk_exposure REAL, risk TEXT);
+        INSERT INTO scores__new
+          (device_id, ts, performance, reliability, wear, risk_exposure, risk)
+          SELECT device_id, ts, performance, reliability, wear, risk_exposure, risk FROM scores;
+        DROP TABLE scores;
+        ALTER TABLE scores__new RENAME TO scores;
+        COMMIT;
+    """,
+}
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
+def _has_id_column(conn: sqlite3.Connection, table: str) -> bool:
+    # PRAGMA cannot be parameterized; enforce the constant-table invariant so the
+    # f-string can never interpolate caller-controlled input.
+    if table not in _APPEND_ONLY_TABLES:
+        raise ValueError(f"unknown table for migration check: {table!r}")
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == "id" for r in rows)
+
+
+def _migrate_legacy_latest_wins(conn: sqlite3.Connection) -> None:
+    """Rebuild pre-W0.1 historical/scores (PRIMARY KEY device_id, no `id`) into
+    the append-only id-keyed shape, preserving rows. No-op on fresh DBs (tables
+    absent -> created by the schema) and on already-migrated DBs."""
+    for table in _APPEND_ONLY_TABLES:
+        if not _table_exists(conn, table):
+            continue
+        if _has_id_column(conn, table):
+            continue
+        conn.executescript(_REBUILD[table])
+
+
+# Additive W0.2 columns. CREATE TABLE IF NOT EXISTS will not add columns to an
+# existing table, so pre-W0.2 DBs need an explicit ALTER. Table + column names
+# below are fixed module literals, never user input.
+_ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "historical": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "heartbeats": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "events": (("received_at", "TEXT"), ("clock_drift_sec", "REAL")),
+    "devices": (
+        ("last_reported_ts", "TEXT"),
+        ("clock_drift_sec", "REAL"),
+        ("org_code", "TEXT"),
+        ("dept_code", "TEXT"),
+        ("comment", "TEXT"),
+        # Индексы D7 строятся по этим колонкам -- на очень старой БД их может не
+        # быть, и CREATE INDEX уронил бы старт сервера.
+        ("site_code", "TEXT"),
+        ("site_name", "TEXT"),
+        ("model", "TEXT"),
+        # D6: правка оператора живёт в своей колонке -- агентский конверт её не
+        # затирает; NULL здесь = управление у агента (фундамент блока F).
+        ("comment_operator", "TEXT"),
+        # F2 (o5 блок F): персональные данные владельца ПК, тот же механизм D6.
+        ("owner_full_name", "TEXT"),
+        ("owner_position", "TEXT"),
+        ("owner_phone", "TEXT"),
+        ("owner_full_name_operator", "TEXT"),
+        ("owner_position_operator", "TEXT"),
+        ("owner_phone_operator", "TEXT"),
+        ("department", "TEXT"),
+        # T1 agent auto-update: self-update status + last agent_version change.
+        ("update_state", "TEXT"),
+        ("update_error", "TEXT"),
+        ("update_checked_at", "TEXT"),
+        # D3: version the agent sees but does not apply.
+        ("update_available_version", "TEXT"),
+        ("version_changed_at", "TEXT"),
+    ),
+    "print_jobs": (("source", "TEXT"),),
+    # Phase 1 net-map unification: FK link to the agent (devices) / printer record.
+    # Ф7 Tier-1 SNMP deepening adds subtype (LLDP-MED class / service type). Both
+    # land on net_devices; the migration handles already-migrated columns (the
+    # `existing` set skips present columns), so this stays one idempotent entry.
+    "net_devices": (
+        ("device_id", "TEXT"),
+        ("printer_id", "TEXT"),
+        ("subtype", "TEXT"),
+        # o5-B6: SNMP negative-cache deadline -- a host that failed to answer is
+        # skipped by the classify cycle until this timestamp passes.
+        ("snmp_mute_until", "TEXT"),
+        # B5 5.2: sysDescr, the free-text SNMP banner (vendor/model/firmware
+        # string) -- the classify cycle writes it, the standalone net_device
+        # card shows it. Additive/nullable; no backfill (pre-migration rows
+        # simply have no description until their next probe).
+        ("sys_descr", "TEXT"),
+    ),
+    # Ф7: ifAlias (operator description) on interfaces.
+    "net_interfaces": (("if_alias", "TEXT"),),
+    # Ф7: per-edge medium (wired/wireless/l3) + vlan + directed port labels.
+    "net_links": (
+        ("medium", "TEXT"),
+        ("vlan", "INTEGER"),
+        ("a_port", "TEXT"),
+        ("b_port", "TEXT"),
+    ),
+    # P2-2: server-stamped "last real evidence" clock, distinct from the client-
+    # controlled ts -- the periodic staleness re-eval job (server/trust/staleness.py)
+    # computes age from this, never from ts (W0.2: never trust the client clock).
+    "device_source_trust": (("evidence_seen_at", "TEXT"),),
+    # B3: per-poll consumed-supply percent snapshot (compact [[name,percent],...]),
+    # kept for every row (unlike `detail`) -- the toner-ETA forecast's raw history.
+    "printer_readings": (("supplies_pct", "TEXT"),),
+    # B6 6.1: committed-memory p95 (%) + max NIC errors/day -- additive, no
+    # backfill (pre-migration days simply have no value for these two, same
+    # as every other rollup column before it).
+    "heartbeat_rollup_daily": (("committed_pct_p95", "REAL"), ("nic_errors_max", "INTEGER")),
+}
+_BACKFILL: dict[str, str] = {
+    # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
+    # (devices: from last_seen) so staleness/windows keep a usable value.
+    "historical": "UPDATE historical SET received_at = ts WHERE received_at IS NULL",
+    "heartbeats": "UPDATE heartbeats SET received_at = ts WHERE received_at IS NULL",
+    "events": "UPDATE events SET received_at = ts WHERE received_at IS NULL",
+    "devices": "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL",
+    # Pre-fallback rows could only have come from the Event 307 collector.
+    "print_jobs": "UPDATE print_jobs SET source = 'events' WHERE source IS NULL",
+    # Same best-effort idea as the W0.2 backfills above: a legacy row is re-stamped
+    # with the real server clock on its very next ingest anyway.
+    "device_source_trust": (
+        "UPDATE device_source_trust SET evidence_seen_at = ts WHERE evidence_seen_at IS NULL"
+    ),
+}
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Add W0.2 received_at / clock-drift columns to pre-W0.2 tables, then backfill.
+
+    No-op on fresh DBs (the schema already creates the columns) and idempotent on
+    already-migrated DBs (present columns are skipped; backfill is WHERE ... IS NULL).
+    """
+    for table, cols in _ADD_COLUMNS.items():
+        if not _table_exists(conn, table):
+            continue
+        # PRAGMA/ALTER cannot be parameterized; *table*/*col* are fixed literals above.
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}  # nosec B608
+        added = False
+        for col, col_type in cols:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")  # nosec B608
+                added = True
+        if added and table in _BACKFILL:
+            conn.execute(_BACKFILL[table])
+
+
+# --------------------------------------------------------------------------- #
+# Writes
+# --------------------------------------------------------------------------- #
+# F6: a buffered-replay envelope only explains a LOWER incoming version for a
+# short while after a real update -- an agent's disk buffer drains in
+# minutes, not hours. Once version_changed_at is this old (server clock),
+# treat a lower incoming version as real (reinstall/downgrade/forged-then-
+# corrected) rather than keep trusting a replay explanation indefinitely.
+_VERSION_STALENESS_ESCAPE = timedelta(hours=1)
+
+
+def _resolve_agent_version(
+    stored_version: Optional[str],
+    stored_changed_at: Optional[str],
+    incoming_version: str,
+    envelope_ts: Optional[str] = None,
+) -> str:
+    """U2-a: pick the agent_version to persist, so a buffered-replay envelope
+    doesn't look like a version rollback right after a real update.
+
+    client/transport.py sends the fresh envelope first, then flush_buffer
+    replays older disk-buffered envelopes -- still carrying the pre-update
+    agent_version. Rule: accept incoming when it parses as >= stored (or
+    stored is missing/unparseable); when it is LOWER, accept only if
+    envelope_ts is strictly newer than stored_changed_at (a genuine
+    downgrade/reinstall), otherwise it's a replay -- keep stored.
+
+    F6 (LOW-1): a second escape on top of the envelope_ts check -- if
+    stored_changed_at is older than ``_VERSION_STALENESS_ESCAPE`` (server
+    clock), accept the incoming version even when it is lower AND the
+    envelope ts is not newer. A buffered replay lands within minutes of the
+    real update; a lower version arriving an hour+ later is a genuine change,
+    not a stale envelope -- and the ts-based escape alone can't catch it when
+    the agent's own clock is unreliable.
+    """
+    incoming_parsed = parse_version(incoming_version)
+    if incoming_parsed is None:
+        # Malformed incoming version: nothing trustworthy to compare against.
+        # Keep the known-good stored value; fall back to the raw incoming
+        # string only for a brand-new device with nothing stored yet (matches
+        # today's unconditional-write behaviour for that case).
+        return stored_version if stored_version is not None else incoming_version
+    stored_parsed = parse_version(stored_version)
+    if stored_parsed is None or incoming_parsed >= stored_parsed:
+        return incoming_version
+    envelope_dt = _parse_iso(envelope_ts)
+    changed_dt = _parse_iso(stored_changed_at)
+    if envelope_dt is not None and changed_dt is not None and envelope_dt > changed_dt:
+        return incoming_version
+    if (
+        changed_dt is not None
+        and datetime.now(timezone.utc) - changed_dt > _VERSION_STALENESS_ESCAPE
+    ):
+        return incoming_version
+    return stored_version  # type: ignore[return-value]  # stored_parsed is not None here
+
+
+def upsert_device(
+    device_id: str,
+    ts: str,
+    agent_version: str,
+    hostname: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    model: Optional[str] = None,
+    chassis: Optional[str] = None,
+    site_code: Optional[str] = None,
+    site_name: Optional[str] = None,
+    org_code: Optional[str] = None,
+    dept_code: Optional[str] = None,
+    comment: Optional[str] = None,
+    owner_full_name: Optional[str] = None,
+    owner_position: Optional[str] = None,
+    owner_phone: Optional[str] = None,
+    received_at: Optional[str] = None,
+    last_reported_ts: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+    envelope_ts: Optional[str] = None,
+) -> None:
+    recv = received_at or _now_iso()  # server receipt = staleness anchor (W0.2)
+    reported = last_reported_ts or ts  # client self-reported time (compat)
+    with _lock, _connect() as conn:
+        prior = conn.execute(
+            "SELECT agent_version, version_changed_at FROM devices WHERE device_id = ?",
+            (device_id,),
+        ).fetchone()
+        resolved_version = _resolve_agent_version(
+            prior["agent_version"] if prior else None,
+            prior["version_changed_at"] if prior else None,
+            agent_version,
+            envelope_ts,
+        )
+        conn.execute(
+            """
+            INSERT INTO devices
+              (device_id, hostname, manufacturer, model, chassis,
+               agent_version, first_seen, last_seen,
+               site_code, site_name, org_code, dept_code, comment,
+               owner_full_name, owner_position, owner_phone,
+               last_reported_ts, clock_drift_sec, version_changed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET
+              hostname     = COALESCE(excluded.hostname, devices.hostname),
+              manufacturer = COALESCE(excluded.manufacturer, devices.manufacturer),
+              model        = COALESCE(excluded.model, devices.model),
+              chassis      = COALESCE(excluded.chassis, devices.chassis),
+              agent_version= excluded.agent_version,
+              last_seen    = excluded.last_seen,
+              site_code    = COALESCE(excluded.site_code, devices.site_code),
+              site_name    = COALESCE(excluded.site_name, devices.site_name),
+              org_code     = COALESCE(excluded.org_code, devices.org_code),
+              dept_code    = COALESCE(excluded.dept_code, devices.dept_code),
+              comment      = COALESCE(excluded.comment, devices.comment),
+              owner_full_name = COALESCE(excluded.owner_full_name, devices.owner_full_name),
+              owner_position  = COALESCE(excluded.owner_position, devices.owner_position),
+              owner_phone      = COALESCE(excluded.owner_phone, devices.owner_phone),
+              last_reported_ts = excluded.last_reported_ts,
+              clock_drift_sec  = excluded.clock_drift_sec,
+              version_changed_at = CASE
+                WHEN excluded.agent_version IS NOT devices.agent_version
+                THEN excluded.last_seen ELSE devices.version_changed_at END
+            """,
+            (
+                device_id,
+                hostname,
+                manufacturer,
+                model,
+                chassis,
+                resolved_version,
+                recv,
+                recv,
+                site_code,
+                site_name,
+                org_code,
+                dept_code,
+                comment,
+                owner_full_name,
+                owner_position,
+                owner_phone,
+                reported,
+                clock_drift_sec,
+                recv,
+            ),
+        )
+
+
+def touch_device(
+    device_id: str,
+    ts: str,
+    agent_version: str,
+    hostname: Optional[str] = None,
+    site_code: Optional[str] = None,
+    site_name: Optional[str] = None,
+    org_code: Optional[str] = None,
+    dept_code: Optional[str] = None,
+    comment: Optional[str] = None,
+    owner_full_name: Optional[str] = None,
+    owner_position: Optional[str] = None,
+    owner_phone: Optional[str] = None,
+    received_at: Optional[str] = None,
+    last_reported_ts: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+    envelope_ts: Optional[str] = None,
+) -> None:
+    """Ensure a device row exists and bump last_seen (for heartbeat/events).
+
+    last_seen is the server receipt time (W0.2): staleness must not depend on the
+    client clock. last_reported_ts retains the client's self-reported time.
+
+    T1 agent auto-update: ON CONFLICT now also refreshes agent_version (it used
+    to only get set on the initial INSERT, so a version bump was visible only on
+    the next rare inventory cadence) and maintains version_changed_at -- a
+    deliberate behavior change, covered by tests/test_update_status_ingest.py.
+
+    U2-a: the version actually written is resolved (not the raw incoming
+    string) via _resolve_agent_version, so a buffered-replay envelope (older
+    agent_version, sent by client/transport.py's flush_buffer AFTER the fresh
+    post-update envelope) cannot make the stored version look like it rolled
+    back. envelope_ts is the envelope's client-reported creation time, used
+    only to tell a genuine downgrade apart from a replay.
+    """
+    recv = received_at or _now_iso()
+    reported = last_reported_ts or ts
+    with _lock, _connect() as conn:
+        prior = conn.execute(
+            "SELECT agent_version, version_changed_at FROM devices WHERE device_id = ?",
+            (device_id,),
+        ).fetchone()
+        resolved_version = _resolve_agent_version(
+            prior["agent_version"] if prior else None,
+            prior["version_changed_at"] if prior else None,
+            agent_version,
+            envelope_ts,
+        )
+        conn.execute(
+            """
+            INSERT INTO devices
+              (device_id, hostname, agent_version, first_seen, last_seen,
+               site_code, site_name, org_code, dept_code, comment,
+               owner_full_name, owner_position, owner_phone,
+               last_reported_ts, clock_drift_sec, version_changed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET
+              last_seen = excluded.last_seen,
+              hostname   = COALESCE(excluded.hostname, devices.hostname),
+              agent_version = excluded.agent_version,
+              site_code  = COALESCE(excluded.site_code, devices.site_code),
+              site_name  = COALESCE(excluded.site_name, devices.site_name),
+              org_code   = COALESCE(excluded.org_code, devices.org_code),
+              dept_code  = COALESCE(excluded.dept_code, devices.dept_code),
+              comment    = COALESCE(excluded.comment, devices.comment),
+              owner_full_name = COALESCE(excluded.owner_full_name, devices.owner_full_name),
+              owner_position  = COALESCE(excluded.owner_position, devices.owner_position),
+              owner_phone      = COALESCE(excluded.owner_phone, devices.owner_phone),
+              last_reported_ts = excluded.last_reported_ts,
+              clock_drift_sec  = excluded.clock_drift_sec,
+              version_changed_at = CASE
+                WHEN excluded.agent_version IS NOT devices.agent_version
+                THEN excluded.last_seen ELSE devices.version_changed_at END
+            """,
+            (
+                device_id,
+                hostname,
+                resolved_version,
+                recv,
+                recv,
+                site_code,
+                site_name,
+                org_code,
+                dept_code,
+                comment,
+                owner_full_name,
+                owner_position,
+                owner_phone,
+                reported,
+                clock_drift_sec,
+                recv,
+            ),
+        )
+
+
+def store_inventory(device_id: str, ts: str, payload: dict[str, Any]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO inventory (device_id, ts, payload) VALUES (?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET ts=excluded.ts, payload=excluded.payload
+            """,
+            (device_id, ts, _json_c(payload)),
+        )
+
+
+def store_historical(
+    device_id: str,
+    ts: str,
+    payload: dict[str, Any],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO historical (device_id, ts, payload, received_at, clock_drift_sec) "
+            "VALUES (?,?,?,?,?)",
+            (device_id, ts, _json_c(payload), recv, clock_drift_sec),
+        )
+        conn.execute(
+            """DELETE FROM historical WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_hist),
+        )
+
+
+def _disk_key(disk: dict[str, Any], index: int) -> str:
+    """serial_hash when the agent reports one (ssd3 Ф1); otherwise a fallback
+    key from what an older/non-Ф1 agent DOES send. StorageReliability carries
+    no size field to key on (unlike the plan's original wording) -- disk
+    name + media type + position is the closest stable substitute.
+
+    Same-device collision risk: two disks of the same model at the same
+    position (e.g. a same-model swap) splice onto one series -- degrades to
+    a wrong trend inference, never a cross-device leak (worst_disk_key skips
+    fallback-keyed disks entirely, so this can't reach recurrence scoring).
+    """
+    serial_hash = disk.get("serial_hash")
+    if serial_hash:
+        return str(serial_hash)
+    raw = f"{disk.get('disk') or ''}|{disk.get('media_type') or ''}|{index}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+# security-review: _retain_disk only bounds ROWS within one (device, disk_key)
+# pair, never the number of DISTINCT disk_keys a device can accumulate. Since
+# disk_key falls back to a hash of agent-supplied fields when serial_hash is
+# absent, a poster holding the shared ingest token could otherwise cycle a
+# fresh key every envelope and grow the table without limit (each new key
+# never reaches the retention cap, so the prune-DELETE never touches it). A
+# real machine settles on a handful of physical disks after its first few
+# envelopes, so this ceiling is generous and inert for legitimate traffic.
+_MAX_DISK_KEYS_PER_DEVICE = 32
+
+
+def store_disk_readings(
+    device_id: str,
+    storage: list[dict[str, Any]],
+    ts: Optional[str],
+    received_at: str,
+) -> None:
+    """Append one SMART reading per physical disk, keyed by DISK -- not by
+    envelope -- so the series survives an OS reinstall (serial_hash is a
+    property of the drive, not the install).
+    """
+    if not device_id or not isinstance(storage, list) or not storage:
+        return
+    rows = []
+    keys_in_call: set[str] = set()
+    for i, disk in enumerate(storage):
+        if not isinstance(disk, dict):
+            continue
+        key = _disk_key(disk, i)
+        keys_in_call.add(key)
+        rows.append((device_id, key, ts, received_at, disk.get("media_type"), _json_c(disk)))
+    if not rows:
+        return
+    with _lock, _connect() as conn:
+        existing_keys = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT disk_key FROM disk_readings WHERE device_id=?", (device_id,)
+            )
+        }
+        new_keys = keys_in_call - existing_keys
+        allowed_new = max(0, _MAX_DISK_KEYS_PER_DEVICE - len(existing_keys))
+        blocked_keys = set(sorted(new_keys)[allowed_new:])
+        filtered_rows = [r for r in rows if r[1] not in blocked_keys]
+        if not filtered_rows:
+            return
+        conn.executemany(
+            "INSERT INTO disk_readings (device_id, disk_key, ts, received_at, media_type, payload) "
+            "VALUES (?,?,?,?,?,?)",
+            filtered_rows,
+        )
+        for key in {r[1] for r in filtered_rows}:
+            conn.execute(
+                """DELETE FROM disk_readings WHERE device_id=? AND disk_key=? AND id NOT IN (
+                     SELECT id FROM disk_readings
+                     WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?)""",
+                (device_id, key, device_id, key, _retain_disk),
+            )
+
+
+def get_disk_series(device_id: str, disk_key: str, limit: int = 200) -> list[dict[str, Any]]:
+    """One physical disk's SMART readings, newest-first (append-only time series)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, media_type, payload
+               FROM disk_readings WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?""",
+            (device_id, disk_key, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "media_type": r["media_type"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
+
+
+def list_device_disks(device_id: str) -> list[dict[str, Any]]:
+    """Every distinct physical disk this device has ever reported, with the
+    identity fields of its most recent reading."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT disk_key, media_type, payload, received_at
+               FROM disk_readings
+               WHERE device_id=? AND id IN (
+                 SELECT MAX(id) FROM disk_readings WHERE device_id=? GROUP BY disk_key)
+               ORDER BY received_at DESC""",
+            (device_id, device_id),
+        ).fetchall()
+    result = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"])
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        result.append(
+            {
+                "disk_key": r["disk_key"],
+                "media_type": r["media_type"],
+                "disk": payload.get("disk"),
+                "last_seen": r["received_at"],
+            }
+        )
+    return result
+
+
+def backfill_disk_readings() -> int:
+    """One-time seed: if disk_readings is empty, replay every device's stored
+    historical rows into it so recurrence evidence (Ф2) is available from day
+    one instead of waiting for new envelopes to accumulate. Idempotent -- a
+    non-empty table is left untouched (never re-runs, never duplicates).
+
+    Runs synchronously in the startup lifespan (blocks all request serving,
+    like the retention sweep beside it) -- O(total historical rows), fine at
+    current fleet size; chunk it if a large backlog ever makes it noticeable.
+    """
+    with _lock, _connect() as conn:
+        (count,) = conn.execute("SELECT COUNT(*) FROM disk_readings").fetchone()
+        if count:
+            return 0
+        device_ids = [r[0] for r in conn.execute("SELECT DISTINCT device_id FROM historical")]
+        inserted = 0
+        for device_id in device_ids:
+            hist_rows = conn.execute(
+                "SELECT ts, received_at, payload FROM historical WHERE device_id=? ORDER BY id ASC",
+                (device_id,),
+            ).fetchall()
+            for hr in hist_rows:
+                try:
+                    payload = json.loads(hr["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                storage = payload.get("storage") if isinstance(payload, dict) else None
+                if not isinstance(storage, list):
+                    continue
+                for i, disk in enumerate(storage):
+                    if not isinstance(disk, dict):
+                        continue
+                    key = _disk_key(disk, i)
+                    conn.execute(
+                        "INSERT INTO disk_readings "
+                        "(device_id, disk_key, ts, received_at, media_type, payload) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (
+                            device_id,
+                            key,
+                            hr["ts"],
+                            hr["received_at"],
+                            disk.get("media_type"),
+                            _json_c(disk),
+                        ),
+                    )
+                    inserted += 1
+        return inserted
+
+
+# --------------------------------------------------------------------------- #
+# Rollup + retention maintenance (ssd3 Ф5). day is always the UTC calendar
+# date of the server-stamped received_at (substr(...,1,10) of an isoformat()
+# timestamp) -- never the agent's own clock. The existing per-device row caps
+# (_retain_hb etc.) stay as-is; prune_aged adds a second, age-based bound on
+# top of them (§2: "caps remain the safety net").
+# --------------------------------------------------------------------------- #
+def _pctl(values: list[float], p_num: int) -> Optional[float]:
+    """Nearest-rank percentile (p_num/100, e.g. 95 for p95).
+
+    Integer ceiling division keeps the rank exact instead of drifting on
+    float math.ceil rounding at boundary sample sizes.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    idx = -(-(p_num * n) // 100) - 1
+    return ordered[max(0, min(n - 1, idx))]
+
+
+def _finite_float(value: object) -> Optional[float]:
+    """Safe numeric coercion for agent-supplied telemetry values.
+
+    security-review (Ф5): HeartbeatPayload's numeric fields have no upper
+    bound in the wire contract, so a crafted envelope can carry a Python int
+    too large for float() (raises OverflowError) or a float that survives
+    pydantic (allow_inf_nan defaults True) as inf/nan -- either would abort
+    the whole day's rollup_heartbeats_daily call (all devices batched in one
+    call) and, for inf/nan, serialize to invalid JSON via device.html's
+    |tojson chart island. Reject both here, once, at the source.
+    """
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        f = float(value)
+    except OverflowError:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+_SQLITE_SAFE_INT_CAP = 2**31 - 1  # generous vs. any real handle/error count
+
+
+def _int_or_none(value: Optional[float], cap: int = _SQLITE_SAFE_INT_CAP) -> Optional[int]:
+    """int() coercion clipped to +/-cap; None passes through unchanged.
+
+    security-review (B6): HeartbeatPayload's handle_count_total/nic_errors have
+    no upper bound in the wire contract. _finite_float already drops inf/nan
+    and values too large for float() itself, but a value that stays a FINITE
+    float (e.g. 1e20) still overflows sqlite3's INTEGER bind once cast via a
+    bare int() -- raising OverflowError and aborting rollup_heartbeats_daily's
+    single all-devices transaction for the whole day. Clip instead of drop so
+    one absurd reading still folds into a (saturated) max, not a lost day.
+    """
+    if value is None:
+        return None
+    return max(-cap, min(cap, int(value)))
+
+
+def _rollup_disk_ms(
+    payloads: list[dict[str, Any]], p95_key: str, legacy_sec_key: str
+) -> list[float]:
+    """Ф4 per-heartbeat p95 (already ms) when present, else the legacy
+    per-op latency field scaled to ms -- an old agent without Ф4 fields
+    still contributes to the daily rollup (K2/compat), just less precisely.
+    """
+    out: list[float] = []
+    for p in payloads:
+        f = _finite_float(p.get(p95_key))
+        if f is None:
+            sec = _finite_float(p.get(legacy_sec_key))
+            f = _finite_float(sec * 1000) if sec is not None else None
+        if f is not None:
+            out.append(f)
+    return out
+
+
+def _rollup_heartbeat_agg(payloads: list[dict[str, Any]]) -> tuple[Any, ...]:
+    def nums(key: str) -> list[float]:
+        return [f for p in payloads if (f := _finite_float(p.get(key))) is not None]
+
+    cpu = nums("cpu_pct")
+    mem = nums("mem_avail_mb")
+    free = nums("free_space_pct")
+    handles = nums("handle_count_total")
+    uptime = nums("uptime_hours")
+    nic_errors = nums("nic_errors")
+    return (
+        _pctl(cpu, 50),
+        _pctl(cpu, 95),
+        min(mem, default=None),
+        _pctl(nums("pagefile_pct"), 95),
+        _pctl(_rollup_disk_ms(payloads, "disk_read_ms_p95", "disk_read_sec"), 95),
+        _pctl(_rollup_disk_ms(payloads, "disk_write_ms_p95", "disk_write_sec"), 95),
+        _pctl(nums("disk_queue"), 95),
+        _int_or_none(max(handles, default=None)),
+        min(free, default=None),
+        max(uptime, default=None),
+        # B6 6.1: p95/max, same shape as the neighbouring fields above; a
+        # heartbeat that never carried the field contributes nothing (nums()
+        # already drops it) -- an all-missing day folds to None, not 0.
+        _pctl(nums("committed_pct"), 95),
+        _int_or_none(max(nic_errors, default=None)),
+    )
+
+
+def rollup_heartbeats_daily(day: str) -> int:
+    """Idempotent per-device percentile fold of one UTC day's heartbeats into
+    heartbeat_rollup_daily. Returns the number of devices rolled up."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, payload FROM heartbeats WHERE substr(received_at,1,10)=?",
+            (day,),
+        ).fetchall()
+    by_device: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_device.setdefault(r["device_id"], []).append(json.loads(r["payload"]))
+    if not by_device:
+        return 0
+    with _lock, _connect() as conn:
+        for device_id, payloads in by_device.items():
+            agg = _rollup_heartbeat_agg(payloads)
+            # Обновляем только если новый фолд видел НЕ МЕНЬШЕ строк: после обрезки
+            # сырья пересчёт того же дня иначе занижал бы уже верную свёртку.
+            conn.execute(
+                """INSERT INTO heartbeat_rollup_daily
+                     (device_id, day, n, cpu_p50, cpu_p95, mem_avail_min, pagefile_p95,
+                      disk_read_ms_p95, disk_write_ms_p95, disk_queue_p95,
+                      handles_max, free_space_min, uptime_max,
+                      committed_pct_p95, nic_errors_max)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(device_id, day) DO UPDATE SET
+                     n = excluded.n, cpu_p50 = excluded.cpu_p50, cpu_p95 = excluded.cpu_p95,
+                     mem_avail_min = excluded.mem_avail_min,
+                     pagefile_p95 = excluded.pagefile_p95,
+                     disk_read_ms_p95 = excluded.disk_read_ms_p95,
+                     disk_write_ms_p95 = excluded.disk_write_ms_p95,
+                     disk_queue_p95 = excluded.disk_queue_p95,
+                     handles_max = excluded.handles_max,
+                     free_space_min = excluded.free_space_min,
+                     uptime_max = excluded.uptime_max,
+                     committed_pct_p95 = excluded.committed_pct_p95,
+                     nic_errors_max = excluded.nic_errors_max
+                   WHERE excluded.n >= heartbeat_rollup_daily.n""",
+                (device_id, day, len(payloads), *agg),
+            )
+    return len(by_device)
+
+
+# security-review (Ф5): event_rollup_daily's PK includes event_key ("source:id"),
+# and EventItem.source has no max_length in the wire contract -- an ingest-token
+# holder could otherwise grow this table's cardinality without bound (cycling
+# fake source/event_id values) the same way disk_readings could pre-Ф2-review
+# (see _MAX_DISK_KEYS_PER_DEVICE). Clamp the source length and keep only the
+# highest-count keys per (device, day); rare/noise keys are exactly what should
+# lose the seat under pressure, so this doubles as a sane eviction policy.
+_EVENT_SOURCE_MAX_LEN = 64
+_MAX_EVENT_KEYS_PER_DEVICE_DAY = 64
+
+
+def _cap_event_keys_per_device(
+    counts: dict[tuple[str, str], int],
+) -> dict[tuple[str, str], int]:
+    by_device: dict[str, list[tuple[str, int]]] = {}
+    for (device_id, event_key), n in counts.items():
+        by_device.setdefault(device_id, []).append((event_key, n))
+    kept: dict[tuple[str, str], int] = {}
+    for device_id, pairs in by_device.items():
+        pairs.sort(key=lambda p: p[1], reverse=True)
+        for event_key, n in pairs[:_MAX_EVENT_KEYS_PER_DEVICE_DAY]:
+            kept[(device_id, event_key)] = n
+    return kept
+
+
+def _rollup_events_daily_conn(
+    conn: sqlite3.Connection, day: str, device_id: Optional[str] = None
+) -> int:
+    """Тело свёртки на ГОТОВОМ соединении вызывающего.
+
+    Нужно, чтобы store_events мог свернуть шторм в той же транзакции ДО обрезки
+    по _retain_ev: иначе всё сверх потолка исчезает раньше ночного прохода.
+
+    *device_id* обязателен на ingest-пути: substr() по колонке отключает индекс,
+    и без сужения это полный скан событий ВСЕГО парка под глобальным локом на
+    каждом конверте. Ночной проход зовёт без него -- там нужен весь день.
+    """
+    if device_id is None:
+        rows = conn.execute(
+            "SELECT device_id, source, event_id FROM events WHERE substr(received_at,1,10)=?",
+            (day,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT device_id, source, event_id FROM events"
+            " WHERE device_id=? AND substr(received_at,1,10)=?",
+            (device_id, day),
+        ).fetchall()
+    counts: dict[tuple[str, str], int] = {}
+    for r in rows:
+        if r["event_id"] is None:
+            continue
+        source = (r["source"] or "")[:_EVENT_SOURCE_MAX_LEN]
+        key = (r["device_id"], f"{source}:{r['event_id']}")
+        counts[key] = counts.get(key, 0) + 1
+    counts = _cap_event_keys_per_device(counts)
+    if not counts:
+        return 0
+    # Монотонно: свёртка считает по ЖИВЫМ сырым строкам, а их становится меньше
+    # после обрезки -- REPLACE писал бы заниженное число поверх правильного и
+    # стирал уже свёрнутый шторм (а при догоне дней портил бы историю задним числом).
+    conn.executemany(
+        "INSERT INTO event_rollup_daily (device_id, day, event_key, n) VALUES (?,?,?,?)"
+        " ON CONFLICT(device_id, day, event_key) DO UPDATE SET n = MAX(n, excluded.n)",
+        [(device_id, day, event_key, n) for (device_id, event_key), n in counts.items()],
+    )
+    return len(counts)
+
+
+def rollup_events_daily(day: str) -> int:
+    """Idempotent per-device event-count fold of one UTC day, keyed by
+    'source:event_id'. Returns the number of (device, event_key) rows written."""
+    with _lock, _connect() as conn:
+        return _rollup_events_daily_conn(conn, day)
+
+
+def get_heartbeat_rollups(device_id: str, days: int) -> list[dict[str, Any]]:
+    """Daily heartbeat rollups for a device, newest-first, last *days* days."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT day, n, cpu_p50, cpu_p95, mem_avail_min, pagefile_p95,
+                      disk_read_ms_p95, disk_write_ms_p95, disk_queue_p95,
+                      handles_max, free_space_min, uptime_max,
+                      committed_pct_p95, nic_errors_max
+               FROM heartbeat_rollup_daily
+               WHERE device_id=? AND day >= date('now', ?)
+               ORDER BY day DESC""",
+            (device_id, f"-{days} days"),
+        ).fetchall()
+    return [
+        {
+            "day": r["day"],
+            "n": r["n"],
+            "cpu_p50": r["cpu_p50"],
+            "cpu_p95": r["cpu_p95"],
+            "mem_avail_min": r["mem_avail_min"],
+            "pagefile_p95": r["pagefile_p95"],
+            "disk_read_ms_p95": r["disk_read_ms_p95"],
+            "disk_write_ms_p95": r["disk_write_ms_p95"],
+            "disk_queue_p95": r["disk_queue_p95"],
+            "handles_max": r["handles_max"],
+            "free_space_min": r["free_space_min"],
+            "uptime_max": r["uptime_max"],
+            # B6 6.1.
+            "committed_pct_p95": r["committed_pct_p95"],
+            "nic_errors_max": r["nic_errors_max"],
+        }
+        for r in rows
+    ]
+
+
+def get_event_rollups(device_id: str, days: int) -> list[dict[str, Any]]:
+    """Daily event-count rollups for a device, newest-first, last *days* days."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT day, event_key, n FROM event_rollup_daily
+               WHERE device_id=? AND day >= date('now', ?)
+               ORDER BY day DESC""",
+            (device_id, f"-{days} days"),
+        ).fetchall()
+    return [{"day": r["day"], "event_key": r["event_key"], "n": r["n"]} for r in rows]
+
+
+# Верхняя граница догона: длительный простой не должен превращать один проход
+# обслуживания в пересчёт всей истории.
+_ROLLUP_CATCHUP_MAX_DAYS = 35
+
+
+def _rollup_target_days() -> list[str]:
+    """Empty heartbeat_rollup_daily -> full backfill from raw (every distinct
+    UTC day present in heartbeats/events); otherwise догон от последнего
+    свёрнутого дня с потолком _ROLLUP_CATCHUP_MAX_DAYS (o5-D9). Повторный фолд
+    дня идемпотентен и монотонен: запись идёт через ON CONFLICT с MAX(n) /
+    условием excluded.n >= n, поэтому пересчёт по уже обрезанному сырью не
+    занижает готовую свёртку. Both rollup tables are created in the same schema
+    deploy, so gating the backfill decision on one of them is enough.
+    """
+    today = datetime.now(timezone.utc).date()
+    with _connect() as conn:
+        seeded = conn.execute("SELECT 1 FROM heartbeat_rollup_daily LIMIT 1").fetchone()
+        if seeded is not None:
+            # Догон от последнего свёрнутого дня: сервер, простоявший выходные,
+            # иначе терял свёртку за пропущенные дни навсегда (сырьё уже обрезано).
+            last = conn.execute("SELECT MAX(day) FROM heartbeat_rollup_daily").fetchone()[0]
+            start = date.fromisoformat(last) if last else today - timedelta(days=1)
+            start = max(start, today - timedelta(days=_ROLLUP_CATCHUP_MAX_DAYS))
+            # День из будущего (съехавшие часы, восстановленный снапшот) иначе даёт
+            # ПУСТОЙ список -- свёртка молча останавливалась бы навсегда.
+            start = min(start, today - timedelta(days=1))
+            return [
+                (start + timedelta(days=i)).isoformat() for i in range((today - start).days + 1)
+            ]
+        hb_days = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT substr(received_at,1,10) FROM heartbeats")
+            if r[0] is not None
+        }
+        ev_days = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT substr(received_at,1,10) FROM events")
+            if r[0] is not None
+        }
+    return sorted(hb_days | ev_days)
+
+
+def run_daily_rollup() -> dict[str, int]:
+    """Fold heartbeats/events into their daily rollup tables (ssd3 Ф5, T5.3)."""
+    days = _rollup_target_days()
+    hb_n = ev_n = 0
+    for day in days:
+        hb_n += rollup_heartbeats_daily(day)
+        ev_n += rollup_events_daily(day)
+    if hb_n or ev_n:
+        _log_maintenance("rollup", f"days={len(days)} heartbeat_rows={hb_n} event_rows={ev_n}")
+    return {"days": len(days), "heartbeat_rows": hb_n, "event_rows": ev_n}
+
+
+_ARCHIVE_TABLES = ("heartbeats", "events")  # закрытый литерал -- не внешний ввод
+
+
+def _archive_aged_rows(conn: sqlite3.Connection, table: str, cutoff: str) -> int:
+    """D9: zlib-архив строк *table* старше *cutoff* -- ДО их DELETE в prune_aged.
+
+    *cutoff* -- уже вычисленная строка (та же, что уйдёт в парный DELETE), а
+    не число дней: `datetime('now', ...)` в SQLite пересчитывается заново при
+    каждом вызове, и раздельные SELECT/DELETE с одинаковым `-N days` могут
+    разъехаться на пограничных строках (cutoff-drift race) -- один Python-cutoff
+    на оба стейтмента закрывает это.
+
+    Группировка по (device_id, день UTC); день, состарившийся частично
+    (граница -- timestamp), дописывается: существующий blob распаковывается,
+    строки добавляются, blob пересжимается -- никакой конкатенации zlib-потоков.
+    Той же транзакцией prune удаляет исходники, поэтому повторный прогон не
+    видит уже заархивированных строк -- дублей нет by construction.
+    """
+    if table not in _ARCHIVE_TABLES:
+        raise ValueError(f"not archivable: {table!r}")
+    # Сначала перечень групп, потом чтение ПО ГРУППЕ: полный SELECT поднимал в
+    # память все устаревшие сырые строки парка сразу.
+    groups = conn.execute(
+        # B608: table names are fixed module literals, never user input.
+        f"SELECT DISTINCT COALESCE(device_id,'') AS device_id,"  # nosec B608
+        f" substr(received_at,1,10) AS day"
+        f" FROM {table} WHERE received_at < ?",
+        (cutoff,),
+    ).fetchall()
+    if not groups:
+        return 0
+    now = _now_iso()
+    total = 0
+    for g in groups:
+        device_id, day = str(g["device_id"]), str(g["day"])
+        items = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM {table}"  # nosec B608
+                f" WHERE COALESCE(device_id,'')=? AND substr(received_at,1,10)=?"
+                f" AND received_at < ?",
+                (device_id, day, cutoff),
+            )
+        ]
+        if not items:
+            continue
+        total += len(items)
+        lines = [
+            json.dumps(i, ensure_ascii=False, sort_keys=True, separators=(",", ":")) for i in items
+        ]
+        existing = conn.execute(
+            "SELECT blob FROM raw_archive WHERE device_id=? AND day=? AND kind=?",
+            (device_id, day, table),
+        ).fetchone()
+        if existing is not None:
+            # split("\n"), НЕ splitlines(): с ensure_ascii=False сырые U+2028/29/85
+            # в payload легальны, а splitlines режет и по ним (ревью 2026-08-27).
+            lines = zlib.decompress(existing["blob"]).decode("utf-8").split("\n") + lines
+        conn.execute(
+            "INSERT OR REPLACE INTO raw_archive "
+            "(device_id, day, kind, rows_n, blob, created_at) VALUES (?,?,?,?,?,?)",
+            (
+                device_id,
+                day,
+                table,
+                len(lines),
+                zlib.compress("\n".join(lines).encode("utf-8")),
+                now,
+            ),
+        )
+    return total
+
+
+def get_raw_archive(device_id: str, kind: str, days: int) -> list[dict[str, Any]]:
+    """Распакованные сырые строки из архива (репроцессинг/feature-mining, D9)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT blob FROM raw_archive
+               WHERE device_id=? AND kind=? AND day >= date('now', ?)
+               ORDER BY day""",
+            (device_id, kind, f"-{days} days"),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        for line in zlib.decompress(r["blob"]).decode("utf-8").split("\n"):
+            out.append(json.loads(line))
+    return out
+
+
+def prune_aged(
+    *,
+    heartbeat_raw_days: int,
+    events_raw_days: int,
+    rollup_days: int,
+    print_jobs_raw_days: int = 0,
+    scores_raw_days: int = 0,
+    historical_raw_days: int = 0,
+) -> dict[str, int]:
+    """Age-based prune layered on top of the existing per-device row caps
+    (ssd3 Ф5, T5.3): the caps stay as a safety net for a noisy device, but a
+    quiet one may never fill its cap, so raw rows need a time bound too. Any
+    *_days <= 0 disables that leg (0 = off, matches device_retention_days).
+    """
+    deleted: dict[str, int] = {}
+    with _lock, _connect() as conn:
+        if heartbeat_raw_days > 0:
+            hb_cutoff = _cutoff_iso(days=heartbeat_raw_days)
+            deleted["raw_archived_heartbeats"] = _archive_aged_rows(conn, "heartbeats", hb_cutoff)
+            cur = conn.execute(
+                "DELETE FROM heartbeats WHERE received_at < ?",
+                (hb_cutoff,),
+            )
+            deleted["heartbeats"] = cur.rowcount
+        if events_raw_days > 0:
+            ev_cutoff = _cutoff_iso(days=events_raw_days)
+            deleted["raw_archived_events"] = _archive_aged_rows(conn, "events", ev_cutoff)
+            cur = conn.execute(
+                "DELETE FROM events WHERE received_at < ?",
+                (ev_cutoff,),
+            )
+            deleted["events"] = cur.rowcount
+        if print_jobs_raw_days > 0:
+            # Единственная таблица телеметрии без возрастной обрезки: у активного
+            # парка она растёт вечно. Архива нет -- задания печати не сворачиваются.
+            cur = conn.execute(
+                "DELETE FROM print_jobs WHERE received_at < ?",
+                (_cutoff_iso(days=print_jobs_raw_days),),
+            )
+            deleted["print_jobs"] = cur.rowcount
+        if rollup_days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=rollup_days)).date().isoformat()
+            cur = conn.execute("DELETE FROM heartbeat_rollup_daily WHERE day < ?", (cutoff,))
+            deleted["heartbeat_rollup_daily"] = cur.rowcount
+            cur = conn.execute("DELETE FROM event_rollup_daily WHERE day < ?", (cutoff,))
+            deleted["event_rollup_daily"] = cur.rowcount
+            cur = conn.execute("DELETE FROM raw_archive WHERE day < ?", (cutoff,))
+            deleted["raw_archive"] = cur.rowcount
+        if scores_raw_days > 0:
+            # Спека 2026-08-27 (Ш3): возрастной срез истории вердиктов; row-cap
+            # _retain_scores остаётся защитным. Последняя строка каждого
+            # устройства неприкосновенна независимо от возраста -- карточка
+            # живого устройства со сломанным rescore не должна опустеть.
+            cur = conn.execute(
+                "DELETE FROM scores WHERE ts < ? AND id NOT IN ("
+                " SELECT MAX(id) FROM scores GROUP BY device_id)",
+                (_cutoff_iso(days=scores_raw_days),),
+            )
+            deleted["scores"] = cur.rowcount
+        if historical_raw_days > 0:
+            # Та же схема, что scores выше: row-cap _retain_hist остаётся
+            # защитным, возраст режет хвост, последняя строка устройства
+            # (карточка/_latest_historical) неприкосновенна.
+            cur = conn.execute(
+                "DELETE FROM historical WHERE received_at < ? AND id NOT IN ("
+                " SELECT MAX(id) FROM historical GROUP BY device_id)",
+                (_cutoff_iso(days=historical_raw_days),),
+            )
+            deleted["historical"] = cur.rowcount
+    if any(deleted.values()):
+        _log_maintenance("prune_aged", json.dumps(deleted))
+    return deleted
+
+
+_VACUUM_FREELIST_RATIO = 0.2  # VACUUM only once the free-page share exceeds this
+_VACUUM_MIN_INTERVAL_DAYS = 7  # ...and only this long after the previous VACUUM
+
+
+def _last_maintenance_ts(action: str) -> Optional[datetime]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ts FROM maintenance_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,)
+        ).fetchone()
+    return _parse_iso(row[0]) if row else None
+
+
+def _log_maintenance(action: str, detail: Optional[str]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO maintenance_log (ts, action, detail) VALUES (?,?,?)",
+            (_now_iso(), action, detail),
+        )
+
+
+def get_rule_stats() -> dict[str, dict[str, int]]:
+    """All rule_stats rows, keyed by rule_key. Missing rule_keys are simply
+    absent from the returned dict (caller/rulestats.reinforcement treats a
+    missing key the same as {"confirmed": 0, "refuted": 0})."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT rule_key, confirmed, refuted FROM rule_stats").fetchall()
+    return {r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]} for r in rows}
+
+
+def record_rule_outcomes(outcomes: list[tuple[str, str, str, str]]) -> dict[str, dict[str, int]]:
+    """outcomes: (rule_key, outcome, device_id, end_ts) tuples, possibly containing
+    episodes already recorded by a past sweep (scan_device no longer filters these
+    out itself -- see the Ф8 fix-pass note on rule_episodes below). For each,
+    INSERT OR IGNORE into rule_episodes keyed on (rule_key, device_id, end_ts) -- a
+    PK conflict means "already counted", silently skip it. Only rows that were
+    ACTUALLY newly inserted increment the matching rule_stats counter. Returns the
+    actual deltas applied (per rule_key), so the caller's logging reflects what
+    really changed, not what scan_device merely re-observed.
+
+    rule_key is validated against rulestats.RULE_KEYS (a closed 3-value Python
+    literal, never SQL-interpolated from external input) and outcome against
+    {"confirmed", "refuted"} before anything is written -- scan_device can only
+    ever emit these values by construction, so a mismatch here means a bug in
+    scan_device, not bad input to silently tolerate.
+    """
+    for rule_key, outcome, _device_id, _end_ts in outcomes:
+        if rule_key not in rulestats.RULE_KEYS:
+            raise ValueError(f"unknown rule_key: {rule_key!r}")
+        if outcome not in ("confirmed", "refuted"):
+            raise ValueError(f"unrecognized outcome: {outcome!r}")
+    deltas: dict[str, dict[str, int]] = {}
+    now_iso = _now_iso()
+    with _lock, _connect() as conn:
+        for rule_key, outcome, device_id, end_ts in outcomes:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO rule_episodes (rule_key, device_id, end_ts, outcome) "
+                "VALUES (?,?,?,?)",
+                (rule_key, device_id, end_ts, outcome),
+            )
+            if cur.rowcount == 0:
+                continue  # already recorded by a past sweep -- not a new fact
+            bucket = deltas.setdefault(rule_key, {"confirmed": 0, "refuted": 0})
+            bucket[outcome] += 1
+        for rule_key, bucket in deltas.items():
+            conn.execute(
+                """INSERT INTO rule_stats (rule_key, confirmed, refuted, updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(rule_key) DO UPDATE SET
+                     confirmed = confirmed + excluded.confirmed,
+                     refuted = refuted + excluded.refuted,
+                     updated_at = excluded.updated_at""",
+                (rule_key, bucket["confirmed"], bucket["refuted"], now_iso),
+            )
+    return deltas
+
+
+# >= REFUTE_WINDOW (the longer of the two outcome windows) + a safety margin, so a
+# device that recomputes scores every few minutes (fast-cadence config) still gets
+# a query that spans enough WALL-CLOCK time, not just enough rows.
+_SCAN_LOOKBACK = rulestats.REFUTE_WINDOW + timedelta(days=10)
+_SCAN_ROW_CAP = 5000  # defensive cap only -- the `since` filter above does the real work
+_EPISODE_PRUNE_MARGIN = timedelta(days=1)  # small cushion past the scan lookback
+
+
+def run_rulestats_scan() -> dict[str, int]:
+    """One fleet-wide sweep: for every device, re-evaluate its score history over
+    the fixed lookback window, upsert any newly-resolved episodes (rule_episodes
+    absorbs the dedup), prune rule_episodes rows that fell out of that window,
+    log once. No watermark of "time since last sweep" is used anymore -- a sweep
+    timestamp is not a valid proxy for "already emitted" (a not-yet-resolvable
+    episode would be silently orphaned the moment any later sweep ran past its
+    end_ts); dedup now lives in rule_episodes, keyed on the episode itself."""
+    now = datetime.now(timezone.utc)
+    lookback_iso = (now - _SCAN_LOOKBACK).isoformat()
+    outcomes: list[tuple[str, str, str, str]] = []
+    # Один коннект на весь скан: get_score_series открывала своё соединение на
+    # КАЖДОЕ устройство -- сотни открытий за проход обслуживания.
+    with _connect() as conn:
+        device_ids = [r[0] for r in conn.execute("SELECT device_id FROM devices")]
+        for device_id in device_ids:
+            rows = list(reversed(_score_series_conn(conn, device_id, _SCAN_ROW_CAP, lookback_iso)))
+            for rule_key, outcome, end_ts in rulestats.scan_device(rows, now=now):
+                outcomes.append((rule_key, outcome, device_id, end_ts))
+    deltas = record_rule_outcomes(outcomes) if outcomes else {}
+    with _lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM rule_episodes WHERE end_ts < ?",
+            ((now - _SCAN_LOOKBACK - _EPISODE_PRUNE_MARGIN).isoformat(),),
+        )
+    confirmed_n = sum(b["confirmed"] for b in deltas.values())
+    refuted_n = sum(b["refuted"] for b in deltas.values())
+    _log_maintenance(
+        "rulestats_scan",
+        json.dumps({"devices": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}),
+    )
+    return {"devices_scanned": len(device_ids), "confirmed": confirmed_n, "refuted": refuted_n}
+
+
+def run_maintenance() -> dict[str, Any]:
+    """PRAGMA optimize every pass; VACUUM only when the freelist share
+    exceeds _VACUUM_FREELIST_RATIO AND >= _VACUUM_MIN_INTERVAL_DAYS have
+    passed since the last one -- VACUUM rewrites the whole file, too
+    expensive to run on every pass (ssd3 Ф5, T5.3).
+    """
+    with _lock, _connect() as conn:
+        conn.execute("PRAGMA optimize")
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        freelist_count = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    _log_maintenance("optimize", None)
+    ratio = (freelist_count / page_count) if page_count else 0.0
+    if ratio <= _VACUUM_FREELIST_RATIO:
+        return {"optimized": True, "vacuumed": False, "freelist_ratio": ratio}
+    last = _last_maintenance_ts("vacuum")
+    if last is not None and (datetime.now(timezone.utc) - last) < timedelta(
+        days=_VACUUM_MIN_INTERVAL_DAYS
+    ):
+        return {"optimized": True, "vacuumed": False, "freelist_ratio": ratio}
+    # ponytail: VACUUM holds _lock (a plain threading.Lock, no timeout) for its
+    # full runtime, so every other writer queues behind it -- acceptable because
+    # the guard above makes this rare (freelist ratio + 7d interval), never per
+    # request. Revisit with per-table or asyncio-native locking if VACUUM ever
+    # needs to run more often than the guard allows.
+    with _lock, _connect() as conn:
+        conn.execute("VACUUM")
+    _log_maintenance("vacuum", f"freelist_ratio={ratio:.3f}")
+    return {"optimized": True, "vacuumed": True, "freelist_ratio": ratio}
+
+
+def store_heartbeat(
+    device_id: str,
+    ts: str,
+    payload: dict[str, Any],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO heartbeats (device_id, ts, payload, received_at, clock_drift_sec) "
+            "VALUES (?,?,?,?,?)",
+            (device_id, ts, _json_c(payload), recv, clock_drift_sec),
+        )
+        conn.execute(
+            """DELETE FROM heartbeats WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_hb),
+        )
+
+
+def store_events(
+    device_id: str,
+    events: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+    clock_drift_sec: Optional[float] = None,
+) -> None:
+    if not events:
+        return
+    recv = received_at or _now_iso()  # batch receipt = window anchor (W0.2)
+    with _lock, _connect() as conn:
+        conn.executemany(
+            """INSERT INTO events
+                 (device_id, ts, log, source, event_id, level, message,
+                  received_at, clock_drift_sec)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            [
+                (
+                    device_id,
+                    e.get("ts"),
+                    e.get("log"),
+                    e.get("source"),
+                    e.get("event_id"),
+                    e.get("level"),
+                    (e.get("message") or "")[:500],
+                    recv,
+                    clock_drift_sec,
+                )
+                for e in events
+            ],
+        )
+        # Свернуть ДО обрезки: при шторме (> _retain_ev в одном конверте) строки,
+        # срезанные ниже, иначе не попали бы ни в одну свёртку -- потеря навсегда.
+        _rollup_events_daily_conn(conn, recv[:10], device_id=device_id)
+        conn.execute(
+            """DELETE FROM events WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM events WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_ev),
+        )
+
+
+def store_scores(device_id: str, ts: str, scores: dict[str, Any]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO scores
+              (device_id, ts, performance, reliability, wear, risk_exposure, risk)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                device_id,
+                ts,
+                scores.get("performance"),
+                scores.get("reliability"),
+                scores.get("wear"),
+                scores.get("risk_exposure"),
+                _json_c(scores.get("risk", {})),
+            ),
+        )
+        conn.execute(
+            """DELETE FROM scores WHERE device_id=? AND id NOT IN (
+                 SELECT id FROM scores WHERE device_id=? ORDER BY id DESC LIMIT ?)""",
+            (device_id, device_id, _retain_scores),
+        )
+        _slim_stale_scores(conn, device_id)
+
+
+# --------------------------------------------------------------------------- #
+# Network printers (phase 4): latest inventory + append-only readings.
+# Keyed by a stable printer identity (serial > MAC > IP), NOT device_id, so these
+# tables are deliberately absent from _DEVICE_TABLES (printers are shared infra,
+# not owned by one PC). All SQL parameterized; ``detail`` is a JSON blob.
+# --------------------------------------------------------------------------- #
+_SUPPLY_POINTS_CAP = 16  # supplies_pct rides EVERY row (unlike detail) -- an
+_SUPPLY_NAME_CAP = 48  # unbounded SNMP-sourced list/name would multiply into
+# unbounded DB growth from one hostile/buggy printer (review B3 HIGH,
+# [[retention-key-cardinality-unbounded]]); name cap mirrors _norm_serial[:48].
+
+
+def _consumed_supply_points(supplies: Optional[list]) -> Optional[str]:
+    """Compact JSON ``[[name, percent], ...]`` for consumed-class supplies with a
+    known percent (toner/ink -- the depleting kind a %-to-zero forecast applies
+    to; a receptacle/waste container fills UP, a different metric, excluded here).
+    None when nothing usable was read this poll (nothing to persist)."""
+    pts = [
+        [str(s.get("name"))[:_SUPPLY_NAME_CAP], s["percent"]]
+        for s in supplies or []
+        if isinstance(s, dict)
+        and s.get("class_") == "consumed"
+        and isinstance(s.get("percent"), int)
+    ][:_SUPPLY_POINTS_CAP]
+    return _json_c(pts) if pts else None
+
+
+def store_printer_reading(
+    printer_id: str,
+    reading: dict[str, Any],
+    received_at: Optional[str] = None,
+) -> None:
+    """Append one printer reading and refresh the latest-inventory row.
+
+    Identity fields (vendor/model/serial/mac/hostname) and the page counter are
+    COALESCEd so a transient unreachable poll never wipes a known value; ``status``
+    is latest-wins so a down printer reads "unreachable". ``first_seen`` is set on
+    insert and preserved; ``last_seen`` advances every poll.
+    """
+    recv = received_at or _now_iso()
+    detail = _json_c(reading)
+    supplies_pct = _consumed_supply_points(reading.get("supplies"))
+    with _lock, _connect() as conn:
+        conn.execute(
+            """INSERT INTO printer_readings
+                 (printer_id, ip, received_at, status, total_pages,
+                  color_pages, mono_pages, duplex_pages, detail, supplies_pct)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                printer_id,
+                reading.get("ip"),
+                recv,
+                reading.get("status"),
+                reading.get("total_pages"),
+                reading.get("color_pages"),
+                reading.get("mono_pages"),
+                reading.get("duplex_pages"),
+                detail,
+                supplies_pct,
+            ),
+        )
+        conn.execute(
+            """DELETE FROM printer_readings WHERE printer_id=? AND id NOT IN (
+                 SELECT id FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT ?)""",
+            (printer_id, printer_id, _retain_prn),
+        )
+        # Спека 2026-08-27 (Ш5): историю detail не читает никто (оба читателя --
+        # ORDER BY id DESC LIMIT 1), скалярные колонки для графиков остаются.
+        conn.execute(
+            """UPDATE printer_readings SET detail=NULL
+                WHERE printer_id=? AND detail IS NOT NULL AND id NOT IN (
+                  SELECT id FROM printer_readings WHERE printer_id=?
+                  ORDER BY id DESC LIMIT ?)""",
+            (printer_id, printer_id, _PRINTER_DETAIL_KEEP),
+        )
+        conn.execute(
+            """
+            INSERT INTO printers
+              (printer_id, ip, hostname, mac, vendor, model, serial, status,
+               total_pages, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(printer_id) DO UPDATE SET
+              ip          = COALESCE(excluded.ip, printers.ip),
+              hostname    = COALESCE(excluded.hostname, printers.hostname),
+              mac         = COALESCE(excluded.mac, printers.mac),
+              vendor      = COALESCE(excluded.vendor, printers.vendor),
+              model       = COALESCE(excluded.model, printers.model),
+              serial      = COALESCE(excluded.serial, printers.serial),
+              status      = excluded.status,
+              total_pages = COALESCE(excluded.total_pages, printers.total_pages),
+              last_seen   = excluded.last_seen
+            """,
+            (
+                printer_id,
+                reading.get("ip"),
+                reading.get("hostname"),
+                reading.get("mac"),
+                reading.get("vendor"),
+                reading.get("model"),
+                reading.get("serial"),
+                reading.get("status"),
+                reading.get("total_pages"),
+                recv,
+                recv,
+            ),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Network discovery (netdisco) persistence -- mirrors the printers pattern:
+# COALESCE inventory + append-only readings + retention prune. Keyed by
+# device_nid (network identity), separate from the agent device_id lifecycle,
+# so net_* tables are deliberately NOT in _DEVICE_TABLES.
+# --------------------------------------------------------------------------- #
+def _delete_net_device_rows(conn: sqlite3.Connection, nid: str) -> None:
+    """Delete every net_devices CHILD row for *nid*: net_interfaces, net_links
+    (either side), net_device_readings, net_routes. ``net_changes`` and the
+    topology-snapshot journal are deliberately excluded (D3: they are history,
+    kept even after the node itself is gone). Reused by D4's identity migration
+    to sweep up whatever a best-effort re-point (INSERT OR IGNORE) left behind
+    under the old id."""
+    conn.execute("DELETE FROM net_interfaces WHERE device_nid=?", (nid,))
+    conn.execute("DELETE FROM net_links WHERE a_nid=? OR b_nid=?", (nid, nid))
+    conn.execute("DELETE FROM net_device_readings WHERE device_nid=?", (nid,))
+    conn.execute("DELETE FROM net_routes WHERE device_nid=?", (nid,))
+
+
+def _rename_or_merge_net_device_row(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """The net_devices-row half of D4's migration: if *new* has no row yet,
+    *old* is simply renamed in place (every identity column survives as-is).
+    If *new* already exists, *old*'s non-null identity columns fill whatever
+    *new* is missing (COALESCE(new, old) -- the richer/current record never
+    loses a field it already has), and the earlier of the two first_seen
+    timestamps wins (NULL-safe: a stored NULL never poisons the MIN()).
+
+    Review fix (2026-08-23): ``device_id``/``printer_id`` are soft FKs derived
+    by ``link_identities`` from a MAC match on the next inventory cycle -- the
+    authoritative path. They are NEVER carried across a migration (either
+    branch), only reset to NULL on the surviving row, so a migration can never
+    hand a physical host's agent/printer link to a different one."""
+    new_exists = conn.execute("SELECT 1 FROM net_devices WHERE device_nid=?", (new,)).fetchone()
+    if new_exists is None:
+        conn.execute(
+            "UPDATE net_devices SET device_nid=?, device_id=NULL, printer_id=NULL "
+            "WHERE device_nid=?",
+            (new, old),
+        )
+        return
+    old_row = conn.execute("SELECT * FROM net_devices WHERE device_nid=?", (old,)).fetchone()
+    if old_row is not None:
+        conn.execute(
+            """
+            UPDATE net_devices SET
+              ip            = COALESCE(net_devices.ip, ?),
+              hostname      = COALESCE(net_devices.hostname, ?),
+              vendor        = COALESCE(net_devices.vendor, ?),
+              dev_type      = CASE
+                                WHEN net_devices.dev_type IS NULL
+                                 OR net_devices.dev_type = 'unknown'
+                                THEN ? ELSE net_devices.dev_type END,
+              sys_object_id = COALESCE(net_devices.sys_object_id, ?),
+              model         = COALESCE(net_devices.model, ?),
+              serial        = COALESCE(net_devices.serial, ?),
+              site_code     = COALESCE(net_devices.site_code, ?),
+              status        = COALESCE(net_devices.status, ?),
+              subtype       = COALESCE(net_devices.subtype, ?),
+              sys_descr     = COALESCE(net_devices.sys_descr, ?),
+              first_seen    = MIN(COALESCE(net_devices.first_seen, ?),
+                                   COALESCE(?, net_devices.first_seen)),
+              device_id     = NULL,
+              printer_id    = NULL
+            WHERE device_nid = ?
+            """,
+            (
+                old_row["ip"],
+                old_row["hostname"],
+                old_row["vendor"],
+                old_row["dev_type"],
+                old_row["sys_object_id"],
+                old_row["model"],
+                old_row["serial"],
+                old_row["site_code"],
+                old_row["status"],
+                old_row["subtype"],
+                old_row["sys_descr"],
+                old_row["first_seen"],
+                old_row["first_seen"],
+                new,
+            ),
+        )
+    conn.execute("DELETE FROM net_devices WHERE device_nid=?", (old,))
+
+
+def _repoint_net_device_children(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """Re-point readings and routes keyed to *old* over to *new*.
+
+    Review fix (LOW-1/LOW-3, 2026-08-23): net_interfaces and net_links are
+    deliberately NOT re-pointed here any more -- net_interfaces has no unique
+    key, so a re-point would stack duplicates on every SNMP re-classify; a
+    re-pointed net_links row could also break the ``a_nid <= b_nid`` canonical
+    order or create a ``(new, new)`` self-loop. Both are simply left for the
+    caller's ``_delete_net_device_rows(old)`` to drop; the next inventory/
+    topology cycle re-derives them under the new identity. net_routes' PK
+    (device_nid, cidr) can still collide with a row *new* already has --
+    INSERT OR IGNORE drops the duplicate silently, never raises; the same
+    cleanup call sweeps up whatever is left keyed to *old*."""
+    conn.execute("UPDATE net_device_readings SET device_nid=? WHERE device_nid=?", (new, old))
+    conn.execute(
+        "INSERT OR IGNORE INTO net_routes "
+        "(device_nid, cidr, next_hop, ifindex, first_seen, last_seen) "
+        "SELECT ?, cidr, next_hop, ifindex, first_seen, last_seen "
+        "FROM net_routes WHERE device_nid=?",
+        (new, old),
+    )
+
+
+def _migrate_net_device_nid(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """D4/KodSR M6: fold an IP-only net_devices row (*old*, ``nd-ip-...``) into
+    the MAC identity it turns out to be (*new*, ``nd-mac-...``) -- called from
+    inside ``upsert_net_device``'s own transaction, before the row it is about
+    to write is inserted/updated. See ``_rename_or_merge_net_device_row`` and
+    ``_repoint_net_device_children`` for the two halves; a final
+    ``_delete_net_device_rows(old)`` cleans up whatever the best-effort
+    re-point left behind under the old id."""
+    _rename_or_merge_net_device_row(conn, old, new)
+    _repoint_net_device_children(conn, old, new)
+    _delete_net_device_rows(conn, old)
+
+
+def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Insert or refresh a network device. Identity fields are COALESCEd (a
+    transient poll missing a value never wipes a known one); ``dev_type`` keeps a
+    known type over a later ``unknown`` (a classify miss must not demote);
+    ``status``/``subtype`` are COALESCEd too (an inventory-only upsert keeps the
+    last probe values). ``first_seen`` is set on insert; ``last_seen`` advances
+    each upsert.
+
+    D4/KodSR M6: if this upsert carries both a MAC and an IP and its nid is
+    MAC-keyed, and an IP-keyed row for that same IP already exists under a
+    DIFFERENT nid, that row is the same physical host seen earlier without a
+    MAC -- migrated into this nid (below) before the INSERT, so it never
+    becomes a permanent duplicate node.
+
+    Review fix (HIGH-1, 2026-08-23): the migration is skipped if the OLD
+    (IP-only) row already carries a MAC that CONTRADICTS the one in this
+    upsert. A contradiction means a different physical host now answers at
+    that IP -- a DHCP lease reassignment, or (unauthenticated ingest) a
+    hostile claim -- and blindly migrating would fold an unrelated host's
+    identity into the new one. Both rows are left in place; UNKNOWN over
+    false confidence."""
+    nid = dev.get("device_nid")
+    if not nid:
+        return
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        mac, ip = dev.get("mac"), dev.get("ip")
+        if mac and ip and nid.startswith("nd-mac-"):
+            ip_nid = _ip_only_nid(mac=None, ip=ip)
+            if ip_nid != nid:
+                old_row = conn.execute(
+                    "SELECT mac FROM net_devices WHERE device_nid=?", (ip_nid,)
+                ).fetchone()
+                if old_row is not None:
+                    old_mac = normalize_mac(old_row["mac"])
+                    if old_mac is None or old_mac == normalize_mac(mac):
+                        _migrate_net_device_nid(conn, ip_nid, nid)
+        conn.execute(
+            """
+            INSERT INTO net_devices
+              (device_nid, ip, hostname, mac, vendor, dev_type, sys_object_id,
+               model, serial, site_code, status, subtype, sys_descr, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_nid) DO UPDATE SET
+              ip            = COALESCE(excluded.ip, net_devices.ip),
+              hostname      = COALESCE(excluded.hostname, net_devices.hostname),
+              mac           = COALESCE(excluded.mac, net_devices.mac),
+              vendor        = COALESCE(excluded.vendor, net_devices.vendor),
+              dev_type      = CASE
+                                WHEN excluded.dev_type IS NOT NULL
+                                 AND excluded.dev_type != 'unknown'
+                                THEN excluded.dev_type ELSE net_devices.dev_type END,
+              sys_object_id = COALESCE(excluded.sys_object_id, net_devices.sys_object_id),
+              model         = COALESCE(excluded.model, net_devices.model),
+              serial        = COALESCE(excluded.serial, net_devices.serial),
+              site_code     = COALESCE(excluded.site_code, net_devices.site_code),
+              status        = COALESCE(excluded.status, net_devices.status),
+              subtype       = COALESCE(excluded.subtype, net_devices.subtype),
+              sys_descr     = COALESCE(excluded.sys_descr, net_devices.sys_descr),
+              last_seen     = excluded.last_seen
+            """,
+            (
+                nid,
+                dev.get("ip"),
+                dev.get("hostname"),
+                dev.get("mac"),
+                dev.get("vendor"),
+                dev.get("dev_type"),
+                dev.get("sys_object_id"),
+                dev.get("model"),
+                dev.get("serial"),
+                dev.get("site_code"),
+                dev.get("status"),
+                dev.get("subtype"),
+                dev.get("sys_descr"),
+                recv,
+                recv,
+            ),
+        )
+
+
+def fill_net_device_identity(
+    device_nid: str,
+    *,
+    hostname: Optional[str] = None,
+    subtype: Optional[str] = None,
+    model: Optional[str] = None,
+) -> None:
+    """Fill-empty-only identity enrichment for a known device (Ф8 passive).
+
+    The mirror image of ``upsert_net_device``'s COALESCE: here the STORED value
+    wins (``COALESCE(net_devices.hostname, ?)``), so a lowest-priority passive
+    hint (reverse-DNS / mDNS / NetBIOS / banner) only ever fills a column an
+    agent or SNMP probe left empty -- it can never overwrite a richer identity.
+    UPDATE-only: passive enriches existing inventory and never invents a node, so
+    a responder that is not already known is silently ignored. A ``None`` for
+    every field, or an unknown ``device_nid``, is a no-op."""
+    if not device_nid or (hostname is None and subtype is None and model is None):
+        return
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE net_devices SET
+              hostname = COALESCE(hostname, ?),
+              subtype  = COALESCE(subtype, ?),
+              model    = COALESCE(model, ?)
+            WHERE device_nid = ?
+            """,
+            (hostname, subtype, model, device_nid),
+        )
+
+
+def set_net_device_links(
+    device_nid: str,
+    device_id: Optional[str] = None,
+    printer_id: Optional[str] = None,
+) -> None:
+    """FK-link a network device to its agent (``devices``) / printer record (Phase 1).
+
+    COALESCE-preserve: a ``None`` argument keeps the stored link, so an inventory
+    cycle that resolves only one side (or transiently neither) never wipes a known
+    FK -- the link does not flap. A no-op when ``device_nid`` is unknown."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE net_devices
+               SET device_id  = COALESCE(?, device_id),
+                   printer_id = COALESCE(?, printer_id)
+             WHERE device_nid = ?
+            """,
+            (device_id, printer_id, device_nid),
+        )
+
+
+def get_net_device_links(device_nid: str) -> Optional[dict[str, Any]]:
+    """The ``{device_id, printer_id}`` FK pair for a network device, None if absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT device_id, printer_id FROM net_devices WHERE device_nid=?",
+            (device_nid,),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def store_net_device_reading(
+    device_nid: str,
+    detail: dict[str, Any],
+    status: Optional[str] = None,
+    received_at: Optional[str] = None,
+) -> None:
+    """Append one device reading (append-only history) and prune to the retain cap."""
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_device_readings (device_nid, received_at, status, detail) "
+            "VALUES (?,?,?,?)",
+            (device_nid, recv, status, _json_c(detail)),
+        )
+        conn.execute(
+            """DELETE FROM net_device_readings WHERE device_nid=? AND id NOT IN (
+                 SELECT id FROM net_device_readings WHERE device_nid=? ORDER BY id DESC LIMIT ?)""",
+            (device_nid, device_nid, _retain_net),
+        )
+
+
+def store_net_interfaces(
+    device_nid: str,
+    interfaces: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+) -> None:
+    """Replace a device's interface set (full snapshot each config poll)."""
+    recv = received_at or _now_iso()
+    rows = [
+        (
+            device_nid,
+            i.get("if_index"),
+            i.get("name"),
+            i.get("if_type"),
+            i.get("speed_mbps"),
+            None if i.get("oper_up") is None else int(bool(i.get("oper_up"))),
+            i.get("phys_mac"),
+            i.get("if_alias"),
+            recv,
+        )
+        for i in interfaces
+    ]
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM net_interfaces WHERE device_nid=?", (device_nid,))
+        conn.executemany(
+            "INSERT INTO net_interfaces "
+            "(device_nid, if_index, name, if_type, speed_mbps, oper_up, phys_mac, "
+            "if_alias, last_seen) VALUES (?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def set_net_device_status(device_nid: str, status: str) -> None:
+    """Update ONLY a device's status (down/unreachable/missing/up) -- never advancing
+    last_seen. A reachability or ghost-lifecycle verdict must not revive the staleness
+    clock (else a missing device would look fresh next cycle and never age out)."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE net_devices SET status=? WHERE device_nid=?",
+            (status, device_nid),
+        )
+
+
+def touch_net_device_seen(device_nid: str, seen_at: Optional[str] = None) -> None:
+    """D2: advance ONLY a device's last_seen -- a host that just answered a
+    reachability probe WAS seen right now, independent of whatever status
+    verdict correlation assigns it. UPDATE-only, mirrors set_net_device_status:
+    never creates a row, never touches status."""
+    recv = seen_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE net_devices SET last_seen=? WHERE device_nid=?",
+            (recv, device_nid),
+        )
+
+
+def set_net_device_snmp_mute(device_nid: str, until_iso: Optional[str]) -> None:
+    """Set (or clear, with ``None``) the SNMP negative-cache deadline (o5-B6): a
+    host that just failed to answer an SNMP probe is muted for 24h so the classify
+    cycle stops re-probing a silent host every pass; a successful response clears
+    it immediately (``until_iso=None``). Latest-wins, no COALESCE -- unlike the
+    identity fields, this value must be free to move backwards to ``NULL``."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE net_devices SET snmp_mute_until=? WHERE device_nid=?",
+            (until_iso, device_nid),
+        )
+
+
+def upsert_net_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Insert or refresh one undirected L2/L3 link. Endpoints are canonicalised
+    (a_nid <= b_nid, ifIndexes + port labels swapped to match) so the same link in
+    either direction is one row; ``via_source``/``confidence``/``vlan`` are latest-
+    wins and the per-endpoint ifIndexes + ``medium`` + port labels are COALESCEd
+    (an FDB re-derivation that lacks the LLDP port label keeps it); ``first_seen``
+    is preserved."""
+    a, b = link.get("a_nid"), link.get("b_nid")
+    if not a or not b:
+        return
+    a_if, b_if = link.get("a_if"), link.get("b_if")
+    a_port, b_port = link.get("a_port"), link.get("b_port")
+    if a > b:
+        a, b = b, a
+        a_if, b_if = b_if, a_if
+        a_port, b_port = b_port, a_port
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_links
+              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, medium,
+               vlan, a_port, b_port, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
+              a_if       = COALESCE(excluded.a_if, net_links.a_if),
+              b_if       = COALESCE(excluded.b_if, net_links.b_if),
+              via_source = excluded.via_source,
+              confidence = excluded.confidence,
+              medium     = COALESCE(excluded.medium, net_links.medium),
+              vlan       = excluded.vlan,
+              a_port     = COALESCE(excluded.a_port, net_links.a_port),
+              b_port     = COALESCE(excluded.b_port, net_links.b_port),
+              last_seen  = excluded.last_seen
+            """,
+            (
+                a,
+                b,
+                a_if,
+                b_if,
+                link.get("link_kind"),
+                link.get("via_source"),
+                link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
+                recv,
+                recv,
+            ),
+        )
+
+
+def add_adapter_link(link: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Persist ONE Tier-3 adapter link, additively (Ф9d). Unlike ``upsert_net_link``
+    (latest-wins), this is ``ON CONFLICT DO NOTHING``: an adapter edge is recorded
+    under its own ``link_kind`` and NEVER modifies an existing row -- so a Tier-3
+    controller hint can never downgrade or overwrite a validated SNMP edge, and a
+    rerun preserves ``first_seen``. Endpoints are canonicalised (a_nid <= b_nid, port
+    labels swapped to match)."""
+    a, b = link.get("a_nid"), link.get("b_nid")
+    if not a or not b or a == b:
+        return
+    a_port, b_port = link.get("a_port"), link.get("b_port")
+    if a > b:
+        a, b = b, a
+        a_port, b_port = b_port, a_port
+    recv = received_at or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_links
+              (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence, medium,
+               vlan, a_port, b_port, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(a_nid, b_nid, link_kind) DO NOTHING
+            """,
+            (
+                a,
+                b,
+                None,
+                None,
+                link.get("link_kind") or "adapter",
+                link.get("via_source"),
+                link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
+                recv,
+                recv,
+            ),
+        )
+
+
+def replace_net_links(
+    links: list[dict[str, Any]],
+    node_nids: set[str],
+    received_at: Optional[str] = None,
+) -> None:
+    """Idempotently replace the links incident to the probed nodes (§4.5 reconcile).
+
+    A topology cycle re-derives every link touching the nodes it probed this pass.
+    We delete only those nodes' now-vanished links and upsert the current ones
+    (canonical a_nid <= b_nid, ``first_seen`` preserved): a rerun never duplicates
+    rows, and a link between two nodes NOT probed this cycle is left untouched. All
+    SQL is parameterised -- only the IN-clause placeholder count is interpolated."""
+    recv = received_at or _now_iso()
+    nodes = sorted({n for n in node_nids if n})
+    canon: list[tuple[Any, ...]] = []
+    new_keys: set[tuple[Any, ...]] = set()
+    for link in links:
+        a, b = link.get("a_nid"), link.get("b_nid")
+        if not a or not b or a == b:
+            continue
+        a_if, b_if = link.get("a_if"), link.get("b_if")
+        a_port, b_port = link.get("a_port"), link.get("b_port")
+        if a > b:
+            a, b = b, a
+            a_if, b_if = b_if, a_if
+            a_port, b_port = b_port, a_port
+        kind = link.get("link_kind")
+        canon.append(
+            (
+                a,
+                b,
+                a_if,
+                b_if,
+                kind,
+                link.get("via_source"),
+                link.get("confidence"),
+                link.get("medium"),
+                link.get("vlan"),
+                a_port,
+                b_port,
+            )
+        )
+        new_keys.add((a, b, kind))
+    with _lock, _connect() as conn:
+        if nodes:
+            placeholders = ",".join("?" * len(nodes))
+            rows = conn.execute(
+                f"SELECT a_nid, b_nid, link_kind FROM net_links "  # nosec B608
+                f"WHERE a_nid IN ({placeholders}) OR b_nid IN ({placeholders})",
+                (*nodes, *nodes),
+            ).fetchall()
+            for a, b, kind in {(r[0], r[1], r[2]) for r in rows} - new_keys:
+                conn.execute(
+                    "DELETE FROM net_links WHERE a_nid=? AND b_nid=? AND link_kind IS ?",
+                    (a, b, kind),
+                )
+        for a, b, a_if, b_if, kind, via, conf, medium, vlan, a_port, b_port in canon:
+            conn.execute(
+                """
+                INSERT INTO net_links
+                  (a_nid, b_nid, a_if, b_if, link_kind, via_source, confidence,
+                   medium, vlan, a_port, b_port, first_seen, last_seen)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(a_nid, b_nid, link_kind) DO UPDATE SET
+                  a_if       = COALESCE(excluded.a_if, net_links.a_if),
+                  b_if       = COALESCE(excluded.b_if, net_links.b_if),
+                  via_source = excluded.via_source,
+                  confidence = excluded.confidence,
+                  medium     = excluded.medium,
+                  vlan       = excluded.vlan,
+                  a_port     = COALESCE(excluded.a_port, net_links.a_port),
+                  b_port     = COALESCE(excluded.b_port, net_links.b_port),
+                  last_seen  = excluded.last_seen
+                """,
+                # F6: medium is latest-wins here (NOT COALESCEd like upsert_net_link
+                # below) -- fusion recomputes it from ALL evidence for the pair every
+                # cycle, so an honest NULL must be able to overwrite an old fail-open
+                # "wired" row on an existing installation. upsert_net_link is the
+                # adapter/enrichment path and keeps COALESCE: adapters only enrich a
+                # link, never overwrite an SNMP-derived medium (project invariant).
+                (a, b, a_if, b_if, kind, via, conf, medium, vlan, a_port, b_port, recv, recv),
+            )
+
+
+def store_topology_snapshot(graph: dict[str, Any], received_at: Optional[str] = None) -> None:
+    """Append a full topology snapshot (append-only graph history) and prune."""
+    recv = received_at or _now_iso()
+    nodes = graph.get("nodes") or []
+    links = graph.get("links") or []
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_topology_snapshots (received_at, node_count, link_count, graph) "
+            "VALUES (?,?,?,?)",
+            (recv, len(nodes), len(links), _json_c(graph)),
+        )
+        conn.execute(
+            """DELETE FROM net_topology_snapshots WHERE id NOT IN (
+                 SELECT id FROM net_topology_snapshots ORDER BY id DESC LIMIT ?)""",
+            (_retain_net_topo,),
+        )
+
+
+def store_net_change(
+    kind: str,
+    device_nid: Optional[str] = None,
+    detail: Optional[dict[str, Any]] = None,
+    ts: Optional[str] = None,
+) -> None:
+    """Append one topology-change record to the change journal."""
+    stamp = ts or _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO net_changes (ts, device_nid, kind, detail) VALUES (?,?,?,?)",
+            (stamp, device_nid, kind, _json_c(detail or {})),
+        )
+        # OFFSET-форма, а не `NOT IN (SELECT ... LIMIT ?)`: журнал пишется часто,
+        # и коррелированная проверка принадлежности сканировала бы его на каждой
+        # вставке. Здесь -- один проход по rowid до границы; меньше кап-строк
+        # подзапрос отдаёт NULL и DELETE не трогает ничего.
+        conn.execute(
+            "DELETE FROM net_changes WHERE id <= ("
+            " SELECT id FROM net_changes ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (_retain_net_changes,),
+        )
+
+
+def get_net_devices(
+    dev_type: Optional[str] = None, site: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """Network-device inventory, optionally filtered by type / site (filtered in
+    Python -- net inventories are small, and it keeps the SQL injection-free)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM net_devices ORDER BY COALESCE(hostname, ip, device_nid)"
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    if dev_type:
+        out = [d for d in out if d.get("dev_type") == dev_type]
+    if site:
+        out = [d for d in out if d.get("site_code") == site]
+    return out
+
+
+def get_net_device(device_nid: str) -> Optional[dict[str, Any]]:
+    """One network device + its interfaces + every link it participates in."""
+    with _connect() as conn:
+        drow = conn.execute(
+            "SELECT * FROM net_devices WHERE device_nid=?", (device_nid,)
+        ).fetchone()
+        if drow is None:
+            return None
+        ifaces = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_interfaces WHERE device_nid=? ORDER BY if_index", (device_nid,)
+            ).fetchall()
+        ]
+        links = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_links WHERE a_nid=? OR b_nid=? ORDER BY id",
+                (device_nid, device_nid),
+            ).fetchall()
+        ]
+    dev = dict(drow)
+    dev["interfaces"] = ifaces
+    dev["links"] = links
+    return dev
+
+
+def get_linked_net_device(
+    *, device_id: Optional[str] = None, printer_id: Optional[str] = None
+) -> Optional[dict[str, Any]]:
+    """The network device FK-linked (Ф1) to an agent / printer, with its full card
+    payload (interfaces + links) -- read side for the Ф6 topology section embedded
+    in the canonical agent/printer card. Returns ``None`` when nothing is linked or
+    no key is given. Keyed lookups only (no scan)."""
+    if device_id is None and printer_id is None:
+        return None
+    col = "device_id" if device_id is not None else "printer_id"
+    val = device_id if device_id is not None else printer_id
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT device_nid FROM net_devices WHERE {col}=? LIMIT 1",  # nosec B608 -- col is a literal, value bound
+            (val,),
+        ).fetchone()
+    if row is None:
+        return None
+    return get_net_device(row["device_nid"])
+
+
+def get_net_links() -> list[dict[str, Any]]:
+    """Every resolved topology link (read side for the graph engine / map)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM net_links ORDER BY id").fetchall()]
+
+
+def add_net_route(device_nid: str, cidr: str, next_hop: str, ifindex: Optional[int]) -> None:
+    """Persist one harvested L3 route (A2): upsert by (device_nid, cidr) -> next-hop /
+    ifindex / last_seen refresh, first_seen preserved. Parameterised (no interpolation)."""
+    if not device_nid or not cidr:
+        return
+    now = _now_iso()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO net_routes (device_nid, cidr, next_hop, ifindex, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(device_nid, cidr) DO UPDATE SET
+              next_hop  = excluded.next_hop,
+              ifindex   = excluded.ifindex,
+              last_seen = excluded.last_seen
+            """,
+            (device_nid, cidr, next_hop, ifindex, now, now),
+        )
+
+
+def get_net_routes(max_age_days: int = 7) -> list[dict[str, Any]]:
+    """Recently-seen L3 routes (read side: the map draws router -> next-hop L3 edges).
+    Aged by ``last_seen`` so a decommissioned router's routes stop rendering -- net_routes
+    is NOT reconcile-deleted, but rows are bounded by the real router count (stable MAC
+    nids). ponytail: last_seen read-filter; add a per-cycle reconcile-delete only if
+    hardware turnover proves high. Cutoff is a bound parameter (no SQL interpolation)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, max_age_days))).isoformat()
+    with _connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM net_routes WHERE last_seen >= ? ORDER BY device_nid, cidr",
+                (cutoff,),
+            ).fetchall()
+        ]
+
+
+def get_net_interfaces() -> list[dict[str, Any]]:
+    """Every stored interface row (read side: the map joins these onto link endpoints
+    for the operator port alias, negotiated speed and oper-up status -- S3)."""
+    with _connect() as conn:
+        return [
+            dict(r) for r in conn.execute("SELECT * FROM net_interfaces ORDER BY id").fetchall()
+        ]
+
+
+def get_net_interface_macs() -> dict[str, tuple[str, ...]]:
+    """Physical MACs grouped by device (o5-B5): one query for the topology cycle's
+    own-MAC filtering, replacing a get_net_device() call per probed infra device."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_nid, phys_mac FROM net_interfaces WHERE phys_mac IS NOT NULL"
+        ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["device_nid"], []).append(r["phys_mac"])
+    return {nid: tuple(macs) for nid, macs in out.items()}
+
+
+def get_net_device_status_series(per_device: int = 48) -> dict[str, list[str]]:
+    """Recent reachability statuses per net device (oldest->newest, capped per device)
+    for the map's 24h sparkline + flap count (S5). A window function bounds the read to
+    <= per_device rows each, so a chatty device never starves the rest."""
+    cap = max(1, min(int(per_device), 200))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_nid, status FROM ("
+            " SELECT device_nid, status, id,"
+            " ROW_NUMBER() OVER (PARTITION BY device_nid ORDER BY id DESC) AS rn"
+            " FROM net_device_readings"
+            ") WHERE rn <= ? ORDER BY device_nid, id",
+            (cap,),
+        ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["device_nid"], []).append(r["status"])
+    return out
+
+
+def get_latest_topology_snapshot() -> Optional[dict[str, Any]]:
+    """The newest stored topology snapshot (parsed graph), or None when absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT received_at, node_count, link_count, graph FROM net_topology_snapshots "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "received_at": row["received_at"],
+        "node_count": row["node_count"],
+        "link_count": row["link_count"],
+        "graph": json.loads(row["graph"]) if row["graph"] else {},
+    }
+
+
+def list_topology_snapshots(limit: int = 200) -> list[dict[str, Any]]:
+    """Topology snapshots (newest first) for the time-machine slider -- id/received_at
+    + counts only (the graph blob itself is heavy; ``get_topology_snapshot`` loads one).
+
+    *limit* is clamped 1..500 so a hostile/large value cannot force a giant read. Read
+    side for the Ф5 panel; parameterised (no interpolation)."""
+    capped = max(1, min(int(limit), 500))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, received_at, node_count, link_count FROM net_topology_snapshots "
+            "ORDER BY id DESC LIMIT ?",
+            (capped,),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "received_at": r["received_at"],
+            "node_count": r["node_count"],
+            "link_count": r["link_count"],
+        }
+        for r in rows
+    ]
+
+
+def get_topology_snapshot(snapshot_id: int) -> Optional[dict[str, Any]]:
+    """One historical topology snapshot by id (parsed graph), or None when absent.
+
+    The graph stored at topology-cycle time is a subset of the unified shape (nodes/
+    links only; the live overlays -- ICMP quality, subnet anomaly -- are derived per
+    request and were never persisted, so a historical frame carries none, by design).
+    Read side for the Ф5 time machine; bound integer, parameterised query."""
+    if snapshot_id is None:
+        return None
+    try:
+        sid = int(snapshot_id)
+    except (TypeError, ValueError):
+        return None
+    if sid < 1:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, received_at, node_count, link_count, graph "
+            "FROM net_topology_snapshots WHERE id=?",
+            (sid,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "received_at": row["received_at"],
+        "node_count": row["node_count"],
+        "link_count": row["link_count"],
+        "graph": json.loads(row["graph"]) if row["graph"] else {},
+    }
+
+
+def get_net_changes(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
+    """Topology-change journal within the last *days* (newest first, capped).
+
+    Cutoff is a parameterised ISO timestamp (no SQL string interpolation)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, days))).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ts, device_nid, kind, detail FROM net_changes WHERE ts >= ? "
+            "ORDER BY id DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["detail"] = json.loads(d["detail"]) if d["detail"] else {}
+        out.append(d)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Deletes / cleanup (device-ghost hygiene, 2026-06-16)
+# --------------------------------------------------------------------------- #
+# Every table that carries a device_id. delete_device MUST clear all of them, or
+# an orphan shard is left behind = a new kind of garbage. The introspection test
+# in tests/test_device_cleanup.py fails if a future per-device table is added but
+# not registered here.
+_DEVICE_TABLES: tuple[str, ...] = (
+    "inventory",
+    "historical",
+    "disk_readings",
+    "heartbeats",
+    "events",
+    "scores",
+    "source_last_good",
+    "trust",
+    "acknowledgements",
+    "device_source_trust",
+    "print_jobs",
+    "printer_ip_map",
+    "net_snapshots",
+    "devices",
+    "heartbeat_rollup_daily",
+    "event_rollup_daily",
+    "rule_episodes",
+    "raw_archive",
+)
+
+_SECONDS_PER_DAY = 86_400
+
+
+def _delete_device_rows(conn: sqlite3.Connection, device_id: str) -> None:
+    """Delete every row for *device_id* across all per-device tables."""
+    for table in _DEVICE_TABLES:
+        # B608: table names are fixed module literals, never user input.
+        conn.execute(f"DELETE FROM {table} WHERE device_id=?", (device_id,))  # nosec B608
+    # net_devices rows are MAC-keyed network nodes, NOT agent-owned -- so they are
+    # deliberately absent from _DEVICE_TABLES. Clear the soft agent FK instead of
+    # deleting the node: a purged agent leaves no dangling link (cleanup-not-
+    # continuity) while the network node itself survives.
+    conn.execute("UPDATE net_devices SET device_id=NULL WHERE device_id=?", (device_id,))
+
+
+def delete_device(device_id: str) -> bool:
+    """Remove a device and ALL its data in one transaction.
+
+    Returns True if the device existed (so a route can answer 404 otherwise).
+    """
+    with _lock, _connect() as conn:
+        existed = (
+            conn.execute("SELECT 1 FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            is not None
+        )
+        _delete_device_rows(conn, device_id)
+    return existed
+
+
+def count_devices() -> int:
+    """Number of rows in ``devices`` (fleet size for the public-build limit)."""
+    with _connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0])
+
+
+def device_known(device_id: str) -> bool:
+    """Whether *device_id* already has a ``devices`` row (an existing agent is never gated)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM devices WHERE device_id=?", (device_id,)).fetchone()
+        return row is not None
+
+
+def purge_devices_silent_for(days: int, *, dry_run: bool = False) -> dict[str, Any]:
+    """Delete devices whose server-stamped ``last_seen`` is older than *days*.
+
+    ``last_seen`` is the server receipt time (W0.2), so silence is judged on the
+    server clock, never the client's. ``dry_run=True`` returns the candidate ids
+    without deleting (preview for the dashboard / for logging). A device whose
+    ``last_seen`` is absent or unparseable is left untouched -- we never delete
+    what we cannot age-judge.
+    """
+    if days < 0:
+        raise ValueError("days must be >= 0")
+    cutoff_sec = days * _SECONDS_PER_DAY
+    with _lock, _connect() as conn:
+        rows = conn.execute("SELECT device_id, last_seen FROM devices").fetchall()
+        ids = [
+            r["device_id"]
+            for r in rows
+            if (age := _age_seconds(r["last_seen"])) is not None and age >= cutoff_sec
+        ]
+        if not dry_run:
+            for device_id in ids:
+                _delete_device_rows(conn, device_id)
+    return {"count": len(ids), "device_ids": ids, "deleted": not dry_run}
+
+
+def purge_net_devices_eligible(*, dry_run: bool = False) -> dict[str, Any]:
+    """D3: delete net_devices ghosts that finished their ``eligible_purge`` grace
+    period (§3.13 ``changes.stale_lifecycle``, 30 days of no evidence) -- the
+    verdict was only ever being SET, never acted on, so the map grew forever.
+
+    Only rows with no agent/printer FK are removed (``device_id IS NULL AND
+    printer_id IS NULL``): an FK-linked row's fate belongs to the agent/printer
+    ghost sweep, never here. Children are deleted via ``_delete_net_device_rows``
+    (net_interfaces, net_links, net_device_readings, net_routes); ``net_changes``
+    and the topology-snapshot journal are kept (history). ``dry_run=True``
+    previews the candidate nids without deleting anything.
+    """
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_nid FROM net_devices "
+            "WHERE status='eligible_purge' AND device_id IS NULL AND printer_id IS NULL"
+        ).fetchall()
+        nids = [r["device_nid"] for r in rows]
+        if not dry_run:
+            for nid in nids:
+                _delete_net_device_rows(conn, nid)
+                conn.execute("DELETE FROM net_devices WHERE device_nid=?", (nid,))
+    return {"count": len(nids), "device_nids": nids, "deleted": not dry_run}
+
+
+# --------------------------------------------------------------------------- #
+# Reads
+# --------------------------------------------------------------------------- #
+def _load(conn: sqlite3.Connection, table: str, device_id: str) -> Optional[dict]:
+    row = conn.execute(
+        # B608: {table} is a fixed module literal, never user input.
+        f"SELECT ts, payload FROM {table} WHERE device_id=?",  # nosec B608
+        (device_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"ts": row["ts"], **json.loads(row["payload"])}
+
+
+def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dict]:
+    """Newest historical reading for a device (append-only -> order by id desc)."""
+    row = conn.execute(
+        "SELECT ts, payload FROM historical WHERE device_id=? ORDER BY id DESC LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"ts": row["ts"], **json.loads(row["payload"])}
+
+
+# Liveness-пинг агента идёт каждые ~300 с (client/config.py liveness_interval_sec),
+# так что 2 пропущенных пинга = offline (~10 минут вместо прежних ~8.25 ч на
+# 4-часовом телеметрийном каденсе). Порог настраивается: server/config.json
+# "stale_after_sec" -> set_stale_threshold() при старте (main.create_app).
+# Это dashboard-only сигнал (fleet "stale" flag + KPI); он НЕ питает trust-гейт
+# (per-source trust-порог живёт отдельно в server/trust/gate.py).
+_AGENT_CADENCE_SEC = 14400  # полный телеметрийный цикл (справочно)
+_DEFAULT_STALE_AFTER_SEC = 600
+_STALE_AFTER_SEC = _DEFAULT_STALE_AFTER_SEC
+STALE_AFTER_SEC = _STALE_AFTER_SEC  # public alias for dashboard
+
+
+def set_stale_threshold(seconds: int) -> None:
+    """Применить порог offline из server/config.json (вызывается при старте)."""
+    global _STALE_AFTER_SEC, STALE_AFTER_SEC
+    _STALE_AFTER_SEC = max(60, int(seconds))
+    STALE_AFTER_SEC = _STALE_AFTER_SEC
+
+
+NEUTRAL_NAME = "Без названия"
+
+
+def display_name(
+    hostname: Optional[str],
+    *,
+    model: Optional[str] = None,
+    chassis: Optional[str] = None,
+    ip: Optional[str] = None,
+    device_id: Optional[str] = None,
+    disambiguate: bool = False,
+) -> str:
+    """Единственный источник операторского имени устройства.
+
+    Приоритет: hostname -> model -> chassis -> ip -> «Без названия». device_id
+    НИКОГДА не возвращается как имя (технический ID путает оператора) -- в
+    disambiguate-режиме (списки/таблицы, где несколько пустых имён иначе
+    сливаются в одну неразличимую строку «Без названия») к нему добавляется
+    короткий суффикс id.
+    """
+    for candidate in (hostname, model, chassis, ip):
+        text = (candidate or "").strip()
+        if text:
+            return text
+    if disambiguate and device_id:
+        return f"{NEUTRAL_NAME} ({device_id[-6:]})"
+    return NEUTRAL_NAME
+
+
+def _find_net_device(
+    conn: sqlite3.Connection,
+    *,
+    device_id: Optional[str],
+    printer_id: Optional[str],
+    nid: Optional[str],
+    mac: Optional[str],
+    ip: Optional[str],
+) -> Optional[sqlite3.Row]:
+    """net_devices по первому сработавшему ключу: nid > device_id > printer_id >
+    mac > ip. Column names are a fixed local tuple (never user input)."""
+
+    candidates = (
+        ("device_nid", nid),
+        ("device_id", device_id),
+        ("printer_id", printer_id),
+        ("mac", normalize_mac(mac) if mac else None),
+        ("ip", ip),
+    )
+    for column, value in candidates:
+        if not value:
+            continue
+        # ORDER BY last_seen DESC: a device_id/mac can legitimately match more than
+        # one net_devices row (dual-NIC agent) -- pick the freshest, not whatever
+        # SQLite happens to return first, and stay consistent with get_devices()'s
+        # own most-recent-wins pick for the fleet IP column.
+        row = conn.execute(
+            f"SELECT * FROM net_devices WHERE {column}=? ORDER BY last_seen DESC LIMIT 1",  # nosec B608 -- column from fixed tuple above, never user input
+            (value,),
+        ).fetchone()
+        if row is not None:
+            return row
+    return None
+
+
+def get_identity_card(
+    *,
+    device_id: Optional[str] = None,
+    printer_id: Optional[str] = None,
+    nid: Optional[str] = None,
+    mac: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Единая карточка идентичности по ЛЮБОМУ ключу (read-only, дедупликации
+    JOIN'ов между вкладками -- З.3): agent(devices) + printer(printers) +
+    net_device(net_devices) знания дополняют друг друга, fill-empty с
+    приоритетом agent > printer > net (модули дополняют, не перезаписывают).
+    """
+    with _connect() as conn:
+        net = _find_net_device(
+            conn, device_id=device_id, printer_id=printer_id, nid=nid, mac=mac, ip=ip
+        )
+        if net is not None:
+            device_id = device_id or net["device_id"]
+            printer_id = printer_id or net["printer_id"]
+        dev = (
+            conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            if device_id
+            else None
+        )
+        prn = (
+            conn.execute("SELECT * FROM printers WHERE printer_id=?", (printer_id,)).fetchone()
+            if printer_id
+            else None
+        )
+    if dev is None and prn is None and net is None:
+        return None
+    # dict(row), not sqlite3.Row directly: Row's `in` operator tests membership
+    # among VALUES, not column names (it's a sequence, not a mapping), so a
+    # naive `field in row` would silently misbehave on tables missing a column
+    # (e.g. `devices` has no `ip`/`mac`/`vendor`/`serial`/`status`).
+    agent_row = dict(dev) if dev is not None else None
+    if agent_row is not None:
+        # devices stores this under `manufacturer`, not `vendor` -- alias it so
+        # the agent layer actually participates in the vendor merge below.
+        agent_row["vendor"] = agent_row.get("manufacturer")
+    layers: list[tuple[str, Optional[dict[str, Any]]]] = [
+        ("agent", agent_row),
+        ("printer", dict(prn) if prn is not None else None),
+        ("net", dict(net) if net is not None else None),
+    ]
+    card: dict[str, Any] = {
+        "device_id": device_id,
+        "printer_id": printer_id,
+        "net_nid": net["device_nid"] if net is not None else None,
+        "sources": [name for name, row in layers if row is not None],
+    }
+    for field in ("hostname", "ip", "mac", "vendor", "model", "serial", "status", "chassis"):
+        value = None
+        for _, row in layers:
+            if row is not None and row.get(field):
+                value = row[field]
+                break
+        card[field] = value
+    seen_ts = [row["last_seen"] for _, row in layers if row is not None and row.get("last_seen")]
+    card["last_seen"] = max(seen_ts) if seen_ts else None
+    card["display_name"] = display_name(
+        card["hostname"],
+        model=card["model"],
+        chassis=card["chassis"],
+        ip=card["ip"],
+        device_id=device_id,
+    )
+    return card
+
+
+_CERT_SOON_DAYS = 30  # certificate expiring within 30 days is flagged
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _age_seconds(iso: Optional[str]) -> Optional[int]:
+    dt = _parse_iso(iso)
+    return None if dt is None else int((datetime.now(timezone.utc) - dt).total_seconds())
+
+
+def age_seconds(iso: Optional[str]) -> Optional[int]:
+    """Public wrapper for dashboard / routes."""
+    return _age_seconds(iso)
+
+
+def _days_until(iso: Optional[str]) -> Optional[int]:
+    dt = _parse_iso(iso)
+    return None if dt is None else (dt - datetime.now(timezone.utc)).days
+
+
+def _risk_alerts(risk: dict[str, Any]) -> tuple[Optional[str], int, int]:
+    """(device_trust, count of UNKNOWN domains, count of regressed sources)."""
+    domains = risk.get("domains") or {}
+    unknown = sum(1 for d in domains.values() if d.get("state") == "unknown")
+    regressed = len(risk.get("regressed_sources") or [])
+    return risk.get("device_trust"), unknown, regressed
+
+
+def _cert_summary(hist_payload: Optional[str]) -> tuple[Optional[int], bool]:
+    """(min days-to-expiry across active machine + personal certs, any expiring < 30d).
+
+    Folds both machine certs (``certificates``, seen by the SYSTEM agent) and the
+    tray-spooled personal certs (``user_certificates``) so the fleet column matches
+    the per-cert blocks on the device card; the soonest expiry wins.
+    """
+    if not hist_payload:
+        return None, False
+    try:
+        payload = json.loads(hist_payload)
+        certs = (payload.get("certificates") or []) + (payload.get("user_certificates") or [])
+    except (ValueError, AttributeError):
+        return None, False
+    # Only active (not-yet-expired) certs; expired ones are excluded from the fleet column.
+    days = [d for d in (_days_until(c.get("not_after")) for c in certs) if d is not None and d >= 0]
+    if not days:
+        return None, False
+    lo = min(days)
+    return lo, lo < _CERT_SOON_DAYS
+
+
+def set_ack(device_id: str, note: str, ts: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO acknowledgements (device_id, note, acked_at) VALUES (?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET note=excluded.note, acked_at=excluded.acked_at
+            """,
+            (device_id, note, ts),
+        )
+
+
+def get_ack(device_id: str) -> Optional[dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT note, acked_at FROM acknowledgements WHERE device_id=?", (device_id,)
+        ).fetchone()
+    return {"note": row["note"], "acked_at": row["acked_at"]} if row else None
+
+
+def _primary_ip(hist_payload: Optional[str]) -> Optional[str]:
+    """First IPv4 of the device's primary adapter (fleet IP column, display-only).
+
+    Read from the latest historical payload's ``network_adapters``; only RFC1918
+    addresses ever leave the agent, so this is local-LAN context, not PII.
+    """
+    if not hist_payload:
+        return None
+    try:
+        payload = json.loads(hist_payload)
+    except (ValueError, TypeError):
+        return None
+    for adapter in (payload.get("network_adapters") or [])[:64]:
+        if not isinstance(adapter, dict):
+            continue
+        for ip in adapter.get("ipv4") or []:
+            if isinstance(ip, str) and ip:
+                return ip
+    return None
+
+
+def get_devices() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT d.device_id, d.hostname, d.model, d.chassis, d.agent_version,
+                   d.first_seen, d.last_seen,
+                   d.site_code, d.site_name, d.org_code, d.dept_code, d.comment,
+                   d.comment_operator,
+                   d.owner_full_name, d.owner_position, d.owner_phone,
+                   d.owner_full_name_operator, d.owner_position_operator, d.owner_phone_operator,
+                   d.department, d.last_reported_ts, d.clock_drift_sec,
+                   d.update_state, d.update_error, d.update_checked_at,
+                   d.update_available_version,
+                   d.version_changed_at,
+                   s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
+                   s.ts AS score_ts,
+                   h.payload AS hist_payload,
+                   a.note AS ack_note, a.acked_at AS ack_at,
+                   nd.ip AS net_ip
+            FROM devices d
+            LEFT JOIN scores s ON s.device_id = d.device_id
+              AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
+            LEFT JOIN historical h ON h.device_id = d.device_id
+              AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+            LEFT JOIN acknowledgements a ON a.device_id = d.device_id
+            LEFT JOIN (
+              SELECT device_id, ip FROM (
+                SELECT device_id, ip,
+                  ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY last_seen DESC) AS rn
+                FROM net_devices WHERE device_id IS NOT NULL
+              ) WHERE rn = 1
+            ) nd ON nd.device_id = d.device_id
+            ORDER BY COALESCE(s.risk_exposure, 0) DESC, d.last_seen DESC
+            """
+        ).fetchall()
+    out = []
+    for r in rows:
+        risk = _load_risk(r["risk"])
+        device_trust, unknown_domains, regressed_count = _risk_alerts(risk)
+        cert_min_days, cert_expiring = _cert_summary(r["hist_payload"])
+        age = _age_seconds(r["last_seen"])
+        worsening_count, trajectory_risk = _trajectory_summary(risk)
+        out.append(
+            {
+                "device_id": r["device_id"],
+                "hostname": r["hostname"],
+                "display_name": display_name(
+                    r["hostname"],
+                    model=r["model"],
+                    chassis=r["chassis"],
+                    device_id=r["device_id"],
+                    disambiguate=True,
+                ),
+                "model": r["model"],
+                "chassis": r["chassis"],
+                "agent_version": r["agent_version"],
+                # first_seen питает бейдж/KPI «новых ≤7д» (_is_recent) -- он же
+                # маркирует свежую установку рядом со скрытым дублем-призраком.
+                "first_seen": r["first_seen"],
+                "last_seen": r["last_seen"],
+                "last_seen_age_sec": age,
+                # Карта сети знает IP там, где редкий телеметрийный цикл ещё не
+                # прислал historical (З.3: вкладки дополняют друг друга).
+                "local_ip": _primary_ip(r["hist_payload"]) or r["net_ip"],
+                "stale": age is not None and age > _STALE_AFTER_SEC,
+                "last_reported_ts": r["last_reported_ts"],
+                "clock_drift_sec": r["clock_drift_sec"],
+                "clock_drift": r["clock_drift_sec"] is not None
+                and abs(r["clock_drift_sec"]) > _CLOCK_DRIFT_FLAG_SEC,
+                "site_code": r["site_code"],
+                "site_name": r["site_name"],
+                "org_code": r["org_code"],
+                "dept_code": r["dept_code"],
+                "comment": r["comment_operator"] or r["comment"],
+                "owner_full_name": r["owner_full_name_operator"] or r["owner_full_name"],
+                "owner_position": r["owner_position_operator"] or r["owner_position"],
+                "owner_phone": r["owner_phone_operator"] or r["owner_phone"],
+                "department": r["department"],
+                "update_state": r["update_state"],
+                "update_error": r["update_error"],
+                "update_checked_at": r["update_checked_at"],
+                "update_available_version": r["update_available_version"],
+                "version_changed_at": r["version_changed_at"],
+                "performance": r["performance"],
+                "reliability": r["reliability"],
+                "wear": r["wear"],
+                "risk_exposure": r["risk_exposure"],
+                # ssd3 Ф7: the coordinate-model verdict (index/state/dominant) the
+                # fleet table now shows instead of the four flat scores. Raw here;
+                # the read-side staleness overlay is applied at the web layer
+                # (dashboard._enrich_fleet), never baked into the stored blob.
+                "health": risk.get("health") if isinstance(risk, dict) else None,
+                "score_ts": r["score_ts"],
+                "top_risk": _top_risk(risk),
+                "device_trust": device_trust,
+                "unknown_domains": unknown_domains,
+                "regressed_count": regressed_count,
+                "cert_min_days": cert_min_days,
+                "cert_expiring": cert_expiring,
+                "worsening_count": worsening_count,
+                "trajectory_risk": trajectory_risk,
+                "ack": {"note": r["ack_note"], "acked_at": r["ack_at"]} if r["ack_at"] else None,
+            }
+        )
+    return out
+
+
+def _top_risk(risk: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """P0-5 (stoperrors.md): a gate-failed class carries probability=None --
+    max() over that mixed with real floats crashes (`>` unsupported), and a
+    withheld class must never be picked as "top" (no number to report)."""
+    classes = risk.get("classes") if isinstance(risk, dict) else None
+    if not classes:
+        return None
+    scored = [c for c in classes if c.get("probability") is not None]
+    if not scored:
+        return None
+    top = max(scored, key=lambda c: c["probability"])
+    return {"name": top.get("name"), "probability": top.get("probability")}
+
+
+def _trajectory_summary(risk: dict[str, Any]) -> tuple[int, Optional[float]]:
+    """(count of worsening trajectory axes, trajectory_risk score 0-100 | None)."""
+    trajectory = risk.get("trajectory") or {}
+    worsening = sum(
+        1 for v in trajectory.values() if isinstance(v, dict) and v.get("direction") == "worsening"
+    )
+    score100 = risk.get("score100") if isinstance(risk, dict) else None
+    traj = (score100 or {}).get("trajectory_risk") if isinstance(score100, dict) else None
+    traj_risk: Optional[float] = traj.get("value") if isinstance(traj, dict) else None
+    return worsening, traj_risk
+
+
+def get_device(device_id: str) -> Optional[dict[str, Any]]:
+    with _connect() as conn:
+        d = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+        if d is None:
+            return None
+        inventory = _load(conn, "inventory", device_id)
+        historical = _latest_historical(conn, device_id)
+        hb_row = conn.execute(
+            "SELECT ts, payload FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT 1",
+            (device_id,),
+        ).fetchone()
+        latest_hb = {"ts": hb_row["ts"], **json.loads(hb_row["payload"])} if hb_row else None
+        ev_rows = conn.execute(
+            """SELECT ts, log, source, event_id, level, message
+               FROM events WHERE device_id=? ORDER BY id DESC LIMIT 50""",
+            (device_id,),
+        ).fetchall()
+        s = conn.execute(
+            "SELECT * FROM scores WHERE device_id=? ORDER BY id DESC LIMIT 1", (device_id,)
+        ).fetchone()
+
+    scores = None
+    if s is not None:
+        scores = {
+            "ts": s["ts"],
+            "performance": s["performance"],
+            "reliability": s["reliability"],
+            "wear": s["wear"],
+            "risk_exposure": s["risk_exposure"],
+            "risk": _load_risk(s["risk"]),
+        }
+    return {
+        "device_id": d["device_id"],
+        "hostname": d["hostname"],
+        "manufacturer": d["manufacturer"],
+        "model": d["model"],
+        "chassis": d["chassis"],
+        "site_code": d["site_code"],
+        "site_name": d["site_name"],
+        "org_code": d["org_code"],
+        "dept_code": d["dept_code"],
+        "comment": d["comment_operator"] or d["comment"],
+        "owner_full_name": d["owner_full_name_operator"] or d["owner_full_name"],
+        "owner_position": d["owner_position_operator"] or d["owner_position"],
+        "owner_phone": d["owner_phone_operator"] or d["owner_phone"],
+        "agent_version": d["agent_version"],
+        "update_state": d["update_state"],
+        "update_error": d["update_error"],
+        "update_checked_at": d["update_checked_at"],
+        "update_available_version": d["update_available_version"],
+        "version_changed_at": d["version_changed_at"],
+        "first_seen": d["first_seen"],
+        "last_seen": d["last_seen"],
+        "last_reported_ts": d["last_reported_ts"],
+        "clock_drift_sec": d["clock_drift_sec"],
+        "clock_drift": d["clock_drift_sec"] is not None
+        and abs(d["clock_drift_sec"]) > _CLOCK_DRIFT_FLAG_SEC,
+        "inventory": inventory,
+        "historical": historical,
+        "latest_heartbeat": latest_hb,
+        "events": [dict(r) for r in ev_rows],
+        "scores": scores,
+        "department": d["department"],
+        "ack": get_ack(device_id),
+    }
+
+
+def get_inventory(device_id: str) -> Optional[dict]:
+    with _connect() as conn:
+        return _load(conn, "inventory", device_id)
+
+
+def get_historical(device_id: str) -> Optional[dict]:
+    with _connect() as conn:
+        return _latest_historical(conn, device_id)
+
+
+def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
+    """Historical readings for a device, newest-first (append-only time series)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, clock_drift_sec, payload
+               FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?""",
+            (device_id, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "clock_drift_sec": r["clock_drift_sec"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
+
+
+def get_score_series(device_id: str, limit: int = 100, since: Optional[str] = None) -> list[dict]:
+    """Computed scores for a device, newest-first (append-only time series).
+
+    since (ISO ts, optional): when given, only rows with ts >= since are
+    returned -- lets a caller guarantee a *time* span (e.g. Ф8's rule-outcome
+    windows) instead of a row count that may or may not cover enough days at
+    this device's telemetry cadence. None preserves the exact prior behavior
+    (all existing callers pass no `since` and are unaffected byte-for-byte)."""
+    with _connect() as conn:
+        return _score_series_conn(conn, device_id, limit, since)
+
+
+def _score_series_conn(
+    conn: sqlite3.Connection, device_id: str, limit: int, since: Optional[str]
+) -> list[dict]:
+    """Тело get_score_series на ГОТОВОМ соединении (см. run_rulestats_scan)."""
+    rows = conn.execute(
+        """SELECT ts, performance, reliability, wear, risk_exposure, risk
+           FROM scores WHERE device_id=? AND (? IS NULL OR ts>=?)
+           ORDER BY id DESC LIMIT ?""",
+        (device_id, since, since, limit),
+    ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "performance": r["performance"],
+            "reliability": r["reliability"],
+            "wear": r["wear"],
+            "risk_exposure": r["risk_exposure"],
+            "risk": _load_risk(r["risk"]),
+        }
+        for r in rows
+    ]
+
+
+def _load_risk(raw: Optional[str]) -> dict[str, Any]:
+    """risk-JSON строки серии; битая/не-dict строка -> {} (ревью 2026-08-27:
+    одна повреждённая строка не должна ронять спарклайны/тренды устройства)."""
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def get_recent_heartbeats(device_id: str, limit: int = 20) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, clock_drift_sec, payload
+               FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT ?""",
+            (device_id, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "clock_drift_sec": r["clock_drift_sec"],
+            **json.loads(r["payload"]),
+        }
+        for r in rows
+    ]
+
+
+def _loads_json_list(raw: Optional[str]) -> list[Any]:
+    """Parse a stored JSON list column; missing/empty/corrupt -> [] (never raises)."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def get_network_snapshots() -> list[dict[str, Any]]:
+    """Latest network snapshot per device (map + subnet-anomaly read side, D7).
+
+    o5-B3: reads the narrow net_snapshots projection (written on every
+    ``historical`` ingest by store_net_snapshot) instead of json.loads-ing each
+    device's full historical payload -- one indexed JOIN, five small json.loads
+    calls, no fleet-wide JSON scan. Devices with no net_snapshots row, or whose
+    five lists are all empty, are skipped (same contract as before).
+
+    D2: also carries ``snapshot_at`` (the snapshot ROW's own ``ts``, i.e. when
+    the agent captured this ARP/neighbour data) alongside ``last_seen`` (the
+    agent's own heartbeat time) -- a derived neighbour must be stamped with the
+    former, never the latter (an agent can heartbeat for hours after its last
+    ARP snapshot went stale).
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT d.device_id, d.hostname, d.site_code, d.site_name, d.last_seen,
+                   n.ts AS snapshot_at,
+                   n.adapters, n.neighbors, n.quality, n.routes, n.lan_hints
+            FROM devices d
+            JOIN net_snapshots n ON n.device_id = d.device_id
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        adapters = _loads_json_list(r["adapters"])
+        neighbors = _loads_json_list(r["neighbors"])
+        quality = _loads_json_list(r["quality"])
+        routes = _loads_json_list(r["routes"])
+        lan_hints = _loads_json_list(r["lan_hints"])
+        if not (adapters or neighbors or quality or routes or lan_hints):
+            continue
+        out.append(
+            {
+                "device_id": r["device_id"],
+                "hostname": r["hostname"],
+                "site_code": r["site_code"],
+                "site_name": r["site_name"],
+                "last_seen": r["last_seen"],
+                "snapshot_at": r["snapshot_at"],
+                "adapters": adapters,
+                "neighbors": neighbors,
+                "quality": quality,
+                "routes": routes,
+                "lan_hints": lan_hints,
+            }
+        )
+    return out
+
+
+def get_printer_port_hints() -> list[dict[str, Any]]:
+    """Latest spooler printer-port hints across the fleet (read side for discovery).
+
+    Mirrors get_network_snapshots: one fleet query (latest-by-id), extract the
+    additive ``printer_ports`` list from each device's newest historical payload.
+    Returns a flat list of ``{name, ip}``; cross-device duplicates are expected
+    (many agents print to one printer) and are deduped later in discovery.merge.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT h.payload AS hist_payload
+            FROM devices d
+            JOIN historical h ON h.device_id = d.device_id
+              AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        # Read-side cap mirrors the contract max_length (shared.schema
+        # PRINTER_PORTS_MAX): one bloated payload must not slow discovery.
+        for p in (payload.get("printer_ports") or [])[:256]:
+            if isinstance(p, dict) and p.get("ip"):
+                out.append({"name": p.get("name"), "ip": p.get("ip")})
+    return out
+
+
+def store_printer_ip_hints(device_id: str, hints: list[dict[str, Any]]) -> int:
+    """Upsert a device's spooler (queue-name -> printer-IP) hints into printer_ip_map.
+
+    Called on every ``historical`` ingest (the hints ride in HistoricalPayload).
+    RFC1918-revalidated; non-routable/empty/oversized entries are skipped. Returns
+    the number of mappings written. The map is the read side for print-view IP
+    resolution; it never feeds trust or scoring.
+    """
+    if not device_id or not isinstance(hints, list) or not hints:
+        return 0
+    now = _now_iso()
+    rows: list[tuple[str, str, str, str]] = []
+    for hint in hints[:_PRINTER_PORTS_CAP]:
+        cleaned = _clean_port_hint(hint)
+        if cleaned is not None:
+            rows.append((device_id, cleaned[0], cleaned[1], now))
+    if not rows:
+        return 0
+    with _lock, _connect() as conn:
+        existing = {
+            r[0]
+            for r in conn.execute(
+                "SELECT printer FROM printer_ip_map WHERE device_id=?", (device_id,)
+            )
+        }
+        new_keys = {r[1] for r in rows} - existing
+        allowed_new = max(0, _MAX_PRINTER_KEYS_PER_DEVICE - len(existing))
+        blocked = set(sorted(new_keys)[allowed_new:])  # существующие всегда обновляются
+        rows = [r for r in rows if r[1] not in blocked]
+        if not rows:
+            return 0
+        conn.executemany(_PIM_UPSERT, rows)
+    return len(rows)
+
+
+def iter_printer_port_map() -> list[dict[str, Any]]:
+    """Per-device spooler hints from each device's newest historical payload:
+    ``[{device_id, name, ip}]`` (RFC1918 ip only). Unlike get_printer_port_hints
+    (fleet-flat, device-less, for discovery), this keeps device_id+name so print
+    views resolve (device_id, queue-name) -> printer IP. Offline/diagnostic
+    (full-fleet JSON scan); per-request resolution uses get_printer_ip (indexed)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, payload AS hist_payload FROM historical "
+            "WHERE id IN (SELECT MAX(id) FROM historical GROUP BY device_id)"
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        for hint in (payload.get("printer_ports") or [])[:_PRINTER_PORTS_CAP]:
+            cleaned = _clean_port_hint(hint)
+            if cleaned is not None:
+                out.append({"device_id": r["device_id"], "name": cleaned[0], "ip": cleaned[1]})
+    return out
+
+
+def get_printer_ip(device_id: str, printer: str) -> Optional[str]:
+    """Resolved printer IP for a (device, queue-name), or None when unknown
+    (WSD/USB/shared queue, or no hint received yet)."""
+    if not device_id or not printer:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ip FROM printer_ip_map WHERE device_id=? AND printer=?",
+            (device_id, printer),
+        ).fetchone()
+    return row["ip"] if row else None
+
+
+def _backfill_printer_ip_map(conn: sqlite3.Connection) -> None:
+    """Populate printer_ip_map from existing historical payloads (idempotent).
+
+    Runs once inside init_db so an already-running fleet resolves printer IPs
+    immediately on upgrade, without waiting for the next historical sweep. Uses the
+    caller's connection/transaction.
+    """
+    rows = conn.execute(
+        "SELECT device_id, payload AS hist_payload FROM historical "
+        "WHERE id IN (SELECT MAX(id) FROM historical GROUP BY device_id)"
+    ).fetchall()
+    now = _now_iso()
+    batch: list[tuple[str, str, str, str]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        for hint in (payload.get("printer_ports") or [])[:_PRINTER_PORTS_CAP]:
+            cleaned = _clean_port_hint(hint)
+            if cleaned is not None:
+                batch.append((r["device_id"], cleaned[0], cleaned[1], now))
+    if batch:
+        conn.executemany(_PIM_UPSERT, batch)
+
+
+def backfill_printer_ip_map() -> None:
+    """Public one-shot backfill (opens its own transaction). init_db runs the
+    internal variant with its own connection."""
+    with _lock, _connect() as conn:
+        _backfill_printer_ip_map(conn)
+
+
+def store_net_snapshot(device_id: str, ts: str, payload: dict[str, Any]) -> None:
+    """Upsert the device's narrow network projection into net_snapshots.
+
+    Called on every ``historical`` ingest (same trigger as store_printer_ip_hints).
+    Extracts the five map-relevant lists straight from the raw payload with the
+    same read-side caps get_network_snapshots used to apply after a full
+    json.loads -- the caps now bound what gets written, so the read side is a
+    plain indexed SELECT instead of a fleet-wide JSON scan.
+    """
+    if not device_id:
+        return
+    adapters = _json_c((payload.get("network_adapters") or [])[:_NET_ADAPTERS_CAP])
+    neighbors = _json_c((payload.get("network_neighbors") or [])[:_NET_NEIGHBORS_CAP])
+    quality = _json_c((payload.get("network_quality") or [])[:_NET_QUALITY_CAP])
+    routes = _json_c((payload.get("network_routes") or [])[:_NET_ROUTES_CAP])
+    lan_hints = _json_c((payload.get("lan_hints") or [])[:_NET_LAN_HINTS_CAP])
+    with _lock, _connect() as conn:
+        conn.execute(
+            _NET_SNAP_UPSERT, (device_id, ts, adapters, neighbors, quality, routes, lan_hints)
+        )
+
+
+def _backfill_net_snapshots(conn: sqlite3.Connection) -> None:
+    """Populate net_snapshots from existing historical payloads (idempotent).
+
+    Mirrors _backfill_printer_ip_map: runs once inside init_db so an
+    already-running fleet gets the projection immediately on upgrade, without
+    waiting for the next historical sweep. Only fills devices missing from
+    net_snapshots; uses the caller's connection/transaction.
+    """
+    rows = conn.execute(
+        """
+        SELECT h.device_id, h.ts, h.payload AS hist_payload
+        FROM historical h
+        JOIN (SELECT device_id, MAX(id) AS id FROM historical GROUP BY device_id) latest
+          ON latest.device_id = h.device_id AND latest.id = h.id
+        WHERE h.device_id NOT IN (SELECT device_id FROM net_snapshots)
+        """
+    ).fetchall()
+    batch: list[tuple[str, str, str, str, str, str, str]] = []
+    for r in rows:
+        payload = json.loads(r["hist_payload"]) if r["hist_payload"] else {}
+        batch.append(
+            (
+                r["device_id"],
+                r["ts"],
+                _json_c((payload.get("network_adapters") or [])[:_NET_ADAPTERS_CAP]),
+                _json_c((payload.get("network_neighbors") or [])[:_NET_NEIGHBORS_CAP]),
+                _json_c((payload.get("network_quality") or [])[:_NET_QUALITY_CAP]),
+                _json_c((payload.get("network_routes") or [])[:_NET_ROUTES_CAP]),
+                _json_c((payload.get("lan_hints") or [])[:_NET_LAN_HINTS_CAP]),
+            )
+        )
+    if batch:
+        conn.executemany(_NET_SNAP_UPSERT, batch)
+
+
+def _supply_low_pct(supplies: list[dict[str, Any]]) -> Optional[int]:
+    """Lowest consumed-supply percent (toner/ink running out); None if unknown."""
+    pcts = [
+        s["percent"]
+        for s in supplies
+        if isinstance(s, dict)
+        and s.get("class_") == "consumed"
+        and isinstance(s.get("percent"), int)
+    ]
+    return min(pcts) if pcts else None
+
+
+def get_printers() -> list[dict[str, Any]]:
+    """Latest inventory for every known printer + a small live summary.
+
+    One query (the printers row plus its newest reading detail, the same
+    latest-by-id shape as get_devices). ``online``/``error_count``/``low_supply_pct``
+    are derived from the newest reading's JSON detail.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.printer_id, p.ip, p.hostname, p.mac, p.vendor, p.model,
+                   p.serial, p.status, p.total_pages, p.first_seen, p.last_seen,
+                   r.detail AS detail
+            FROM printers p
+            LEFT JOIN printer_readings r ON r.printer_id = p.printer_id
+              AND r.id = (SELECT MAX(id) FROM printer_readings WHERE printer_id = p.printer_id)
+            ORDER BY COALESCE(p.hostname, p.ip, p.printer_id)
+            """
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        detail = json.loads(r["detail"]) if r["detail"] else {}
+        supplies = detail.get("supplies") or []
+        errors = detail.get("errors") or []
+        out.append(
+            {
+                "printer_id": r["printer_id"],
+                "ip": r["ip"],
+                "hostname": r["hostname"],
+                "mac": r["mac"],
+                "vendor": r["vendor"],
+                "model": r["model"],
+                "serial": r["serial"],
+                "status": r["status"],
+                "total_pages": r["total_pages"],
+                "first_seen": r["first_seen"],
+                "last_seen": r["last_seen"],
+                "online": bool(detail.get("online")),
+                "error_count": len(errors),
+                "low_supply_pct": _supply_low_pct(supplies),
+                "sources": detail.get("sources") or [],
+            }
+        )
+    return out
+
+
+def get_printer(printer_id: str) -> Optional[dict[str, Any]]:
+    """Full latest snapshot for one printer (inventory row + newest reading detail).
+
+    Scalar inventory (status/total_pages/vendor/...) comes from the COALESCEd
+    printers row (survives a transient unreachable poll); supplies/trays/errors
+    and ``online`` come from the newest reading's detail.
+    """
+    with _connect() as conn:
+        prow = conn.execute("SELECT * FROM printers WHERE printer_id=?", (printer_id,)).fetchone()
+        if prow is None:
+            return None
+        drow = conn.execute(
+            "SELECT detail FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT 1",
+            (printer_id,),
+        ).fetchone()
+    detail = json.loads(drow["detail"]) if drow and drow["detail"] else {}
+    return {
+        "printer_id": prow["printer_id"],
+        "ip": prow["ip"],
+        "hostname": prow["hostname"],
+        "mac": prow["mac"],
+        "vendor": prow["vendor"],
+        "model": prow["model"],
+        "serial": prow["serial"],
+        "status": prow["status"],
+        "total_pages": prow["total_pages"],
+        "first_seen": prow["first_seen"],
+        "last_seen": prow["last_seen"],
+        "online": bool(detail.get("online")),
+        "firmware": detail.get("firmware"),
+        "uptime": detail.get("uptime"),
+        "color_pages": detail.get("color_pages"),
+        "mono_pages": detail.get("mono_pages"),
+        "duplex_pages": detail.get("duplex_pages"),
+        "supplies": detail.get("supplies") or [],
+        "trays": detail.get("trays") or [],
+        "errors": detail.get("errors") or [],
+        "sources": detail.get("sources") or [],
+        "source_protocol": detail.get("source_protocol"),
+    }
+
+
+_IPP_JOBS_KEEP = 200  # per printer; the IPP job buffer is short, this history is supplementary
+
+
+def store_printer_ipp_jobs(
+    printer_id: str, jobs: list[dict[str, Any]], *, received_at: str
+) -> None:
+    """Upsert completed IPP jobs (idempotent on (printer_id, job_id)) + prune.
+
+    COALESCE-preserve mirrors printer_readings identity fields: a later sweep
+    that re-reports the same job_id with a blank field must not wipe a
+    previously-known value.
+    """
+    if not jobs:
+        return
+    with _lock, _connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO printer_ipp_jobs
+              (printer_id, job_id, name, user_name, impressions, received_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(printer_id, job_id) DO UPDATE SET
+              name        = COALESCE(excluded.name, printer_ipp_jobs.name),
+              user_name   = COALESCE(excluded.user_name, printer_ipp_jobs.user_name),
+              impressions = COALESCE(excluded.impressions, printer_ipp_jobs.impressions),
+              received_at = excluded.received_at
+            """,
+            [
+                (
+                    printer_id,
+                    j["job_id"],
+                    j.get("name"),
+                    j.get("user_name"),
+                    j.get("impressions"),
+                    received_at,
+                )
+                for j in jobs
+                if isinstance(j.get("job_id"), int)
+            ],
+        )
+        conn.execute(
+            """
+            DELETE FROM printer_ipp_jobs WHERE printer_id = ? AND job_id NOT IN (
+              SELECT job_id FROM printer_ipp_jobs WHERE printer_id = ?
+              ORDER BY received_at DESC, job_id DESC LIMIT ?
+            )
+            """,
+            (printer_id, printer_id, _IPP_JOBS_KEEP),
+        )
+
+
+def get_printer_ipp_jobs(printer_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Most recent completed IPP jobs for one printer, newest-first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT job_id, name, user_name, impressions, received_at
+            FROM printer_ipp_jobs WHERE printer_id = ?
+            ORDER BY received_at DESC, job_id DESC LIMIT ?
+            """,
+            (printer_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_printer_ipp_jobs(printer_id: str) -> int:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM printer_ipp_jobs WHERE printer_id = ?", (printer_id,)
+        ).fetchone()[0]
+
+
+def get_printer_series(printer_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Scalar reading time series for one printer, newest-first (counter charts +
+    B3 supply-ETA forecast). ``supplies`` = [[name, percent], ...] parsed from the
+    additive ``supplies_pct`` column, which -- unlike ``detail`` -- is kept on
+    every row, so this is real multi-day history, not just the latest snapshot."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT received_at, status, total_pages, color_pages, mono_pages,
+                      duplex_pages, supplies_pct
+               FROM printer_readings WHERE printer_id=? ORDER BY id DESC LIMIT ?""",
+            (printer_id, limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            supplies = json.loads(r["supplies_pct"]) if r["supplies_pct"] else None
+        except (ValueError, TypeError):
+            supplies = None  # malformed row never blocks the counter chart
+        out.append(
+            {
+                "received_at": r["received_at"],
+                "status": r["status"],
+                "total_pages": r["total_pages"],
+                "color_pages": r["color_pages"],
+                "mono_pages": r["mono_pages"],
+                "duplex_pages": r["duplex_pages"],
+                "supplies": supplies,
+            }
+        )
+    return out
+
+
+_SUPPLY_HISTORY_ROWS_PER_PRINTER_MAX = 250  # review B1-B5 final MEDIUM: below,
+# why this is safe -- not just fast.
+
+
+def get_printers_supply_history(days: int = 90) -> dict[str, list[dict[str, Any]]]:
+    """Recent per-supply percent history for EVERY printer, one query (no N+1) --
+    feeds the /printers list's worst-supply-ETA badge (server/printers/forecast.py).
+    90 days comfortably covers the forecast's >=3-day minimum regardless of the
+    configured poll interval (min 60s, default 900s).
+
+    review B1-B5 final MEDIUM: an unauthenticated, uncached /printers view used
+    to fetch+json.loads up to _retain_prn (2000) rows PER printer here, then
+    feed all of it into printer_forecast.eta_by_supply's O(n^2) Theil-Sen --
+    measured ~1s of pure slope work alone on a 60-printer/6-supply fleet, on a
+    page anyone can reload. supply_eta_days already trims each supply's own
+    series to its last _MAX_POINTS=200 points AFTER a last-rise (refill) scan,
+    so this only ever needed to feed that same trailing window -- capping the
+    raw fetch to the most recent ROWS_PER_PRINTER_MAX (> 200, so a
+    same-window refill is still visible) changes the ETA for no printer whose
+    last refill is more recent than that many polls (the overwhelming common
+    case; toner/ink cycles run days-to-weeks, not ~250 polls)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT printer_id, received_at, supplies_pct FROM (
+                 SELECT printer_id, received_at, supplies_pct,
+                        ROW_NUMBER() OVER (PARTITION BY printer_id ORDER BY id DESC) AS rn
+                 FROM printer_readings
+                 WHERE supplies_pct IS NOT NULL AND received_at >= ?
+               ) WHERE rn <= ?
+               ORDER BY printer_id, received_at""",
+            (_cutoff_iso(days=days), _SUPPLY_HISTORY_ROWS_PER_PRINTER_MAX),
+        ).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        try:
+            supplies = json.loads(r["supplies_pct"])
+        except (ValueError, TypeError):
+            continue
+        out.setdefault(r["printer_id"], []).append(
+            {"received_at": r["received_at"], "supplies": supplies}
+        )
+    return out
+
+
+def get_printers_pages_series(days: int = 30, max_printers: int = 12) -> list[dict[str, Any]]:
+    """Historical hardware page-counter trend, one series per printer, for the
+    /printers overview chart (spec §9 "история счётчиков (тренд)").
+
+    Candidates (P2-3) = the union of (a) the max_printers printers with the
+    highest lifetime ``total_pages``, and (b) any printer with at least one
+    reading inside the ``days`` window -- a printer that is actively printing
+    right now must never be silently dropped from the chart just because it
+    isn't a top-N lifetime grosser (e.g. a newer or lower-volume device).
+    Capped overall at ``max_printers * 2`` candidates (bounded response size),
+    preferring higher lifetime total_pages within that cap. Each candidate's
+    time-ordered (received_at, total_pages) readings inside the ``days`` window
+    are returned; a candidate with none there (the lifetime-top printer that
+    has gone quiet) is dropped at that point, not before. Readings with a NULL
+    counter are skipped -- an unreachable poll is UNKNOWN, never plotted as 0.
+    ``days`` is self-clamped (P2-15): callers no longer need to pre-validate it.
+    """
+    days = max(0, min(int(days), 365))
+    win = "AND received_at >= ?" if days > 0 else ""
+    win_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
+    out: list[dict[str, Any]] = []
+    with _connect() as conn:
+        top_rows = conn.execute(
+            """SELECT printer_id, COALESCE(model, hostname, ip, printer_id) AS label,
+                      total_pages
+               FROM printers WHERE total_pages IS NOT NULL
+               ORDER BY total_pages DESC LIMIT ?""",
+            (max_printers,),
+        ).fetchall()
+        active_rows = conn.execute(
+            "SELECT DISTINCT p.printer_id AS printer_id,"  # nosec B608
+            "       COALESCE(p.model, p.hostname, p.ip, p.printer_id) AS label,"
+            "       p.total_pages AS total_pages"
+            "  FROM printer_readings pr JOIN printers p ON p.printer_id = pr.printer_id"
+            f" WHERE pr.total_pages IS NOT NULL {win}",
+            win_params,
+        ).fetchall()
+        candidates: dict[str, dict[str, Any]] = {}
+        for r in (*top_rows, *active_rows):
+            candidates.setdefault(
+                r["printer_id"],
+                {
+                    "printer_id": r["printer_id"],
+                    "label": r["label"],
+                    "total_pages": r["total_pages"],
+                },
+            )
+        top = sorted(candidates.values(), key=lambda c: c["total_pages"] or 0, reverse=True)[
+            : max_printers * 2
+        ]
+        for t in top:
+            pts = conn.execute(
+                "SELECT received_at, total_pages FROM printer_readings"  # nosec B608
+                f" WHERE printer_id=? AND total_pages IS NOT NULL {win} ORDER BY id ASC",
+                (t["printer_id"], *win_params),
+            ).fetchall()
+            if not pts:
+                continue
+            out.append(
+                {
+                    "printer_id": t["printer_id"],
+                    "label": t["label"],
+                    "points": [
+                        {"received_at": r["received_at"], "total_pages": r["total_pages"]}
+                        for r in pts
+                    ],
+                }
+            )
+    return out
+
+
+def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
+    """Per spooler printer-NAME software print totals + which PCs printed + last date.
+
+    Source = print_jobs (agent-reported spool data, phases 1-3 of print tracking).
+    Used to reconcile the software view ("who printed how much") against the
+    hardware SNMP counters. ``days`` is self-clamped (P2-15): callers no longer
+    need to pre-validate it.
+    """
+    days = max(0, min(int(days), 365))
+    ts_filter = "AND ts >= ?" if days > 0 else ""
+    ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
+    with _connect() as conn:
+        name_rows = conn.execute(
+            "SELECT printer AS name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            " COUNT(DISTINCT device_id) AS device_count, MAX(ts) AS last_ts"
+            f" FROM print_jobs WHERE printer IS NOT NULL {ts_filter}"
+            " GROUP BY printer ORDER BY pages DESC",
+            ts_params,
+        ).fetchall()
+        dev_rows = conn.execute(
+            "SELECT p.printer AS name, p.device_id AS device_id,"  # nosec B608
+            " d.hostname AS hostname,"
+            " COALESCE(SUM(p.pages),0) AS pages, MAX(p.ts) AS last_ts"
+            " FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE p.printer IS NOT NULL {ts_filter}"
+            " GROUP BY p.printer, p.device_id ORDER BY pages DESC",
+            ts_params,
+        ).fetchall()
+    by_name: dict[str, dict[str, Any]] = {}
+    for r in name_rows:
+        by_name[r["name"]] = {
+            "name": r["name"],
+            "pages": r["pages"],
+            "jobs": r["jobs"],
+            "device_count": r["device_count"],
+            "last_ts": r["last_ts"],
+            "devices": [],
+        }
+    for r in dev_rows:
+        bucket = by_name.get(r["name"])
+        if bucket is not None:
+            bucket["devices"].append(
+                {
+                    "device_id": r["device_id"],
+                    "hostname": display_name(
+                        r["hostname"], device_id=r["device_id"], disambiguate=True
+                    ),
+                    "pages": r["pages"],
+                    "last_ts": r["last_ts"],
+                }
+            )
+    return list(by_name.values())
+
+
+def _ip_in_name(ip: str, raw: str) -> bool:
+    """True if *ip* appears in *raw* as a whole address, not as a digit prefix of a
+    longer one (192.168.1.5 must not match inside 192.168.1.50)."""
+    start, n = 0, len(ip)
+    while True:
+        idx = raw.find(ip, start)
+        if idx == -1:
+            return False
+        before = raw[idx - 1] if idx > 0 else ""
+        after = raw[idx + n] if idx + n < len(raw) else ""
+        # A boundary is anything that is NOT a digit or dot (empty = boundary too).
+        before_ok = not (before.isdigit() or before == ".")
+        after_ok = not (after.isdigit() or after == ".")
+        if before_ok and after_ok:
+            return True
+        start = idx + 1
+
+
+def _match_software(hw: dict[str, Any], software: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Best-effort link a hardware printer to a software print-name bucket.
+
+    The spooler name and the SNMP identity rarely match exactly, so we match on
+    IP-substring (the spooler port often embeds the IP) or a hostname/model name
+    overlap. Returns None when nothing matches (kept honest, not forced).
+    """
+    ip = (hw.get("ip") or "").strip()
+    host = (hw.get("hostname") or "").strip().lower()
+    model = (hw.get("model") or "").strip().lower()
+    for sw in software:
+        raw = sw.get("name") or ""
+        swname = raw.strip().lower()
+        if not swname:
+            continue
+        if ip and _ip_in_name(ip, raw):
+            return sw
+        if host and (swname == host or host in swname or swname in host):
+            return sw
+        if model and len(model) >= 4 and model in swname:
+            return sw
+    return None
+
+
+def _printer_is_confirmed_row(model: Any, serial: Any, total_pages: Any) -> bool:
+    """A record is a real printer once it carries any printer evidence (model /
+    serial / a hardware page counter). A bare ARP neighbour has none of these."""
+    return model is not None or serial is not None or total_pages is not None
+
+
+def _printer_is_unlisted_arp(p: dict[str, Any]) -> bool:
+    """True for a phantom printer that was only ever seen via ARP and never
+    answered as a printer -- i.e. some other LAN host, not a printer at all."""
+    sources = set(p.get("sources") or [])
+    confirmed = _printer_is_confirmed_row(p.get("model"), p.get("serial"), p.get("total_pages"))
+    return bool(sources) and sources <= {"arp"} and not confirmed
+
+
+def printer_is_confirmed(printer_id: str) -> bool:
+    """Whether a stored printer carries real printer evidence (model/serial/pages).
+
+    The poll cycle uses this so a printer we already confirmed still records an
+    "unreachable" reading when it goes offline (down != gone), while a bare ARP
+    neighbour that never answered is never minted as a phantom printer.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT model, serial, total_pages FROM printers WHERE printer_id=?",
+            (printer_id,),
+        ).fetchone()
+    if row is None:
+        return False
+    return _printer_is_confirmed_row(row["model"], row["serial"], row["total_pages"])
+
+
+def delete_unconfirmed_arp_printers() -> int:
+    """Remove phantom printers (ARP-only, never answered as a printer). Returns
+    how many were deleted. Real printers (any model/serial/page-counter evidence)
+    and printers seen via spooler/config/scan are kept.
+
+    The victim list is computed and deleted inside a single ``_lock`` hold so a
+    concurrent ``store_printer_reading`` (background poll) cannot confirm a
+    printer between the read and the delete (no TOCTOU window)."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """SELECT p.printer_id, p.model, p.serial, p.total_pages,
+                      (SELECT detail FROM printer_readings
+                        WHERE printer_id = p.printer_id ORDER BY id DESC LIMIT 1) AS detail
+               FROM printers p"""
+        ).fetchall()
+        victims: list[str] = []
+        for r in rows:
+            detail = json.loads(r["detail"]) if r["detail"] else {}
+            candidate = {
+                "model": r["model"],
+                "serial": r["serial"],
+                "total_pages": r["total_pages"],
+                "sources": detail.get("sources") or [],
+            }
+            if _printer_is_unlisted_arp(candidate):
+                victims.append(r["printer_id"])
+        for pid in victims:
+            conn.execute("DELETE FROM printer_readings WHERE printer_id=?", (pid,))
+            conn.execute("DELETE FROM printers WHERE printer_id=?", (pid,))
+            # keep the network node, drop its now-dangling printer FK
+            conn.execute("UPDATE net_devices SET printer_id=NULL WHERE printer_id=?", (pid,))
+    return len(victims)
+
+
+def get_printers_overview(days: int = 30) -> dict[str, Any]:
+    """Hardware printer inventory, each reconciled with its software print totals,
+    plus the software names that matched no discovered printer.
+
+    Phantom ARP-only entries (LAN hosts that never answered as printers) are
+    excluded -- they are not printers and would otherwise clutter the list and
+    skew the hardware page-count chart (no counter -> empty)."""
+    hardware = [hw for hw in get_printers() if not _printer_is_unlisted_arp(hw)]
+    software = get_printer_print_summary(days)
+    matched: set[str] = set()
+    for hw in hardware:
+        sw = _match_software(hw, software)
+        if sw is None:
+            hw["software"] = None
+            continue
+        matched.add(sw["name"])
+        hw["software"] = {
+            "pages": sw["pages"],
+            "jobs": sw["jobs"],
+            "device_count": sw["device_count"],
+            "last_ts": sw["last_ts"],
+            "devices": sw["devices"][:50],
+        }
+    unmatched = [sw for sw in software if sw["name"] not in matched]
+    return {"period_days": days, "printers": hardware, "unmatched_software": unmatched}
+
+
+def get_printer_detail(printer_id: str, days: int = 30) -> Optional[dict[str, Any]]:
+    """Full printer card: inventory + counter series + matched software source PCs."""
+    p = get_printer(printer_id)
+    if p is None:
+        return None
+    p["series"] = get_printer_series(printer_id, limit=500)
+    p["software"] = _match_software(p, get_printer_print_summary(days))
+    p["period_days"] = days
+    return p
+
+
+def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
+    """Recent event rows (newest-first) for analytics that match on provider+id.
+
+    Returns lightweight rows (no message body) so the disk-fill / servicing engine
+    can filter WindowsUpdateClient failures by source rather than a bare numeric id.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, received_at, source, event_id, level
+               FROM events WHERE device_id=? ORDER BY id DESC LIMIT ?""",
+            (device_id, limit),
+        ).fetchall()
+    return [
+        {
+            "ts": r["ts"],
+            "received_at": r["received_at"],
+            "source": r["source"],
+            "event_id": r["event_id"],
+            "level": r["level"],
+        }
+        for r in rows
+    ]
+
+
+def count_recent_events(device_id: str, event_ids: list[int]) -> int:
+    if not event_ids:
+        return 0
+    placeholders = ",".join("?" for _ in event_ids)
+    with _connect() as conn:
+        row = conn.execute(
+            # B608: placeholders are only "?" marks; all values are parameterized.
+            f"SELECT COUNT(*) AS n FROM events WHERE device_id=? AND event_id IN ({placeholders})",  # nosec B608
+            (device_id, *event_ids),
+        ).fetchone()
+    return int(row["n"])
+
+
+def count_events_since(device_id: str, event_ids: list[int], since_iso: str) -> int:
+    """Count matching events the server *received* at/after since_iso (W0.2).
+
+    Burst/window detection must anchor on server receipt, not the client event
+    timestamp, which depends on the machine's (possibly wrong) clock.
+    """
+    if not event_ids:
+        return 0
+    placeholders = ",".join("?" for _ in event_ids)
+    with _connect() as conn:
+        row = conn.execute(
+            # B608: placeholders are only "?" marks; all values are parameterized.
+            f"""SELECT COUNT(*) AS n FROM events
+                WHERE device_id=? AND received_at >= ? AND event_id IN ({placeholders})""",  # nosec B608
+            (device_id, since_iso, *event_ids),
+        ).fetchone()
+    return int(row["n"])
+
+
+# --------------------------------------------------------------------------- #
+# W4.2 fleet-anomaly helpers
+# --------------------------------------------------------------------------- #
+_COHORT_BOOT_CAP = 200  # ssd3 Ф6: devices sampled for the cohort boot-time p90
+
+
+def _cohort_boot_p90(conn: sqlite3.Connection, model: str) -> Optional[float]:
+    """90th-percentile ``avg_boot_ms`` across the model cohort (latest reading per
+    device, capped at 200). ``None`` when the cohort reports no boot samples.
+
+    The field is named ``boot_p90_ms`` because that is health.py's locked cohort
+    contract (ssd3 Ф6): it powers the "boot slower than 90% of similar devices"
+    context factor, so the value must be the p90 (not the mean the plan's prose
+    loosely calls ``cohort_boot_ms``).
+    """
+    rows = conn.execute(
+        # B608: literals only; model and the cap are the sole bound parameters.
+        """
+        SELECT CAST(json_extract(h.payload, '$.avg_boot_ms') AS REAL) AS boot_ms
+        FROM devices d
+        JOIN historical h ON h.device_id = d.device_id
+          AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+        WHERE d.model = ?
+          AND json_extract(h.payload, '$.avg_boot_ms') IS NOT NULL
+        ORDER BY d.device_id
+        LIMIT ?
+        """,  # nosec B608
+        (model, _COHORT_BOOT_CAP),
+    ).fetchall()
+    values = sorted(float(r["boot_ms"]) for r in rows if r["boot_ms"] is not None)
+    if not values:
+        return None
+    # Nearest-rank p90; integer ceil avoids the float 0.9*n off-by-one (0.9*10 !=
+    # 9.0 in binary float, which would push the rank one value too far).
+    rank = (9 * len(values) + 9) // 10
+    return values[rank - 1]
+
+
+def get_fleet_cohort_stats(
+    model: Optional[str],
+    site_code: Optional[str],
+) -> dict[str, Any]:
+    """Fleet-level aggregates for the model cohort and the site.
+
+    Returns a dict with:
+      cohort_size          — devices sharing the same model that have historical data
+      cohort_bsod_pct      — fraction with bugchecks_30d >= 1
+      cohort_kp41_pct      — fraction with kernel_power_41_30d >= 2
+      cohort_rsi_low_pct   — fraction with reliability_stability_index < 5.0
+      boot_p90_ms          — ssd3 Ф6: 90th-percentile avg_boot_ms across the cohort
+                              (cap 200 devices); None when no cohort boot samples exist.
+                              Field name matches health.py's locked cohort contract.
+      site_size            — devices sharing the same site_code that have historical data
+      site_kp41_pct        — fraction at site with kernel_power_41_30d >= 2
+
+    All fractions are 0.0 when no devices with historical data exist in the group.
+    Uses json_extract (SQLite 3.38+) to read fields from the historical payload blob.
+    """
+    with _connect() as conn:
+        # Cohort stats: devices with the same model.
+        if model:
+            cohort_row = conn.execute(
+                # B608: table and column names are literals; only model is a parameter.
+                """
+                SELECT
+                    COUNT(*) AS cohort_size,
+                    -- P0-6 (stoperrors.md): NO final ELSE -- a device that never
+                    -- reports this field must be excluded from AVG's denominator,
+                    -- not counted as "healthy". A trailing ELSE 0.0 is a no-op
+                    -- here (CASE WHEN <NULL-cond> already falls through to ELSE
+                    -- on its own, three-valued-logic-wise) and was verified to
+                    -- NOT change the result; omitting ELSE makes CASE itself
+                    -- return SQL NULL for a missing field, which AVG() then
+                    -- genuinely skips.
+                    AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.bugchecks_30d') AS REAL) >= 1
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.bugchecks_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS bsod_pct,
+                    AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.kernel_power_41_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS kp41_pct,
+                    AVG(CASE
+                        WHEN CAST(
+                               json_extract(h.payload,'$.reliability_stability_index')
+                             AS REAL) < 5.0
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.reliability_stability_index')
+                             IS NOT NULL
+                          THEN 0.0
+                        END) AS rsi_low_pct
+                FROM devices d
+                JOIN historical h ON h.device_id = d.device_id
+                  AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+                WHERE d.model = ?
+                """,  # nosec B608
+                (model,),
+            ).fetchone()
+            boot_p90_ms = _cohort_boot_p90(conn, model)
+        else:
+            cohort_row = None
+            boot_p90_ms = None
+
+        # Site stats: devices with the same site_code.
+        if site_code:
+            site_row = conn.execute(
+                # B608: same pattern — only site_code is a parameter.
+                """
+                SELECT
+                    COUNT(*) AS site_size,
+                    -- P0-6: same no-final-ELSE pattern as the cohort query above.
+                    AVG(CASE
+                        WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
+                          THEN 1.0
+                        WHEN json_extract(h.payload,'$.kernel_power_41_30d') IS NOT NULL
+                          THEN 0.0
+                        END) AS kp41_pct
+                FROM devices d
+                JOIN historical h ON h.device_id = d.device_id
+                  AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
+                WHERE d.site_code = ?
+                """,  # nosec B608
+                (site_code,),
+            ).fetchone()
+        else:
+            site_row = None
+
+    return {
+        "cohort_size": int(cohort_row["cohort_size"]) if cohort_row else 0,
+        "cohort_bsod_pct": float(cohort_row["bsod_pct"] or 0.0) if cohort_row else 0.0,
+        "cohort_kp41_pct": float(cohort_row["kp41_pct"] or 0.0) if cohort_row else 0.0,
+        "cohort_rsi_low_pct": float(cohort_row["rsi_low_pct"] or 0.0) if cohort_row else 0.0,
+        "boot_p90_ms": boot_p90_ms,
+        "site_size": int(site_row["site_size"]) if site_row else 0,
+        "site_kp41_pct": float(site_row["kp41_pct"] or 0.0) if site_row else 0.0,
+    }
+
+
+# B6 6.3: fewer than this many comparable cohort points is noise, not a signal
+# (mirrors trends._MIN_POINTS's "insufficient" gate, kept as its own constant --
+# this counts CO-HORT devices, a different axis from that one device's own
+# history depth).
+_COHORT_SLOPE_MIN_N = 3
+
+
+def get_cohort_slope_verdict(model: Optional[str], trajectory: dict[str, Any]) -> dict[str, bool]:
+    """B6 6.3 ("показывать, не скорить" -- R4 verdict, no new risk weight/gate):
+    for each of THIS device's *worsening* trajectory metrics, whether it is
+    degrading faster than more than half of the model cohort.
+
+    Slopes are already persisted -- pipeline.py's compute_trends() result rides
+    inside scores.risk.trajectory.<metric>.slope_per_day (db.store_scores) --
+    so this reads that EXISTING data with one SQL fetch (latest scores.risk per
+    cohort device, same JOIN shape/index as get_fleet_cohort_stats: devices
+    leads on the indexed model column, the MAX(id) subquery is correlated per
+    device, never a whole-table GROUP BY). No new storage.
+
+    JSON is parsed in Python via _load_risk, never json_extract in SQL: the
+    blob is server-written so normally valid, but theil_sen_slope's float
+    median can still land on a value SQLite's json_extract would choke on --
+    and json_extract in a WHERE throws OperationalError on a malformed row
+    instead of yielding NULL, which would abort every metric's cohort
+    comparison for one bad neighbour ([[sqlite-json-extract-throws]]). A
+    per-value guard (_finite_float) drops just that one reading instead.
+
+    Only metrics with >= _COHORT_SLOPE_MIN_N comparable cohort points get a
+    verdict; a thin cohort is omitted entirely (UNKNOWN over false confidence),
+    never reported as False.
+    """
+    worsening: dict[str, float] = {}
+    for metric, t in (trajectory or {}).items():
+        if not isinstance(t, dict) or t.get("direction") != "worsening":
+            continue
+        slope = _finite_float(t.get("slope_per_day"))
+        if slope is not None:
+            worsening[metric] = slope
+    if not worsening or not model:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.risk
+            FROM devices d
+            JOIN scores s ON s.device_id = d.device_id
+              AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
+            WHERE d.model = ?
+            ORDER BY d.device_id
+            LIMIT ?
+            """,  # literals only; model/cap are bound parameters -- no injection surface
+            (model, _COHORT_BOOT_CAP),
+        ).fetchall()
+    cohort_by_metric: dict[str, list[float]] = {}
+    for r in rows:
+        traj = _load_risk(r["risk"]).get("trajectory")
+        if not isinstance(traj, dict):
+            continue
+        for metric in worsening:
+            t = traj.get(metric)
+            if not isinstance(t, dict):
+                continue
+            slope = _finite_float(t.get("slope_per_day"))
+            if slope is not None:
+                cohort_by_metric.setdefault(metric, []).append(slope)
+    verdict: dict[str, bool] = {}
+    for metric, current_slope in worsening.items():
+        cohort_vals = cohort_by_metric.get(metric, [])
+        if len(cohort_vals) < _COHORT_SLOPE_MIN_N:
+            continue
+        # Sign the comparison by THIS device's own worsening slope so "faster"
+        # means "further in the same worsening direction" regardless of
+        # whether the metric's convention is rising-bad or falling-bad --
+        # every cohort row counted here already shares that sign by
+        # construction (all are the same metric's slope_per_day).
+        sign = 1 if current_slope > 0 else -1
+        worse = sum(1 for v in cohort_vals if v * sign < current_slope * sign)
+        if worse / len(cohort_vals) > 0.5:
+            verdict[metric] = True
+    return verdict
+
+
+def get_device_model_site(device_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (model, site_code) from the devices table for fleet-cohort keying."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT model, site_code FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
+    if row is None:
+        return None, None
+    return row["model"], row["site_code"]
+
+
+# --------------------------------------------------------------------------- #
+# Fleet health (ssd3 Ф6 T6.2): read-side aggregates over the health block each
+# recompute_scores call now stores inside scores.risk.health (server/pipeline.py).
+# --------------------------------------------------------------------------- #
+def get_fleet_health(days: int = 7) -> list[dict]:
+    """Latest stored health verdict per device, fleet-wide, one pass.
+
+    Window-function shape copied from ``get_net_device_status_series`` (rn = 1
+    here: exactly the newest scores row per device). Fields are pulled straight
+    out of the stored ``scores.risk`` JSON via ``json_extract`` rather than
+    parsed in Python -- one query, one pass, per T6.2.
+
+    *days* is accepted for signature symmetry with ``get_fleet_health_deltas``
+    (the plan names it as part of this function's shape) but is not used to
+    filter here: ``delta_7d`` is read verbatim from the stored row (already
+    computed once at write time by pipeline._health_delta_7d), never recomputed
+    on read, so there is no window to bound.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: literals only; no user input in this query.
+            # ssd3 Ф7 (T7.1): coordinate + score100-axis BANDS added alongside the
+            # existing value fields -- same single windowed query, no fetch cascade.
+            # The fleet heatmap needs good/watch/bad/unknown per coordinate/axis, not
+            # just the raw 0..100 values already selected below.
+            """
+            SELECT device_id, hostname, ts,
+                   json_extract(risk, '$.health.state') AS state,
+                   CAST(json_extract(risk, '$.health.index') AS REAL) AS idx,
+                   json_extract(risk, '$.health.band') AS band,
+                   CAST(json_extract(risk, '$.health.damage.value') AS REAL) AS damage,
+                   CAST(json_extract(risk, '$.health.resilience.value') AS REAL) AS resilience,
+                   CAST(json_extract(risk, '$.health.observability.value') AS REAL) AS obs_pct,
+                   json_extract(risk, '$.health.dominant') AS dominant,
+                   CAST(json_extract(risk, '$.health.delta_7d') AS REAL) AS delta_7d,
+                   json_extract(risk, '$.health.damage.band') AS damage_band,
+                   json_extract(risk, '$.health.resilience.band') AS resilience_band,
+                   json_extract(risk, '$.health.observability.band') AS observability_band,
+                   json_extract(risk, '$.score100.storage_risk.band') AS ax_storage,
+                   json_extract(risk, '$.score100.software_aging_risk.band') AS ax_aging,
+                   json_extract(risk, '$.score100.os_degradation_risk.band') AS ax_os,
+                   json_extract(risk, '$.score100.disk_fill_risk.band') AS ax_disk_fill,
+                   json_extract(risk, '$.score100.network_risk.band') AS ax_network,
+                   json_extract(risk, '$.score100.trajectory_risk.band') AS ax_trajectory
+            FROM (
+                SELECT s.device_id AS device_id, d.hostname AS hostname,
+                       s.ts AS ts, s.risk AS risk
+                FROM scores s JOIN devices d ON d.device_id = s.device_id
+                WHERE s.id = (SELECT MAX(id) FROM scores WHERE device_id = s.device_id)
+            )
+            """,  # nosec B608
+        ).fetchall()
+    return [
+        {
+            "device_id": r["device_id"],
+            "hostname": r["hostname"],
+            "state": r["state"],
+            "index": r["idx"],
+            "band": r["band"],
+            "damage": r["damage"],
+            "resilience": r["resilience"],
+            "observability_pct": r["obs_pct"],
+            "dominant": r["dominant"],
+            "delta_7d": r["delta_7d"],
+            "score_ts": r["ts"],
+            "damage_band": r["damage_band"],
+            "resilience_band": r["resilience_band"],
+            "observability_band": r["observability_band"],
+            "axis_bands": {
+                "storage": r["ax_storage"],
+                "aging": r["ax_aging"],
+                "os": r["ax_os"],
+                "disk_fill": r["ax_disk_fill"],
+                "network": r["ax_network"],
+                "trajectory": r["ax_trajectory"],
+            },
+        }
+        for r in rows
+    ]
+
+
+_FLEET_ESCALATION_CAP = 200  # ssd3 Ф6 (T6.2): per-device row cap for the escalation
+# lookback window. Real recompute cadence (traced in pipeline.py next to
+# _HEALTH_DELTA_DAYS): inventory/historical/heartbeat each trigger their own
+# recompute_scores call on the same 4h envelope cycle, so ~3 rows land per 4h
+# (~18/day) -- 200 rows reaches back ~11 days, comfortably past the default
+# 7-day comparison point. (Deliberately larger than the 30-60 the plan's prose
+# suggests: that estimate assumes 1 row per 4h envelope, which undercounts by
+# ~3x once you trace how many msg_types actually rescore per cycle.)
+
+
+def get_fleet_health_deltas(days: int = 7) -> list[dict]:
+    """State escalations with hysteresis (ssd3 §1.3 / T6.2).
+
+    A device escalates when its current state is worse (higher h-rank) than its
+    state ~*days* ago, AND that same worsened state is sustained across the two
+    most recent score rows (not a one-off blip -- a state that reverted by the
+    very next row never fires). A band change with the same state never fires:
+    this function compares ``state`` only, band never enters the comparison.
+
+    K5: ``"unknown"`` is not on the h0..h4 ordinal scale (lost visibility, not
+    degradation). Any comparison touching it -- the current state, the ~days-ago
+    state, or either of the two most recent rows -- is excluded. Missing/absent
+    state (pre-Ф6 rows with no health block) is excluded the same way.
+
+    One bounded per-device SQL fetch (window function, mirrors
+    ``get_net_device_status_series``), then the ordinal + hysteresis comparison
+    in Python -- this multi-row rule does not read cleanly as one SQL
+    expression (same split ``get_net_device_status_series`` already uses).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: literals only; the row cap is the sole bound parameter.
+            """
+            SELECT s.device_id AS device_id, d.hostname AS hostname,
+                   s.ts AS ts,
+                   json_extract(s.risk, '$.health.state') AS state
+            FROM scores s JOIN devices d ON d.device_id = s.device_id
+            WHERE s.id IN (
+                SELECT id FROM scores x WHERE x.device_id = s.device_id
+                ORDER BY x.id DESC LIMIT ?
+            )
+            ORDER BY s.device_id, s.id DESC
+            """,  # nosec B608
+            (_FLEET_ESCALATION_CAP,),
+        ).fetchall()
+
+    by_device: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        by_device.setdefault(r["device_id"], []).append(r)
+
+    out: list[dict] = []
+    for device_id, series in by_device.items():
+        escalation = _escalation_for_device(device_id, series, cutoff)
+        if escalation is not None:
+            out.append(escalation)
+    return out
+
+
+# mirrors health.py's _STATE_ORDER (duplicated, not imported: db.py is a lower
+# layer than server.analytics.*, so the storage layer never imports analytics).
+_STATE_RANK = {"h0": 0, "h1": 1, "h2": 2, "h3": 3, "h4": 4}
+
+
+def _escalation_for_device(
+    device_id: str, series: list[sqlite3.Row], cutoff: datetime
+) -> Optional[dict]:
+    """One device's hysteresis check; ``series`` is newest-first, rn<=cap rows."""
+    if len(series) < 2:
+        return None
+    current, prev_row = series[0], series[1]
+    if current["state"] != prev_row["state"]:
+        return None  # blip: the worsened state didn't survive to the next row
+    old_state: Optional[str] = next(
+        (r["state"] for r in series if (t := _parse_iso(r["ts"])) is not None and t < cutoff),
+        None,
+    )
+    cur_rank = _STATE_RANK.get(current["state"])
+    old_rank = _STATE_RANK.get(old_state) if old_state is not None else None
+    if cur_rank is None or old_rank is None or cur_rank <= old_rank:
+        return None
+    return {
+        "device_id": device_id,
+        "hostname": current["hostname"],
+        "state": current["state"],
+        "prev_state": old_state,
+        "score_ts": current["ts"],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Telemetry-trust helpers (Plan 3)
+# --------------------------------------------------------------------------- #
+def set_last_good(device_id: str, source: str, reading: dict[str, Any], ts: str) -> None:
+    """Upsert the latest known-good reading for a (device, source) pair.
+
+    Future semantic validators (frozen-value, impossible-delta) read this to
+    compare incoming telemetry against the previous accepted sample.
+    """
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO source_last_good (device_id, source, reading, ts)
+            VALUES (?,?,?,?)
+            ON CONFLICT(device_id, source) DO UPDATE SET
+              reading = excluded.reading,
+              ts      = excluded.ts
+            """,
+            (device_id, source, _json_c(reading), ts),
+        )
+
+
+def get_last_good(device_id: str, source: str) -> Optional[dict]:
+    """Return the last good reading for a (device, source) pair, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT reading FROM source_last_good WHERE device_id=? AND source=?",
+            (device_id, source),
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row["reading"])
+
+
+def get_last_good_sources(device_id: str) -> set[str]:
+    """Имена источников, у которых есть сохранённое «последнее хорошее» чтение.
+
+    Один запрос вместо одного на источник: вызывающему нужен только факт наличия
+    (признак `regressed`), а не сама полезная нагрузка.
+    """
+    with _connect() as conn:
+        return {
+            r[0]
+            for r in conn.execute(
+                "SELECT source FROM source_last_good WHERE device_id=?", (device_id,)
+            )
+        }
+
+
+def store_trust(device_id: str, ts: str, result: dict[str, Any]) -> None:
+    """Upsert the latest trust result (per-domain states + lineage) for a device."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO trust (device_id, ts, result) VALUES (?,?,?)
+            ON CONFLICT(device_id) DO UPDATE SET
+              ts     = excluded.ts,
+              result = excluded.result
+            """,
+            (device_id, ts, _json_c(result)),
+        )
+
+
+def get_trust(device_id: str) -> Optional[dict]:
+    """Return the latest trust result for a device, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT result FROM trust WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row["result"])
+
+
+def upsert_source_trust(
+    device_id: str,
+    source: str,
+    state: str,
+    weight: float,
+    collector_status: str,
+    semantic_status: str,
+    reason: str,
+    ts: str,
+    evidence_seen_at: str,
+) -> None:
+    """Insert or replace the per-source trust row for a (device, source) pair.
+
+    *evidence_seen_at* is the SERVER clock at real ingest (P2-2) -- this is the
+    ONLY write path that may advance it. The periodic staleness re-eval job
+    (server/trust/staleness.py) writes via apply_source_staleness() instead,
+    which has no evidence_seen_at parameter at all: it cannot revive this clock,
+    so a source that has actually gone silent cannot be kept perpetually fresh
+    by its own staleness re-evaluation (the exact P1-4 trap, closed structurally).
+    """
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO device_source_trust
+              (device_id, source, state, weight, collector_status, semantic_status, reason, ts,
+               evidence_seen_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(device_id, source) DO UPDATE SET
+              state            = excluded.state,
+              weight           = excluded.weight,
+              collector_status = excluded.collector_status,
+              semantic_status  = excluded.semantic_status,
+              reason           = excluded.reason,
+              ts               = excluded.ts,
+              evidence_seen_at = excluded.evidence_seen_at
+            """,
+            (
+                device_id,
+                source,
+                state,
+                weight,
+                collector_status,
+                semantic_status,
+                reason,
+                ts,
+                evidence_seen_at,
+            ),
+        )
+
+
+def get_source_trust_rows() -> list[dict[str, Any]]:
+    """Every device_source_trust row, across all devices (P2-2 staleness re-eval).
+
+    Unlike get_source_trusts(device_id) (single-device, ingest-path read), this
+    is a fleet-wide bulk read for the periodic staleness job -- one SELECT.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT device_id, source, state, collector_status, semantic_status, evidence_seen_at
+            FROM device_source_trust
+            """
+        ).fetchall()
+    return [
+        {
+            "device_id": r["device_id"],
+            "source": r["source"],
+            "state": r["state"],
+            "collector_status": r["collector_status"],
+            "semantic_status": r["semantic_status"],
+            "evidence_seen_at": r["evidence_seen_at"],
+        }
+        for r in rows
+    ]
+
+
+def apply_source_staleness(updates: list[Any]) -> int:
+    """Persist ONLY state/weight/reason for periodic staleness re-eval results
+    (server.trust.staleness.StaleUpdate).
+
+    Deliberately has NO evidence_seen_at parameter (P2-2 design D3): this write
+    path is structurally incapable of advancing the "last real evidence" clock a
+    repeated re-evaluation must never reset (the P1-4 reset-trap, closed
+    structurally rather than by convention). Guarded by an optimistic
+    ``WHERE evidence_seen_at IS <the value the job read>``: if a real ingest
+    updated the row between read and write, this stale write is safely dropped
+    (fresh ingest wins; the next cycle self-corrects -- STALE is the safe
+    direction to be temporarily wrong in, never OK). Returns rows actually changed.
+    """
+    if not updates:
+        return 0
+    applied = 0
+    with _lock, _connect() as conn:
+        for u in updates:
+            cur = conn.execute(
+                """
+                UPDATE device_source_trust
+                SET state = ?, weight = ?, reason = ?
+                WHERE device_id = ? AND source = ? AND evidence_seen_at IS ?
+                """,
+                (u.state, u.weight, u.reason, u.device_id, u.source, u.evidence_seen_at),
+            )
+            applied += cur.rowcount
+    return applied
+
+
+def get_source_trusts(device_id: str) -> dict[str, dict]:
+    """Return all per-source trust rows for a device as {source: row_dict}."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT source, state, weight, collector_status, semantic_status, reason, ts
+            FROM device_source_trust
+            WHERE device_id=?
+            """,
+            (device_id,),
+        ).fetchall()
+    return {
+        r["source"]: {
+            "source": r["source"],
+            "state": r["state"],
+            "weight": r["weight"],
+            "collector_status": r["collector_status"],
+            "semantic_status": r["semantic_status"],
+            "reason": r["reason"],
+            "ts": r["ts"],
+        }
+        for r in rows
+    }
+
+
+_METRIC_TABLES = (
+    "devices",
+    "heartbeats",
+    "historical",
+    "events",
+    "scores",
+    "disk_readings",
+    "heartbeat_rollup_daily",
+    "event_rollup_daily",
+)
+# Table names are module constants (never user-supplied) — SQL injection not possible.
+_GATE_FAIL_STATES = frozenset({"unavailable", "stale", "suspect"})
+_GATE_PASS_STATES = frozenset({"ok", "degraded"})
+
+
+def _reject_counts_snapshot() -> dict[str, int]:
+    from server.ingest_guards import REJECT_COUNTS  # локальный импорт: без циклов
+
+    return dict(REJECT_COUNTS)
+
+
+def get_pipeline_metrics() -> dict[str, Any]:
+    """Single-pass pipeline health stats for /api/v1/metrics and /pipeline page."""
+    with _connect() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM devices WHERE last_seen < ?",
+            (_cutoff_iso(seconds=_STALE_AFTER_SEC),),
+        ).fetchone()[0]
+
+        score_row = conn.execute("SELECT COUNT(DISTINCT device_id), MAX(ts) FROM scores").fetchone()
+        scored: int = score_row[0]
+        newest_score_ts: Optional[str] = score_row[1]
+
+        # 40 mirrors server.scoring.score100.band_for_risk_score's "bad" floor (the
+        # single source of truth for this classification) -- raw SQL can't call that
+        # function, so this literal must be kept in sync with it by hand (P1-6 follow-up:
+        # this used to be 50, silently disagreeing with the /fleet page's at_risk count).
+        at_risk = conn.execute(
+            """
+            SELECT COUNT(*) FROM scores s
+            JOIN (
+              SELECT device_id, MAX(id) AS max_id FROM scores GROUP BY device_id
+            ) m ON s.device_id = m.device_id AND s.id = m.max_id
+            WHERE s.risk_exposure >= 40
+            """
+        ).fetchone()[0]
+
+        # Ingest activity via server-stamped received_at (W0.2)
+        cutoff_5m = _cutoff_iso(minutes=5)
+        cutoff_1h = _cutoff_iso(hours=1)
+        hb_5m = conn.execute(
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= ?", (cutoff_5m,)
+        ).fetchone()[0]
+        hb_1h = conn.execute(
+            "SELECT COUNT(*) FROM heartbeats WHERE received_at >= ?", (cutoff_1h,)
+        ).fetchone()[0]
+        hist_5m = conn.execute(
+            "SELECT COUNT(*) FROM historical WHERE received_at >= ?", (cutoff_5m,)
+        ).fetchone()[0]
+        hist_1h = conn.execute(
+            "SELECT COUNT(*) FROM historical WHERE received_at >= ?", (cutoff_1h,)
+        ).fetchone()[0]
+
+        # Source health breakdown from per-(device, source) trust table
+        src_rows = conn.execute(
+            "SELECT state, COUNT(*) FROM device_source_trust GROUP BY state"
+        ).fetchall()
+
+        # Lightweight row counts for storage awareness
+        table_rows: dict[str, int] = {}
+        for tbl in _METRIC_TABLES:
+            table_rows[tbl] = conn.execute(
+                f"SELECT COUNT(*) FROM {tbl}"  # nosec B608 — constant table name
+            ).fetchone()[0]
+
+        # ssd3 Ф5: DB file size via page accounting (no filesystem stat needed)
+        # + last rollup/maintenance markers for the /pipeline "Хранилище" block.
+        db_size_bytes = (
+            conn.execute("PRAGMA page_count").fetchone()[0]
+            * conn.execute("PRAGMA page_size").fetchone()[0]
+        )
+        last_rollup_day = conn.execute("SELECT MAX(day) FROM heartbeat_rollup_daily").fetchone()[0]
+        maint_row = conn.execute(
+            "SELECT ts, action FROM maintenance_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+        # ssd3 Ф8: fleet rule self-reinforcement counts for the /pipeline table.
+        rule_stats_rows = conn.execute(
+            "SELECT rule_key, confirmed, refuted FROM rule_stats"
+        ).fetchall()
+
+    src_by_state: dict[str, int] = {r[0]: r[1] for r in src_rows}
+    gate_pass = sum(src_by_state.get(s, 0) for s in _GATE_PASS_STATES)
+    gate_fail = sum(src_by_state.get(s, 0) for s in _GATE_FAIL_STATES)
+    not_applicable = src_by_state.get("not_applicable", 0)
+
+    # Always all 3 RULE_KEYS, in order, even with zero rows -- a closed, fixed
+    # list; empty history / multiplier=1.0 is the expected starting state.
+    rule_stats_by_key = {
+        r["rule_key"]: {"confirmed": r["confirmed"], "refuted": r["refuted"]}
+        for r in rule_stats_rows
+    }
+    rule_stats_display = [
+        {
+            "rule_key": key,
+            "label": rulestats.RULE_LABELS[key],
+            "confirmed": rule_stats_by_key.get(key, {}).get("confirmed", 0),
+            "refuted": rule_stats_by_key.get(key, {}).get("refuted", 0),
+            "multiplier": rulestats.reinforcement(key, rule_stats_by_key.get(key, {})),
+        }
+        for key in rulestats.RULE_KEYS
+    ]
+
+    return {
+        "ts": _now_iso(),
+        "fleet": {
+            "total": total,
+            "stale": stale,
+            "at_risk": at_risk,
+            "scored": scored,
+        },
+        "ingest": {
+            "heartbeats_5m": hb_5m,
+            "heartbeats_1h": hb_1h,
+            "historical_5m": hist_5m,
+            "historical_1h": hist_1h,
+        },
+        "source_health": {
+            "gate_pass": gate_pass,
+            "gate_fail": gate_fail,
+            "not_applicable": not_applicable,
+        },
+        "scores": {
+            "newest_age_sec": _age_seconds(newest_score_ts),
+            "newest_ts": newest_score_ts,
+        },
+        "table_rows": table_rows,
+        "storage": {
+            "db_size_bytes": db_size_bytes,
+            "last_rollup_day": last_rollup_day,
+            "last_maintenance_ts": maint_row["ts"] if maint_row else None,
+            "last_maintenance_action": maint_row["action"] if maint_row else None,
+        },
+        "rule_stats": rule_stats_display,
+        "lock": _lock.stats(),
+        "ingest_rejects": _reject_counts_snapshot(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Print tracking
+# --------------------------------------------------------------------------- #
+def store_print_jobs(
+    device_id: str,
+    jobs: list[dict[str, Any]],
+    received_at: Optional[str] = None,
+) -> int:
+    """Insert print jobs; dedup via UNIQUE(device_id, job_id). Returns inserted count."""
+    if not jobs:
+        return 0
+    recv = received_at or _now_iso()
+    inserted = 0
+    with _lock, _connect() as conn:
+        for job in jobs:
+            try:
+                conn.execute(
+                    """INSERT INTO print_jobs
+                         (device_id, job_id, ts, received_at, printer, user_name, pages,
+                          size_bytes, source)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (
+                        device_id,
+                        job.get("job_id"),
+                        job.get("ts"),
+                        recv,
+                        job.get("printer"),
+                        job.get("user_name"),
+                        job.get("pages"),
+                        job.get("size_bytes"),
+                        job.get("source"),
+                    ),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                pass  # duplicate job_id for this device — already stored
+    return inserted
+
+
+# --------------------------------------------------------------------------- #
+# Print query layer (printview): one filter + WHERE builder + base join reused
+# by every print view (series / summary / records / export) so they stay DRY and
+# consistent. Every filter VALUE is a bound parameter -- never interpolated.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class PrintFilter:
+    """Immutable filter for print-job queries. Dates are 'YYYY-MM-DD' local
+    calendar days (inclusive); device is a device_id; printer is a queue name;
+    ip is a resolved printer IP. Any field None = unfiltered on that axis."""
+
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    device: Optional[str] = None
+    printer: Optional[str] = None
+    ip: Optional[str] = None
+
+
+# Потолок строк CSV-экспорта: весь результат собирается в память сервера и в
+# строку ответа, поэтому запрос без LIMIT на большой базе — это OOM по запросу.
+_EXPORT_ROW_MAX = 200_000
+
+# Canonical FROM for every filtered print query. printer_ip_map PK(device_id,
+# printer) guarantees <=1 row per join key, so the LEFT JOIN never multiplies
+# rows; m.ip is NULL for queues with no resolved IP (WSD/USB/share).
+_PRINT_BASE_FROM = (
+    "print_jobs p "
+    "LEFT JOIN devices d ON d.device_id = p.device_id "
+    "LEFT JOIN printer_ip_map m ON m.device_id = p.device_id AND m.printer = p.printer"
+)
+
+
+def get_print_counter_mode_devices(days: int = 7) -> list[dict[str, Any]]:
+    """ПК, чья печать за окно пришла ТОЛЬКО counter-фолбэком (журнал выключен).
+
+    На таких ПК user_name пуст -- оператор должен включить PrintService/Operational
+    (агент пытается сам; GPO-парк требует централизованного включения).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.device_id, d.hostname AS hostname, MAX(p.ts) AS last_ts
+            FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id
+            WHERE p.ts >= ? AND p.source = 'counter'
+              AND NOT EXISTS (
+                SELECT 1 FROM print_jobs e
+                WHERE e.device_id = p.device_id AND e.source = 'events' AND e.ts >= ?
+              )
+            GROUP BY p.device_id ORDER BY hostname
+            """,
+            (cutoff, cutoff),
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    for row in out:
+        row["hostname"] = display_name(
+            row["hostname"], device_id=row["device_id"], disambiguate=True
+        )
+    return out
+
+
+def _date_cutoff_utc(date_str: Optional[str], *, end: bool) -> Optional[str]:
+    """'YYYY-MM-DD' local date -> UTC ISO cutoff (no suffix) for lexical compare
+    against stored UTC print ts (mirrors _local_day_start_utc). end=False -> start
+    of that local day; end=True -> start of the NEXT local day (date_to inclusive).
+    Returns None for empty/malformed input (that axis is then left unfiltered)."""
+    if not date_str or not isinstance(date_str, str):
+        return None
+    try:
+        parsed = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    local = parsed.astimezone()  # naive -> interpreted as local midnight
+    if end:
+        local = local + timedelta(days=1)
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _normalize_dates(
+    date_from: Optional[str], date_to: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Swap a reversed [from, to] pair so the range is always well-formed."""
+    if date_from and date_to and date_from > date_to:
+        return date_to, date_from
+    return date_from, date_to
+
+
+def _print_where(f: PrintFilter) -> tuple[str, list[Any]]:
+    """Parameterized WHERE tail + params for a PrintFilter over _PRINT_BASE_FROM
+    (aliases p/d/m). Every value is a bound parameter; the returned string holds
+    only fixed fragments and '?' placeholders -- safe to f-string into the query."""
+    df, dt = _normalize_dates(f.date_from, f.date_to)
+    clauses: list[str] = []
+    params: list[Any] = []
+    lo = _date_cutoff_utc(df, end=False)
+    hi = _date_cutoff_utc(dt, end=True)
+    if lo:
+        clauses.append("p.ts >= ?")
+        params.append(lo)
+    if hi:
+        clauses.append("p.ts < ?")
+        params.append(hi)
+    if f.device:
+        clauses.append("p.device_id = ?")
+        params.append(f.device)
+    if f.printer:
+        clauses.append("p.printer = ?")
+        params.append(f.printer)
+    if f.ip:
+        clauses.append("m.ip = ?")
+        params.append(f.ip)
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def get_print_summary(f: PrintFilter) -> dict[str, Any]:
+    """Headline print metrics over a PrintFilter (printview summary cards).
+
+    ``total_jobs`` / ``avg_pages_per_job`` count only event-sourced rows (job_id
+    NOT NULL): counter-mode rows are per-sweep page deltas, not jobs, so they add
+    to ``total_pages`` but must never inflate the job count. ``busiest_printer`` is
+    by queue name across the fleet (ip = a representative resolved address, or
+    None); ``most_active_computer`` is by device. Empty period -> zeros + None.
+    """
+    where, params = _print_where(f)
+    with _connect() as conn:
+        agg = conn.execute(
+            f"SELECT COALESCE(SUM(p.pages),0) AS total_pages,"  # nosec B608
+            " COUNT(p.job_id) AS total_jobs,"
+            " COALESCE(SUM(CASE WHEN p.job_id IS NOT NULL THEN p.pages ELSE 0 END),0) AS ev_pages,"
+            " COUNT(DISTINCT p.printer) AS active_printers,"
+            " COUNT(DISTINCT p.device_id) AS active_computers"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}",
+            params,
+        ).fetchone()
+        printer_row = conn.execute(
+            f"SELECT p.printer AS name, MAX(m.ip) AS ip,"  # nosec B608
+            " COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.printer ORDER BY pages DESC LIMIT 1",
+            params,
+        ).fetchone()
+        device_row = conn.execute(
+            f"SELECT p.device_id, d.hostname AS hostname,"  # nosec B608
+            " COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.device_id ORDER BY pages DESC LIMIT 1",
+            params,
+        ).fetchone()
+    total_jobs = int(agg["total_jobs"])
+    avg = round(int(agg["ev_pages"]) / total_jobs, 1) if total_jobs else 0.0
+    busiest = (
+        {"name": printer_row["name"], "ip": printer_row["ip"], "pages": int(printer_row["pages"])}
+        if printer_row is not None and printer_row["name"] is not None
+        else None
+    )
+    most_active = (
+        {
+            "device_id": device_row["device_id"],
+            "hostname": display_name(
+                device_row["hostname"], device_id=device_row["device_id"], disambiguate=True
+            ),
+            "pages": int(device_row["pages"]),
+        }
+        if device_row is not None and device_row["device_id"] is not None
+        else None
+    )
+    return {
+        "total_pages": int(agg["total_pages"]),
+        "total_jobs": total_jobs,
+        "active_printers": int(agg["active_printers"]),
+        "active_computers": int(agg["active_computers"]),
+        "busiest_printer": busiest,
+        "most_active_computer": most_active,
+        "avg_pages_per_job": avg,
+    }
+
+
+# Bucket granularity for the print time-series: auto-scales with the span so the
+# hero chart stays readable from a single day (hourly) up to a year (monthly).
+# These strftime formats are fixed literals from a whitelist -- never user input --
+# so interpolating the chosen one into the grouped query is safe (all filter
+# VALUES stay bound parameters via _print_where).
+_GRAN_FMT = {
+    "hour": "%Y-%m-%d %H:00",
+    "day": "%Y-%m-%d",
+    "week": "%Y-%W",
+    "month": "%Y-%m",
+}
+_SERIES_MAX = 50
+_OTHERS_LABEL = "прочее"
+
+
+def _span_days(date_from: Optional[str], date_to: Optional[str]) -> Optional[int]:
+    """Whole-day span between two 'YYYY-MM-DD' dates, or None if either is unset
+    or malformed (caller then falls back to a safe default granularity)."""
+    try:
+        a = datetime.strptime(str(date_from), "%Y-%m-%d")
+        b = datetime.strptime(str(date_to), "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+    return abs((b - a).days)
+
+
+def _auto_granularity(date_from: Optional[str], date_to: Optional[str]) -> str:
+    """Pick a bucket granularity from the range span (printview Phase 4 thresholds)."""
+    span = _span_days(date_from, date_to)
+    if span is None:
+        return "day"
+    if span <= 2:
+        return "hour"
+    if span <= 45:
+        return "day"
+    if span <= 180:
+        return "week"
+    return "month"
+
+
+def _assemble_series(rows: list[Any], cap: int, gran: str) -> dict[str, Any]:
+    """Fold grouped (device, printer, bucket, pages) rows into aligned series.
+
+    Builds the shared sorted ``buckets`` axis, one points array per pair (0 in
+    empty buckets), keeps the top *cap* pairs by total pages and collapses the
+    rest into a single «прочее» series.
+    """
+    buckets: list[str] = sorted({r["bucket"] for r in rows if r["bucket"] is not None})
+    bucket_idx = {b: i for i, b in enumerate(buckets)}
+    pairs: dict[tuple, dict[str, Any]] = {}
+    for r in rows:
+        key = (r["device_id"], r["printer"])
+        pair = pairs.setdefault(
+            key,
+            {
+                "device_id": r["device_id"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
+                "printer": r["printer"],
+                "ip": r["ip"],
+                "points": [0] * len(buckets),
+                "total": 0,
+            },
+        )
+        if r["bucket"] in bucket_idx:
+            pages = int(r["pages"])
+            pair["points"][bucket_idx[r["bucket"]]] += pages
+            pair["total"] += pages
+    ordered = sorted(pairs.values(), key=lambda p: p["total"], reverse=True)
+    series = [
+        {
+            "device_id": p["device_id"],
+            "hostname": p["hostname"],
+            "printer": p["printer"],
+            "ip": p["ip"],
+            "label": f"{p['hostname']} → {p['printer']}",
+            "points": p["points"],
+        }
+        for p in ordered[:cap]
+    ]
+    others: Optional[dict[str, Any]] = None
+    rest = ordered[cap:]
+    if rest:
+        agg = [0] * len(buckets)
+        for p in rest:
+            for i, v in enumerate(p["points"]):
+                agg[i] += v
+        others = {"label": _OTHERS_LABEL, "points": agg}
+    return {
+        "granularity": gran,
+        "buckets": buckets,
+        "series": series,
+        "others": others,
+        "pair_count": len(pairs),
+    }
+
+
+def get_print_series(
+    f: PrintFilter, granularity: str = "auto", max_series: int = 12
+) -> dict[str, Any]:
+    """Time-series of pages for each (computer -> printer) pair (hero chart data).
+
+    Buckets auto-scale with the range (hour/day/week/month) unless *granularity*
+    pins one explicitly. Pairs beyond the top *max_series* (by total pages) fold
+    into a single «прочее» series so the chart stays readable; every series'
+    points align to the shared, sorted ``buckets`` axis (0 where a pair printed
+    nothing in that bucket). ``ip`` is the resolved printer address or None.
+    """
+    cap = min(max(int(max_series), 1), _SERIES_MAX)
+    where, params = _print_where(f)
+    gran = granularity if granularity in _GRAN_FMT else ""
+    if not gran:
+        df, dt = _normalize_dates(f.date_from, f.date_to)
+        if not (df and dt):
+            with _connect() as conn:
+                span_row = conn.execute(
+                    f"SELECT MIN(p.ts) AS lo, MAX(p.ts) AS hi"  # nosec B608
+                    f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}",
+                    params,
+                ).fetchone()
+            df = df or ((span_row["lo"] or "")[:10] or None)
+            dt = dt or ((span_row["hi"] or "")[:10] or None)
+        gran = _auto_granularity(df, dt)
+    fmt = _GRAN_FMT[gran]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT p.device_id AS device_id,"  # nosec B608
+            f" d.hostname AS hostname,"
+            f" COALESCE(p.printer, '') AS printer, MAX(m.ip) AS ip,"
+            f" strftime('{fmt}', p.ts) AS bucket,"
+            f" COALESCE(SUM(p.pages),0) AS pages"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.device_id, p.printer, bucket"
+            " ORDER BY bucket",
+            params,
+        ).fetchall()
+    return _assemble_series(rows, cap, gran)
+
+
+# Whitelisted sort columns for the records table -- the key the client sends is
+# looked up here, so only these fixed SQL fragments can ever reach ORDER BY
+# (no user text is interpolated). Unknown keys fall back to ts.
+_RECORDS_SORT = {
+    "ts": "p.ts",
+    "hostname": "COALESCE(d.hostname, p.device_id)",
+    "printer": "p.printer",
+    "ip": "m.ip",
+    "pages": "p.pages",
+}
+_RECORDS_PAGE_DEFAULT = 50
+_RECORDS_PAGE_MAX = 200
+
+
+def get_print_records(
+    f: PrintFilter,
+    page: int = 1,
+    page_size: int = _RECORDS_PAGE_DEFAULT,
+    sort: str = "ts",
+    direction: str = "desc",
+    q: Optional[str] = None,
+) -> dict[str, Any]:
+    """One page of detailed print rows for the events table (server-side paging).
+
+    Search *q* matches hostname/printer/ip (LIKE, bound). ``sort`` is resolved
+    through ``_RECORDS_SORT`` and ``direction`` is asc/desc only, so ORDER BY can
+    never carry user text. ``ip`` is None where the queue has no resolved address.
+    """
+    where, params = _print_where(f)
+    search_clause = ""
+    search_params = list(params)
+    if q:
+        # Escape LIKE metacharacters so the search is a literal substring (a bare
+        # % / _ from the user must not turn into a wildcard); value still bound.
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{esc}%"
+        search_clause = (
+            " AND (COALESCE(d.hostname, p.device_id) LIKE ? ESCAPE '\\'"
+            " OR p.printer LIKE ? ESCAPE '\\' OR COALESCE(m.ip, '') LIKE ? ESCAPE '\\')"
+        )
+        search_params.extend([like, like, like])
+    sort_col = _RECORDS_SORT.get(sort, "p.ts")
+    dir_sql = "ASC" if str(direction).lower() == "asc" else "DESC"
+    page = max(int(page), 1)
+    size = min(max(int(page_size), 1), _RECORDS_PAGE_MAX)
+    offset = (page - 1) * size
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}{search_clause}",  # nosec B608
+            search_params,
+        ).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT p.ts AS ts, p.device_id AS device_id,"  # nosec B608
+            f" d.hostname AS hostname,"
+            f" COALESCE(p.printer, '') AS printer, m.ip AS ip,"
+            f" p.pages AS pages, COALESCE(p.source, '') AS source"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}{search_clause}"
+            f" ORDER BY {sort_col} {dir_sql}, p.id DESC"
+            " LIMIT ? OFFSET ?",
+            [*search_params, size, offset],
+        ).fetchall()
+    return {
+        "page": page,
+        "page_size": size,
+        "total": int(total),
+        "rows": [
+            {
+                "ts": r["ts"],
+                "device_id": r["device_id"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
+                "printer": r["printer"],
+                "ip": r["ip"],
+                "pages": int(r["pages"]) if r["pages"] is not None else 0,
+                "source": r["source"],
+            }
+            for r in rows
+        ],
+    }
+
+
+def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
+    """Print stats for a single device over the last *days* days (0 = all time).
+
+    ``days`` is self-clamped (P2-15): callers no longer need to pre-validate it.
+    """
+    days = max(0, min(int(days), 365))
+    ts_filter = "AND ts >= ?" if days > 0 else ""
+    ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS jobs, COALESCE(SUM(pages),0) AS pages"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}",
+            (device_id, *ts_params),
+        ).fetchone()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " GROUP BY printer ORDER BY pages DESC",
+            (device_id, *ts_params),
+        ).fetchall()
+        daily_rows = conn.execute(
+            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " GROUP BY date ORDER BY date",
+            (device_id, *ts_params),
+        ).fetchall()
+        recent_rows = conn.execute(
+            f"SELECT ts, printer, pages, size_bytes"  # nosec B608
+            f" FROM print_jobs WHERE device_id=? {ts_filter}"
+            " ORDER BY ts DESC LIMIT 20",
+            (device_id, *ts_params),
+        ).fetchall()
+    return {
+        "device_id": device_id,
+        "period_days": days,
+        "total_pages": total_row["pages"],
+        "total_jobs": total_row["jobs"],
+        "printers": [
+            {"name": r["printer"], "pages": r["pages"], "jobs": r["jobs"]} for r in printer_rows
+        ],
+        "daily": [{"date": r["date"], "pages": r["pages"], "jobs": r["jobs"]} for r in daily_rows],
+        "recent": [
+            {
+                "ts": r["ts"],
+                "printer": r["printer"],
+                "pages": r["pages"],
+                "size_bytes": r["size_bytes"],
+            }
+            for r in recent_rows
+        ],
+    }
+
+
+def _local_day_start_utc() -> str:
+    """Start of the current local calendar day, expressed as a UTC ISO string.
+
+    Print-job ``ts`` values are UTC ISO8601 (the agent stamps them with
+    ``ToUniversalTime``). Comparing them lexically against this cutoff yields
+    "printed today" in the server's local timezone (the office timezone),
+    without depending on SQLite parsing the stored 'Z' suffix.
+    """
+    local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
+    """Fleet-level print totals.
+
+    ``today=True`` counts only the current local calendar day; otherwise the
+    last *days* days (0 = all time). ``days`` is self-clamped (P2-15): callers
+    no longer need to pre-validate it.
+    """
+    days = max(0, min(int(days), 365))
+    params: tuple[Any, ...] = ()
+    if today:
+        params = (_local_day_start_utc(),)
+        ts_f, pts_f = "AND ts >= ?", "AND p.ts >= ?"
+    elif days > 0:
+        params = (_cutoff_iso(days=days),)
+        ts_f, pts_f = "AND ts >= ?", "AND p.ts >= ?"
+    else:
+        ts_f = pts_f = ""
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE 1=1 {ts_f}",
+            params,
+        ).fetchone()
+        device_rows = conn.execute(
+            f"SELECT p.device_id, d.hostname AS hostname,"  # nosec B608
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE 1=1 {pts_f}"
+            " GROUP BY p.device_id ORDER BY pages DESC",
+            params,
+        ).fetchall()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages,"  # nosec B608
+            f" COUNT(DISTINCT device_id) AS devices"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY printer ORDER BY pages DESC",
+            params,
+        ).fetchall()
+    return {
+        "period_days": 0 if today else days,
+        "today": today,
+        "total_pages": int(total_row["pages"]),
+        "total_jobs": int(total_row["jobs"]),
+        "printer_count": len(printer_rows),
+        "devices": [
+            {
+                "device_id": r["device_id"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
+                "pages": r["pages"],
+                "jobs": r["jobs"],
+            }
+            for r in device_rows
+        ],
+        "printers": [
+            {"name": r["printer"], "pages": r["pages"], "devices": r["devices"]}
+            for r in printer_rows
+        ],
+    }
+
+
+def get_print_analytics(
+    days: int = 30,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict[str, Any]:
+    """All chart data for the /print analytics page (daily/printers/users/departments).
+
+    When *date_from*/*date_to* are given the old sections honor that explicit
+    range (bound cutoffs, reusing the print-filter date logic) and the
+    period-over-period delta is skipped; otherwise the legacy last-*days* window
+    applies unchanged. ``days`` is self-clamped (P2-15): callers no longer need
+    to pre-validate it."""
+    days = max(0, min(int(days), 365))
+    df, dt = _normalize_dates(date_from, date_to)
+    rp: list[Any] = []
+    if df or dt:
+        lo = _date_cutoff_utc(df, end=False)
+        hi = _date_cutoff_utc(dt, end=True)
+        ts_parts, pts_parts = [], []
+        if lo:
+            ts_parts.append("ts >= ?")
+            pts_parts.append("p.ts >= ?")
+            rp.append(lo)
+        if hi:
+            ts_parts.append("ts < ?")
+            pts_parts.append("p.ts < ?")
+            rp.append(hi)
+        ts_f = ("AND " + " AND ".join(ts_parts)) if ts_parts else ""
+        pts_f = ("AND " + " AND ".join(pts_parts)) if pts_parts else ""
+        use_prev = False
+    else:
+        ts_f = "AND ts >= ?" if days > 0 else ""
+        pts_f = "AND p.ts >= ?" if days > 0 else ""
+        if days > 0:
+            rp.append(_cutoff_iso(days=days))
+        use_prev = days > 0
+    with _connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE 1=1 {ts_f}",
+            rp,
+        ).fetchone()
+        total_pages = int(total_row["pages"])
+        _denom = total_pages if total_pages > 0 else 1
+
+        daily_rows = conn.execute(
+            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY date ORDER BY date",
+            rp,
+        ).fetchall()
+        printer_rows = conn.execute(
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            f" COUNT(DISTINCT device_id) AS devices_count"
+            f" FROM print_jobs WHERE 1=1 {ts_f}"
+            " GROUP BY printer ORDER BY pages DESC",
+            rp,
+        ).fetchall()
+        user_rows = conn.execute(
+            f"SELECT user_name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f" FROM print_jobs WHERE user_name IS NOT NULL AND user_name != '' {ts_f}"
+            " GROUP BY user_name ORDER BY pages DESC LIMIT 20",
+            rp,
+        ).fetchall()
+        # Raw codes only -- names are decoded render-time from org_directory so
+        # a rename reflects across all history without a rewrite (tray spec §7).
+        dept_rows = conn.execute(
+            f"SELECT d.org_code AS org_code, d.dept_code AS dept_code,"  # nosec B608
+            f" d.department AS department,"
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs,"
+            f" COUNT(DISTINCT p.device_id) AS devices_count"
+            f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
+            f" WHERE 1=1 {pts_f}"
+            " GROUP BY d.org_code, d.dept_code, d.department ORDER BY pages DESC",
+            rp,
+        ).fetchall()
+        if use_prev:
+            prev_row = conn.execute(
+                "SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+                " FROM print_jobs"
+                " WHERE ts >= ? AND ts < ?",
+                (_cutoff_iso(days=days * 2), _cutoff_iso(days=days)),
+            ).fetchone()
+            prev_pages = int(prev_row["pages"])
+            prev_jobs = int(prev_row["jobs"])
+        else:
+            prev_pages = 0
+            prev_jobs = 0
+
+    return {
+        "period_days": days,
+        "total_pages": total_pages,
+        "total_jobs": int(total_row["jobs"]),
+        "prev_total_pages": prev_pages,
+        "prev_total_jobs": prev_jobs,
+        "daily": [
+            {"date": r["date"], "pages": int(r["pages"]), "jobs": int(r["jobs"])}
+            for r in daily_rows
+        ],
+        "printers": [
+            {
+                "name": r["printer"] or "(unknown)",
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "devices_count": int(r["devices_count"]),
+                "pct": round(100.0 * r["pages"] / _denom, 1),
+            }
+            for r in printer_rows
+        ],
+        "users": [
+            {
+                "user_name": r["user_name"],
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "pct": round(100.0 * r["pages"] / _denom, 1),
+            }
+            for r in user_rows
+        ],
+        "departments": [
+            {
+                "org_code": r["org_code"],
+                "dept_code": r["dept_code"],
+                "department": r["department"],
+                "pages": int(r["pages"]),
+                "jobs": int(r["jobs"]),
+                "devices_count": int(r["devices_count"]),
+            }
+            for r in dept_rows
+        ],
+    }
+
+
+def get_print_filter_options(
+    date_from: Optional[str] = None, date_to: Optional[str] = None
+) -> dict[str, Any]:
+    """Distinct devices/printers/ips that printed in the period (select lists).
+
+    Scoped to the date window so the dropdowns only offer values with activity;
+    ips come from the resolved printer_ip_map join (queues without a resolved
+    address simply contribute no ip option)."""
+    where, params = _print_where(PrintFilter(date_from=date_from, date_to=date_to))
+    with _connect() as conn:
+        dev_rows = conn.execute(
+            f"SELECT DISTINCT p.device_id AS device_id,"  # nosec B608
+            f" d.hostname AS hostname"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where} ORDER BY hostname",
+            params,
+        ).fetchall()
+        prn_rows = conn.execute(
+            f"SELECT DISTINCT p.printer AS printer"  # nosec B608
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " AND p.printer IS NOT NULL AND p.printer != '' ORDER BY p.printer",
+            params,
+        ).fetchall()
+        ip_rows = conn.execute(
+            f"SELECT DISTINCT m.ip AS ip"  # nosec B608
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where} AND m.ip IS NOT NULL ORDER BY m.ip",
+            params,
+        ).fetchall()
+    return {
+        "devices": [
+            {
+                "device_id": r["device_id"],
+                "hostname": display_name(
+                    r["hostname"], device_id=r["device_id"], disambiguate=True
+                ),
+            }
+            for r in dev_rows
+        ],
+        "printers": [r["printer"] for r in prn_rows],
+        "ips": [r["ip"] for r in ip_rows],
+    }
+
+
+def export_print_rows(f: PrintFilter) -> list[dict[str, Any]]:
+    """Raw print job rows for CSV export over a PrintFilter, enriched with
+    hostname, department codes, resolved ip and the machine ``source`` (the API
+    layer adds decoded org/dept names + the validation label, then defangs cells)."""
+    where, params = _print_where(f)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT p.ts, p.device_id,"  # nosec B608
+            f" d.hostname AS hostname,"
+            f" COALESCE(d.org_code, '') AS org_code,"
+            f" COALESCE(d.dept_code, '') AS dept_code,"
+            f" COALESCE(d.department, '') AS department,"
+            f" COALESCE(p.printer, '') AS printer,"
+            f" COALESCE(m.ip, '') AS ip,"
+            f" COALESCE(p.user_name, '') AS user_name,"
+            f" p.pages, p.size_bytes,"
+            f" COALESCE(p.source, '') AS source"
+            f" FROM {_PRINT_BASE_FROM}"
+            f" WHERE 1=1 {where}"
+            " ORDER BY p.ts DESC LIMIT ?",
+            (*params, _EXPORT_ROW_MAX),
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    for row in out:
+        row["hostname"] = display_name(
+            row["hostname"], device_id=row["device_id"], disambiguate=True
+        )
+    return out
+
+
+def set_device_department(device_id: str, department: Optional[str]) -> bool:
+    """Set the (deprecated) free-text department label. Returns True if the
+    device existed. Superseded by dept_code + org_directory (tray spec §7);
+    kept for the transition."""
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            "UPDATE devices SET department=? WHERE device_id=?",
+            (department, device_id),
+        ).rowcount
+    return n > 0
+
+
+def set_device_comment(device_id: str, comment: Optional[str]) -> bool:
+    """Правка оператора: пишется в отдельную колонку и побеждает агентскую навсегда.
+
+    Пустая строка -> NULL: очистка возвращает управление полем агенту (D6).
+    Возвращает True, если устройство существовало.
+    """
+    value = comment or None
+    with _lock, _connect() as conn:
+        # Только operator-колонка: дублирование в devices.comment затирало
+        # агентское значение, и очистка («вернуть управление агенту») не работала.
+        n = conn.execute(
+            "UPDATE devices SET comment_operator=? WHERE device_id=?",
+            (value, device_id),
+        ).rowcount
+    return n > 0
+
+
+def set_device_owner_full_name(device_id: str, owner_full_name: Optional[str]) -> bool:
+    """Правка оператора (F5, механизм D6): пишется в отдельную колонку и
+    побеждает агентскую навсегда, пока оператор её не очистит.
+
+    Пустая строка -> NULL: очистка возвращает управление полем агенту.
+    Возвращает True, если устройство существовало.
+    """
+    value = owner_full_name or None
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            # Персональные данные: очистка оператором обнуляет ОБЕ колонки, а не
+            # только операторскую. Иначе значение неудаляемо: агент шлёт None,
+            # когда спул пуст, а COALESCE сохраняет старое навсегда — для ПДн
+            # это недопустимо. Данные вернутся, только если они ещё в спуле.
+            # Запись оператора НЕ трогает агентскую колонку (иначе разделение
+            # колонок теряет смысл); очистка обнуляет ОБЕ -- ПДн должны
+            # удаляться, а не «возвращать управление агенту».
+            "UPDATE devices SET owner_full_name_operator=?,"
+            " owner_full_name=CASE WHEN ? IS NULL THEN NULL ELSE owner_full_name END"
+            " WHERE device_id=?",
+            (value, value, device_id),
+        ).rowcount
+    return n > 0
+
+
+def set_device_owner_position(device_id: str, owner_position: Optional[str]) -> bool:
+    """Правка оператора (F5, механизм D6) для должности владельца ПК."""
+    value = owner_position or None
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            # Персональные данные: очистка оператором обнуляет ОБЕ колонки, а не
+            # только операторскую. Иначе значение неудаляемо: агент шлёт None,
+            # когда спул пуст, а COALESCE сохраняет старое навсегда — для ПДн
+            # это недопустимо. Данные вернутся, только если они ещё в спуле.
+            # Запись оператора НЕ трогает агентскую колонку (иначе разделение
+            # колонок теряет смысл); очистка обнуляет ОБЕ -- ПДн должны
+            # удаляться, а не «возвращать управление агенту».
+            "UPDATE devices SET owner_position_operator=?,"
+            " owner_position=CASE WHEN ? IS NULL THEN NULL ELSE owner_position END"
+            " WHERE device_id=?",
+            (value, value, device_id),
+        ).rowcount
+    return n > 0
+
+
+def set_device_owner_phone(device_id: str, owner_phone: Optional[str]) -> bool:
+    """Правка оператора (F5, механизм D6) для телефона владельца ПК."""
+    value = owner_phone or None
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            # Персональные данные: очистка оператором обнуляет ОБЕ колонки, а не
+            # только операторскую. Иначе значение неудаляемо: агент шлёт None,
+            # когда спул пуст, а COALESCE сохраняет старое навсегда — для ПДн
+            # это недопустимо. Данные вернутся, только если они ещё в спуле.
+            # Запись оператора НЕ трогает агентскую колонку (иначе разделение
+            # колонок теряет смысл); очистка обнуляет ОБЕ -- ПДн должны
+            # удаляться, а не «возвращать управление агенту».
+            "UPDATE devices SET owner_phone_operator=?,"
+            " owner_phone=CASE WHEN ? IS NULL THEN NULL ELSE owner_phone END"
+            " WHERE device_id=?",
+            (value, value, device_id),
+        ).rowcount
+    return n > 0
+
+
+# F5: a stored update_checked_at that is itself in the future (agent clock ran
+# ahead, or a forged envelope) must not become a permanent ceiling that blocks
+# every subsequent real status forever -- tolerate a bit of clock skew, but
+# only that much, past the SERVER's own clock.
+_UPDATE_STATUS_FUTURE_TOLERANCE = timedelta(minutes=5)
+
+
+def set_update_status(
+    device_id: str,
+    state: Optional[str],
+    error: Optional[str],
+    checked_at: Optional[str],
+    available_version: Optional[str] = None,
+) -> None:
+    """Persist the agent's self-update status (update_status msg_type, T1/D3).
+
+    Called after touch_device already ensured the row exists, so this is a
+    plain UPDATE, not an upsert. error is clipped to 500 chars as a belt to the
+    schema's max_length=500 -- pipeline passes the raw payload dict here, not a
+    validated model instance.
+
+    available_version always overwrites the stored value with what THIS
+    envelope carries, including None -- so an agent that reports state="ok"
+    without available_version (up to date) clears any stale "waiting for
+    X.Y.Z" left over from a previous envelope.
+
+    U2-b: update_checked_at already holds the CLIENT-reported check time (the
+    payload's own checked_at, see client/updater.py's _now_iso() calls) --
+    not server receipt -- so it is directly comparable to the incoming
+    checked_at. A buffered-replay envelope (an older update_status resent by
+    client/transport.py's flush_buffer after a fresher one already landed)
+    carries an OLDER checked_at than what's stored; skip the whole write in
+    that case so it can't stomp a newer status. Missing/unparseable
+    timestamps on either side can't prove a replay, so the update is applied
+    as before (unchanged pre-U2-b behaviour).
+
+    F5 (MEDIUM-1): the replay skip only fires while the STORED checked_at is
+    itself no more than ``_UPDATE_STATUS_FUTURE_TOLERANCE`` ahead of the
+    server's own clock. A stored value further in the future than that (agent
+    clock badly skewed forward, or a forged envelope) is not trustworthy
+    enough to keep blocking every later, honestly-older-looking status --
+    apply the incoming write instead of gating on it forever.
+    """
+    clipped_error = error[:500] if error else error
+    with _lock, _connect() as conn:
+        prior = conn.execute(
+            "SELECT update_checked_at FROM devices WHERE device_id = ?",
+            (device_id,),
+        ).fetchone()
+        stored_dt = _parse_iso(prior["update_checked_at"]) if prior else None
+        incoming_dt = _parse_iso(checked_at)
+        stored_is_replay_guard = (
+            stored_dt is not None
+            and stored_dt <= datetime.now(timezone.utc) + _UPDATE_STATUS_FUTURE_TOLERANCE
+        )
+        if (
+            stored_is_replay_guard and incoming_dt is not None and incoming_dt < stored_dt  # type: ignore[operator]  # stored_dt is not None here
+        ):
+            return  # replay of an older update_status -- keep the newer stored state
+        conn.execute(
+            "UPDATE devices SET update_state=?, update_error=?, update_checked_at=?, "
+            "update_available_version=? WHERE device_id=?",
+            (state, clipped_error, checked_at, available_version, device_id),
+        )

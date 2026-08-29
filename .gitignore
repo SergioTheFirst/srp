@@ -1,0 +1,20 @@
+# SRP runtime artifacts (generated; must never be committed)
+srp.db
+*.log
+__pycache__/
+client/status.json
+client/print_state.json
+buffer.jsonl
+
+# Python virtual environment
+.venv/
+
+# Packaging / build output
+dist/
+build/
+
+# Test/lint caches -- гоняются ВНУТРИ каталога экспорта (задача 8 шаг 5);
+# .mypy_cache/*/cache.*.db хранит АБСОЛЮТНЫЕ пути исходников хост-машины.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

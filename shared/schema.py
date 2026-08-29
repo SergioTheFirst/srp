@@ -1,0 +1,487 @@
+"""SRP message contract (pydantic v2).
+
+Four message types flow client -> server, each wrapped in an Envelope:
+
+  inventory   - slow-changing identity of the machine (sent on start / daily)
+  historical  - the day-1 "machine already contains its own history" scan
+  heartbeat   - periodic performance samplers (the live vitals)
+  events      - whitelisted Windows event-log batch
+
+Design notes:
+  * Absolutes are weak signals; the server derives trends/baselines. The agent
+    only reports what it observed. (Part 1 thesis: info lives in derivatives.)
+  * Payload models allow extra fields (forward-compatible contract, Part 3 C3.4).
+  * Every analytic field is Optional: an office PC may block a source (no kernel
+    driver for temp/voltage). Missing != zero -> we send None and flag degraded.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+CONTRACT_VERSION = "0.1.0"
+
+MsgType = Literal[
+    "inventory", "historical", "heartbeat", "events", "print_jobs", "liveness", "update_status"
+]
+
+
+def utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_version(value: Optional[str]) -> Optional[tuple[int, int, int]]:
+    """Parse a strict MAJOR.MINOR.PATCH string into a tuple; None if malformed."""
+    if not value or not isinstance(value, str):
+        return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    return (nums[0], nums[1], nums[2])
+
+
+def is_contract_compatible(agent_version: Optional[str]) -> bool:
+    """True when agent_version shares the server CONTRACT_VERSION's MAJOR (W0.4).
+
+    The contract is additive (optional fields + extra='allow'), so any same-MAJOR
+    agent's envelope parses. A different or unreadable MAJOR is flagged
+    incompatible -- since D2 the HTTP ingest boundary (server/api.py) rejects it
+    with 406 before the envelope reaches the pipeline. This function only
+    answers the compatibility question; it makes no drop/keep decision itself.
+    """
+    agent = parse_version(agent_version)
+    server = parse_version(CONTRACT_VERSION)
+    if agent is None or server is None:
+        return False
+    return agent[0] == server[0]
+
+
+class _Base(BaseModel):
+    # Forward-compatible: a newer agent may add fields an older server ignores.
+    model_config = ConfigDict(extra="allow")
+
+
+# --------------------------------------------------------------------------- #
+# Inventory  (identity / slow-changing)
+# --------------------------------------------------------------------------- #
+class DiskInfo(_Base):
+    model: Optional[str] = None
+    media_type: Optional[str] = None  # SSD / HDD / Unspecified
+    size_gb: Optional[float] = None
+    serial_hash: Optional[str] = None  # hashed, never raw serial
+    firmware: Optional[str] = None
+    interface: Optional[str] = None  # NVMe / SATA / USB
+    bus_type: Optional[str] = None
+
+
+class MemoryModule(_Base):
+    capacity_gb: Optional[float] = None
+    speed_mhz: Optional[int] = None
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+
+
+class InventoryPayload(_Base):
+    hostname: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    chassis: Optional[str] = None  # desktop / laptop / unknown
+    os_caption: Optional[str] = None
+    os_build: Optional[str] = None
+    os_install_date: Optional[str] = None  # ISO; used to estimate age
+    bios_version: Optional[str] = None
+    bios_release_date: Optional[str] = None  # ISO; proxy for hardware age
+    cpu_name: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    cpu_logical: Optional[int] = None
+    total_ram_gb: Optional[float] = None
+    memory_modules: list[MemoryModule] = Field(default_factory=list)
+    disks: list[DiskInfo] = Field(default_factory=list)
+    driver_problem_count: Optional[int] = None  # PnP ConfigManagerErrorCode<>0
+    pending_reboot: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------- #
+# Historical  (day-1 scan: the machine's own past = a free dataset)
+# --------------------------------------------------------------------------- #
+class StorageReliability(_Base):
+    # max_length backstops a direct (token-authed) poster (CertInfo precedent above);
+    # generous so a real machine's disk-model string is never rejected.
+    disk: Optional[str] = Field(default=None, max_length=256)
+    media_type: Optional[str] = Field(default=None, max_length=64)
+    wear_pct: Optional[float] = None  # SSD wear indicator, 0..100 worse
+    power_on_hours: Optional[int] = None
+    reallocated_sectors: Optional[int] = None  # HDD pending death signal
+    read_errors_total: Optional[int] = None
+    write_errors_total: Optional[int] = None
+    temperature_c: Optional[int] = None  # best-effort, often absent
+    # ssd3 Ф1: deep SMART (Tier A ATA via CIM + Tier B NVMe via IOCTL health log).
+    serial_hash: Optional[str] = Field(
+        default=None, max_length=128
+    )  # same as DiskInfo -- the disk key
+    # string, not int: Get-PhysicalDisk.BusType is already decoded to "NVMe"/"SATA"/...
+    # (matches DiskInfo.bus_type below -- live-verified [int] cast throws on real hardware)
+    bus_type: Optional[str] = Field(default=None, max_length=64)
+    read_errors_uncorrected: Optional[int] = None
+    write_errors_uncorrected: Optional[int] = None
+    start_stop_cycles: Optional[int] = None
+    load_unload_cycles: Optional[int] = None
+    flush_latency_max_ms: Optional[int] = None
+    smart_predict_fail: Optional[bool] = None  # MSStorageDriver_FailurePredictStatus
+    smart_attrs: dict[str, int] = Field(default_factory=dict)  # {"5": raw, ...} decoded ATA attrs
+    nvme_critical_warning: Optional[int] = None
+    nvme_spare_pct: Optional[int] = None
+    nvme_spare_threshold_pct: Optional[int] = None
+    nvme_percentage_used: Optional[int] = None
+    nvme_media_errors: Optional[int] = None
+    nvme_unsafe_shutdowns: Optional[int] = None
+    nvme_error_log_entries: Optional[int] = None
+    nvme_data_units_written: Optional[int] = None
+    nvme_power_cycles: Optional[int] = None
+
+
+class CertInfo(_Base):
+    # max_length backstops the agent-side clips for a direct (token-authed) poster;
+    # generous so a real machine-cert DN is never rejected -- only absurd bloat.
+    subject: Optional[str] = Field(default=None, max_length=1024)
+    issuer: Optional[str] = Field(default=None, max_length=1024)
+    thumbprint: Optional[str] = Field(default=None, max_length=128)
+    not_after: Optional[str] = Field(default=None, max_length=64)
+    not_before: Optional[str] = Field(default=None, max_length=64)
+    # Windows user; set for tray-spooled personal certs, None for machine certs.
+    owner: Optional[str] = Field(default=None, max_length=128)
+
+
+# Boundary caps on the Phase-1 network lists: one inflated payload is rejected
+# at validation instead of stored. Agent caps stay strictly <= these (a
+# compliant agent can never be rejected); read-side caps remain as depth.
+USER_CERTS_MAX = 64  # cap on tray-spooled personal certs per historical payload
+NET_ADAPTERS_MAX = 64
+NET_NEIGHBORS_MAX = 512
+NET_CONNECTIONS_MAX = 512
+NET_QUALITY_MAX = 16
+NET_ROUTES_MAX = 64  # T1: internal (non-default) routing-table entries
+NET_LAN_HINTS_MAX = 128  # P1: relayed raw mDNS/SSDP/WSD captures (see NetLanHint)
+PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers phase 3)
+# Потолок заданий в одном конверте печати. Агент режет проход по БАЙТАМ
+# (client/collectors/print_jobs._SWEEP_BUDGET_BYTES = 450 КБ), поэтому число
+# записей в легальном конверте зависит от их длины: у минимальных записей их
+# помещается ~5.8 тыс. Потолок обязан быть ВЫШЕ достижимого агентом, иначе 422 ->
+# транспорт дропает конверт при уже сдвинутом водяном знаке = потеря заданий.
+# Настоящая граница DoS -- 512 КиБ на тело запроса, она независима от этого числа.
+# Связь пинится tests/test_contract.py::test_print_jobs_cap_is_above_agent_byte_budget.
+PRINT_JOBS_MAX = 8192
+STORAGE_DISKS_MAX = 64  # ssd3 Ф2: caps store_disk_readings' per-envelope DB write fan-out too
+
+
+class NetAdapter(_Base):
+    name: Optional[str] = None
+    desc: Optional[str] = None
+    mac: Optional[str] = None
+    kind: Optional[str] = None  # "ethernet" | "wifi" | "other"
+    # T3: derived from name/desc/kind, agent-side, no new data leaves the box.
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors NetNeighbor.name).
+    role: Optional[str] = Field(default=None, max_length=16)  # lan|wifi|tunnel|virtual|other
+    tunnel: Optional[bool] = None  # True iff this adapter is a VPN/tunnel egress
+    # NDIS physical medium (Get-NetAdapter.NdisPhysicalMedium): 1/8/9/12 = беспроводной,
+    # 14 = Ethernet 802.3, 0 = не определён. Числовой -> язык-независимо; надёжнее
+    # ifType, который часть Wi-Fi драйверов отдаёт как 6. Аддитивно/опционально ->
+    # CONTRACT_VERSION НЕ бампается.
+    phys_medium: Optional[int] = None
+    up: Optional[bool] = None
+    link_mbps: Optional[float] = None
+    ipv4: list[str] = Field(default_factory=list)
+    ipv6: list[str] = Field(default_factory=list)
+    gateway: Optional[str] = None
+    dns: list[str] = Field(default_factory=list)
+    dhcp: Optional[bool] = None
+    ssid: Optional[str] = None
+    signal_pct: Optional[int] = None
+    channel: Optional[int] = None
+
+
+class NetNeighbor(_Base):
+    ip: Optional[str] = None
+    mac: Optional[str] = None
+    state: Optional[str] = None
+    # T2: agent-resolved NetBIOS name of this LAN neighbor. The agent is the
+    # only host L2-adjacent to a remote site's LAN -- NBNS (UDP/137) does not
+    # route off-subnet, so this is the only vantage point that can name it.
+    # Additive/optional -> no CONTRACT_VERSION bump. max_length defensively
+    # caps well above a real NetBIOS name (<=15 chars); name_source mirrors
+    # PrintJobRecord.source's small-tag cap.
+    name: Optional[str] = Field(default=None, max_length=63)
+    name_source: Optional[str] = Field(default=None, max_length=16)
+
+
+class NetConnection(_Base):
+    local_ip: Optional[str] = None
+    local_port: Optional[int] = None
+    remote_ip: Optional[str] = None
+    remote_port: Optional[int] = None
+    state: Optional[str] = None
+
+
+class NetQuality(_Base):
+    target_kind: Optional[str] = None  # "gateway" | "dns"
+    target: Optional[str] = None
+    latency_ms: Optional[float] = None
+    loss_pct: Optional[float] = None
+    samples: Optional[int] = None
+
+
+class NetRoute(_Base):
+    """T1: one internal, non-default routing-table entry (multi-homing / site-to-
+    site VPN reachability) -- feeds server/netdisco's existing net_routes -> L3
+    map-edge path (``_route_links``). ``dest``/``next_hop`` are RFC1918-only by
+    the time they reach here (client/collectors/network.py's privacy filter);
+    max_length backstops a direct (token-authed) poster, well above any real
+    IPv4 CIDR/address string. Additive/optional -> no CONTRACT_VERSION bump."""
+
+    dest: Optional[str] = Field(default=None, max_length=64)
+    next_hop: Optional[str] = Field(default=None, max_length=64)
+    if_index: Optional[int] = None
+    metric: Optional[int] = None
+
+
+class NetLanHint(_Base):
+    """P1: one raw passive-discovery capture (mDNS/SSDP/WSD) relayed by the agent.
+
+    The server's own passive collectors (server/netdisco/passive.py) never see
+    this traffic when it isn't L2-adjacent to the target LAN -- multicast does
+    not cross a router. The agent IS L2-adjacent, so it listens (never queries
+    -- zero new egress) and relays a capped raw capture; parsing stays
+    server-side in the existing passive.parse_mdns/parse_ssdp/parse_wsd, so the
+    wire-format parsing logic exists exactly once. ``data_b64`` is capped to
+    768 raw bytes, which base64-encodes to exactly 1024 chars (768 / 3 * 4).
+    Additive/optional -> no CONTRACT_VERSION bump (mirrors network_routes)."""
+
+    ip: Optional[str] = Field(default=None, max_length=45)
+    source: Optional[str] = Field(default=None, max_length=8)  # "mdns" | "ssdp" | "wsd"
+    data_b64: Optional[str] = Field(default=None, max_length=1024)
+
+
+class PrinterPortHint(_Base):
+    """A network-printer the agent prints to, learned from its own spooler config
+    (Get-Printer/Get-PrinterPort). A discovery seed, NOT trust/scoring telemetry.
+    ``ip`` is an RFC1918 literal (the agent drops hostnames/public IPs); ``name``
+    is an opaque label. ``max_length`` backstops a direct (token-authed) poster."""
+
+    name: Optional[str] = Field(default=None, max_length=256)
+    ip: Optional[str] = Field(default=None, max_length=64)
+
+
+class HistoricalPayload(_Base):
+    reliability_stability_index: Optional[float] = None  # 0..10, latest sample
+    kernel_power_41_30d: Optional[int] = None  # unexpected power loss / hang
+    dirty_shutdowns_30d: Optional[int] = None  # EventLog 6008
+    bugchecks_30d: Optional[int] = None  # BugCheck 1001 (BSOD)
+    app_crashes_30d: Optional[int] = None  # Application Error 1000
+    whea_errors_30d: Optional[int] = None  # WHEA-Logger (corrected HW err)
+    avg_boot_ms: Optional[int] = None  # Diagnostics-Performance 100
+    storage: list[StorageReliability] = Field(default_factory=list, max_length=STORAGE_DISKS_MAX)
+    observation_days: Optional[int] = None  # how far back the data reaches
+    certificates: list[CertInfo] = Field(default_factory=list)
+    user_certificates: list[CertInfo] = Field(default_factory=list, max_length=USER_CERTS_MAX)
+    network_adapters: list[NetAdapter] = Field(default_factory=list, max_length=NET_ADAPTERS_MAX)
+    network_neighbors: list[NetNeighbor] = Field(default_factory=list, max_length=NET_NEIGHBORS_MAX)
+    network_connections: list[NetConnection] = Field(
+        default_factory=list, max_length=NET_CONNECTIONS_MAX
+    )
+    network_quality: list[NetQuality] = Field(default_factory=list, max_length=NET_QUALITY_MAX)
+    # T1: internal non-default routes from the agent's own routing table.
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors network_adapters et al.).
+    network_routes: list[NetRoute] = Field(default_factory=list, max_length=NET_ROUTES_MAX)
+    # P1: raw mDNS/SSDP/WSD captures relayed for server-side parsing (see NetLanHint).
+    # Additive/optional -> no CONTRACT_VERSION bump (mirrors network_routes).
+    lan_hints: list[NetLanHint] = Field(default_factory=list, max_length=NET_LAN_HINTS_MAX)
+    # Silent printer-discovery hints from the agent's spooler config (phase 3);
+    # informational, not a trust source. Additive/optional -> no CONTRACT_VERSION bump.
+    printer_ports: list[PrinterPortHint] = Field(default_factory=list, max_length=PRINTER_PORTS_MAX)
+
+
+# --------------------------------------------------------------------------- #
+# Heartbeat  (live vitals; throttle-residency stands in for "thermal health")
+# --------------------------------------------------------------------------- #
+class HeartbeatPayload(_Base):
+    cpu_pct: Optional[float] = None
+    cpu_perf_pct: Optional[float] = None  # % Processor Performance proxy
+    mem_avail_mb: Optional[float] = None
+    committed_pct: Optional[float] = None
+    pagefile_pct: Optional[float] = None
+    disk_read_sec: Optional[float] = None  # Avg Disk sec/Read (latency, s)
+    disk_write_sec: Optional[float] = None
+    disk_queue: Optional[float] = None
+    free_space_pct: Optional[float] = None  # system drive
+    handle_count_total: Optional[int] = None  # leak proxy
+    nic_errors: Optional[int] = None
+    user_present: Optional[bool] = None
+    uptime_hours: Optional[float] = None
+    # ssd3 Ф4: tail-latency micro-series (K4 -- Resilience dynamics, not a level).
+    # disk_read_sec/disk_write_sec above are untouched (K2/compat).
+    disk_read_ms_p50: Optional[float] = None
+    disk_read_ms_p95: Optional[float] = None
+    disk_write_ms_p50: Optional[float] = None
+    disk_write_ms_p95: Optional[float] = None
+    disk_lat_max_ms: Optional[float] = None
+    disk_lat_samples: Optional[int] = None
+
+
+# --------------------------------------------------------------------------- #
+# Liveness  (частый пинг «я жив»; НИКАКОЙ телеметрии — сервер обновляет только
+# devices.last_seen. Аддитивный msg_type: CONTRACT_VERSION не бампится — старый
+# агент его не шлёт, старому серверу новый агент шлёт напрасно (422 -> drop),
+# телеметрийные конверты при этом не страдают.)
+# --------------------------------------------------------------------------- #
+class LivenessPayload(_Base):
+    # Одно непустое поле: transport пропускает конверты с пустым payload.
+    alive: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------- #
+# Update status  (агент рапортует статус самообновления: при старте, при смене
+# состояния и при каждой неудаче -- НЕ телеметрия. Сервер знает актуальную
+# версию из своего манифеста (server/updates.py), поэтому available_version
+# контрактом принимается и валидируется, но сервер его не хранит -- хранить
+# чужое мнение о "актуальной версии" было бы лишним источником рассинхрона.
+# Аддитивный msg_type: CONTRACT_VERSION не бампится -- тот же прецедент, что и
+# liveness выше: старый агент его не шлёт, старому серверу новый агент шлёт
+# напрасно (422 -> drop), телеметрийные конверты при этом не страдают.)
+# --------------------------------------------------------------------------- #
+class UpdateStatusPayload(_Base):
+    checked_at: Optional[str] = None
+    state: Literal["ok", "updating", "failed"]  # машинное значение, English
+    error: Optional[str] = Field(default=None, max_length=500)  # русская проза для оператора
+    available_version: Optional[str] = Field(default=None, max_length=32)
+
+
+# --------------------------------------------------------------------------- #
+# Events  (whitelisted log batch)
+# --------------------------------------------------------------------------- #
+class EventItem(_Base):
+    ts: Optional[str] = None
+    log: Optional[str] = None
+    source: Optional[str] = None
+    event_id: Optional[int] = None
+    level: Optional[str] = None  # Critical / Error / Warning
+    message: Optional[str] = None
+
+
+class EventBatchPayload(_Base):
+    events: list[EventItem] = Field(default_factory=list)
+    window_hours: Optional[float] = None
+
+
+# --------------------------------------------------------------------------- #
+# Source health (collector-trust, per logical source, §5 / §12 of contract)
+# --------------------------------------------------------------------------- #
+class SourceHealth(_Base):
+    """Per-source collector status reported by the agent on every envelope.
+
+    status: one of ok | partial | empty | timeout | blocked | absent
+    collected_at: UTC ISO timestamp when the collector ran (None if it never ran).
+    """
+
+    status: Literal["ok", "partial", "empty", "timeout", "blocked", "absent"]
+    collected_at: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Envelope
+# --------------------------------------------------------------------------- #
+class Envelope(_Base):
+    # max_length defense-in-depth (stoperrors P2-7) against a deliberately
+    # oversized device_id inflating the rate-limiter's in-memory
+    # _device_windows dict (server/ingest_guards.py); 256 is far above any real
+    # id -- resolve_device_id() in client/config.py produces at most ~28 chars
+    # ("dev-" + 24 hex, or "agent-" + 16 hex for the no-MachineGuid fallback).
+    device_id: str = Field(max_length=256)
+    # max_length: ревью LOW-1 — единственное поле конверта без капа; "0."+"1"*4290+".0"
+    # проходило MAJOR-гейт и оседало в devices.agent_version (раздувание Флота).
+    agent_version: str = Field(default=CONTRACT_VERSION, max_length=32)
+    msg_type: MsgType
+    ts: str = Field(default_factory=utcnow_iso)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    # Per-source collection health (Plan 2).  Additive optional field;
+    # old servers with extra="allow" silently accept it; missing means no health
+    # block from older agents (treated as absent on server side).
+    source_health: dict[str, SourceHealth] = Field(default_factory=dict)
+    # Live machine name (platform.node) on EVERY envelope, so the dashboard shows
+    # the real name as soon as any message arrives -- not only on the rare
+    # inventory cadence. Additive optional; old agents omit it -> None, and the
+    # server COALESCEs so an empty value never wipes a stored name. CONTRACT_VERSION
+    # is deliberately NOT bumped (additive/optional, like site_code/org_code below).
+    hostname: Optional[str] = None
+    # Site/org identity (W1.1).  Additive optional fields; old agents that omit
+    # them produce None here; COALESCE on the server preserves any previously-set
+    # value.  CONTRACT_VERSION is deliberately NOT bumped (additive/optional).
+    site_code: Optional[str] = None
+    site_name: Optional[str] = None
+    # Extended org identity (additive optional; COALESCE on server keeps existing values).
+    org_code: Optional[str] = None
+    dept_code: Optional[str] = None
+    comment: Optional[str] = None
+    # Персональные данные владельца ПК: вводятся пользователем в трее, доезжают
+    # через спул -> агент. Аддитивно/опционально, COALESCE на сервере ->
+    # CONTRACT_VERSION намеренно НЕ бампается (как site_code/org_code выше).
+    owner_full_name: Optional[str] = Field(default=None, max_length=140)
+    owner_position: Optional[str] = Field(default=None, max_length=140)
+    owner_phone: Optional[str] = Field(default=None, max_length=32)
+    # P1 transport hardening: client-generated UUID4.hex for server-side dedup
+    # of retried envelopes.  Additive optional; old agents that omit it are never
+    # rejected -- the server just skips dedup for keyless envelopes.
+    # max_length=64: UUID4.hex is 32 chars; cap prevents oversized keys from
+    # inflating the in-memory dedup dict before the 50k-entry trim fires.
+    idempotency_key: Optional[str] = Field(default=None, max_length=64)
+
+
+class PrintJobRecord(_Base):
+    job_id: Optional[int] = None
+    ts: str
+    # max_length backstops the agent-side clip (print_jobs._MAX_NAME_LEN), как у
+    # PrinterPortHint.name (второй путь того же имени; symmetric cap keeps the
+    # printer_ip_map join sound). Легитимный потолок имени — 255: длиннее всего
+    # UNC-имя сетевого подключения (лимит длины имени ключа реестра
+    # HKCU\Printers\Connections), НЕ «220 + redirected-суффикс» (суффикс RDS
+    # добавляется до AddPrinter, лимит применяется к финальному имени). Запас капа
+    # = 1 символ; user_name ≤ 104 (UPN). Потолок ВЫШЕ достижимого агентом — 422 не
+    # может дропнуть живой конверт (см. PRINT_JOBS_MAX); ревью LOW-1/LOW-2 2026-08-21.
+    printer: str = Field(max_length=256)
+    pages: int
+    size_bytes: Optional[int] = None
+    user_name: Optional[str] = Field(default=None, max_length=256)
+    # Collection method: "events" (Event 307, per-job detail) | "counter"
+    # (spooler perf-counter deltas; job_id/user_name are None). Additive
+    # optional -- old agents send nothing -> None; no CONTRACT_VERSION bump.
+    source: Optional[str] = Field(default=None, max_length=16)
+
+
+class PrintJobsPayload(_Base):
+    jobs: list[PrintJobRecord] = Field(default_factory=list, max_length=PRINT_JOBS_MAX)
+    window_from: Optional[str] = None
+
+
+_PAYLOAD_MODELS: dict[str, type[_Base]] = {
+    "inventory": InventoryPayload,
+    "historical": HistoricalPayload,
+    "heartbeat": HeartbeatPayload,
+    "events": EventBatchPayload,
+    "print_jobs": PrintJobsPayload,
+    "liveness": LivenessPayload,
+    "update_status": UpdateStatusPayload,
+}
+
+
+def parse_payload(msg_type: str, payload: dict[str, Any]) -> _Base:
+    """Validate a raw payload dict into its typed model based on msg_type."""
+    model = _PAYLOAD_MODELS.get(msg_type)
+    if model is None:
+        raise ValueError(f"unknown msg_type: {msg_type!r}")
+    return model.model_validate(payload)

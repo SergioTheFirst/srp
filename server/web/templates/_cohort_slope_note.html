@@ -1,0 +1,13 @@
+{# B6 6.3: cohort_slope_verdict (dashboard.py) — уже готовый по-метрикам булев
+   результат, посчитанный на сервере одним SQL-чтением персистентных
+   scores.risk.trajectory когорты (та же модель); здесь только показ, никакой
+   арифметики. Отсутствие ключа = нет сигнала (тонкая когорта или метрика не
+   ухудшается) — молчим, не пишем «нет». Инклюдится ВНУТРИ цикла по tmeta
+   (device.html) -- наследует key/lab оттуда через общий Jinja-контекст.
+   .traj-cohort-note's CSS rule is printed ONCE by device.html itself, outside
+   this loop -- a note can first appear on any tmeta row (not only the first
+   one with trajectory data), so it must not live behind a per-iteration flag. #}
+{% if cohort_slope_verdict.get(key) %}
+<div class="traj-cohort-note"
+     title="Сравнение с устройствами той же модели: скорость ухудшения этого показателя выше, чем у большинства из них, по последнему расчёту тренда каждого устройства">{{ lab }} ухудшается быстрее, чем у большинства похожих машин</div>
+{% endif %}

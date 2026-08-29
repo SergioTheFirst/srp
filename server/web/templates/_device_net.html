@@ -1,0 +1,173 @@
+{# ── B5 5.1: «Сеть этой машины» — полные сетевые данные этого ПК из уже
+   собранного historical payload (network_adapters/neighbors/routes/
+   connections, shared/schema.py:184-307) + printer_ports (спулер этого ПК).
+   Никаких новых чтений — то же поле d.historical, что уже несёт таблица
+   «Сеть» выше в device.html. Однообразная информация -> в <details>,
+   свёрнуто по умолчанию (дизайн-директива #5); блок отсутствует целиком
+   без данных (UNKNOWN over false confidence, как _disk_smart.html).
+
+   .get() всюду для опциональных полей, НИКОГДА dot-access + `is not none`:
+   payload сохраняется как агент его прислал (pipeline.py передаёт env.payload
+   напрямую в db.store_historical, без полной pydantic model_dump) -- ключ
+   может отсутствовать целиком, а не быть null. Dot-access на отсутствующем
+   ключе даёт Jinja Undefined, и «Undefined is not none» == True (тот же
+   живой баг, что поймал B4 на дисках без nvme_percentage_used). Вынесен из
+   device.html только ради лимита 800 строк на файл (как _device_vitals.html
+   и _disk_smart.html). #}
+{% set hist = d.historical %}
+{% set adapters = (hist.get('network_adapters') if hist else none) or [] %}
+{% if adapters %}
+{# review B1-B5 final LOW: hist.get(k) is None (agent never sent this key --
+   pre-T2 agent, or that one collector failed wholesale) is NOT the same fact
+   as hist.get(k) == [] (collector ran, genuinely found nothing) -- the old
+   "... or []" collapsed both into one "не обнаружено" claim, the same
+   false-confidence shape the B4 review fixed on the disk-errors chip
+   (UNKNOWN over false confidence, CLAUDE.md §5). Keep the raw value around to
+   tell the two apart in the message below; `or []` still feeds the loops/counts. #}
+{% set neighbors_raw = hist.get('network_neighbors') %}
+{% set neighbors = neighbors_raw or [] %}
+{% set routes_raw = hist.get('network_routes') %}
+{% set routes = routes_raw or [] %}
+{% set conns = hist.get('network_connections') or [] %}
+{% set pports_raw = hist.get('printer_ports') %}
+{% set pports = pports_raw or [] %}
+<details style="margin-top:8px">
+  <summary>Сеть этой машины · адаптеров: {{ adapters|length }}</summary>
+  <div style="margin-top:12px">
+
+  <div class="section-label">Адаптеры</div>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th title="Имя сетевого адаптера">Адаптер</th>
+        <th title="Вид адаптера: проводной / Wi-Fi / другое">Тип</th>
+        <th title="Присвоенные IPv4-адреса">IPv4</th>
+        <th title="Физический MAC-адрес адаптера">MAC</th>
+        <th title="DNS-серверы, которые использует адаптер">DNS</th>
+        <th title="Получен ли адрес автоматически по DHCP">DHCP</th>
+        <th title="Согласованная скорость линка, Мбит/с">Скорость</th>
+        <th title="Шлюз по умолчанию для этого адаптера">Шлюз</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in adapters %}
+    {% set dhcp = a.get('dhcp') %}
+    {% set mbps = a.get('link_mbps') %}
+    <tr>
+      <td class="small">{{ a.get('name') or "—" }}{% if a.get('tunnel') %} <span class="chip accent" title="Похоже на VPN/туннель — трафик адаптера идёт не напрямую в офисную сеть">🔒</span>{% endif %}</td>
+      <td class="small muted">{{ a.get('kind') or "—" }}</td>
+      <td class="small mono">{{ (a.get('ipv4') or [])|join(", ") or "—" }}</td>
+      <td class="small mono muted">{{ a.get('mac') or "—" }}</td>
+      <td class="small mono">{{ (a.get('dns') or [])|join(", ") or "—" }}</td>
+      <td class="small">{% if dhcp is none %}—{% elif dhcp %}да{% else %}нет{% endif %}</td>
+      <td class="small mono">{{ "%.0f"|format(mbps|float) if mbps is not none else "—" }}</td>
+      <td class="small mono">{{ a.get('gateway') or "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <div class="section-label" style="margin-top:16px">ARP-соседи ({{ neighbors|length }})</div>
+  {% if neighbors %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th title="Имя NetBIOS соседа по локальной сети, если удалось определить">Имя</th>
+        <th>IP</th>
+        <th>MAC</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for n in neighbors %}
+    <tr>
+      <td class="small">{{ n.get('name') or "—" }}</td>
+      <td class="small mono">{{ n.get('ip') or "—" }}</td>
+      <td class="small mono muted">{{ n.get('mac') or "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif neighbors_raw is none %}
+  <p class="muted small">Нет данных о соседях в сети.</p>
+  {% else %}
+  <p class="muted small">Соседей не обнаружено.</p>
+  {% endif %}
+
+  <div class="section-label" style="margin-top:16px">Маршруты ({{ routes|length }})</div>
+  {% if routes %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th title="Целевая сеть/адрес маршрута">Назначение</th>
+        <th title="Следующий узел (next hop) маршрута">Через</th>
+        <th title="Метрика маршрута — чем меньше, тем приоритетнее">Метрика</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in routes %}
+    <tr>
+      <td class="small mono">{{ r.get('dest') or "—" }}</td>
+      <td class="small mono">{{ r.get('next_hop') or "—" }}</td>
+      <td class="small mono muted">{{ r.get('metric') if r.get('metric') is not none else "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif routes_raw is none %}
+  <p class="muted small">Нет данных о маршрутах.</p>
+  {% else %}
+  <p class="muted small">Дополнительных маршрутов нет.</p>
+  {% endif %}
+
+  <div class="section-label" style="margin-top:16px">Принтеры этого ПК ({{ pports|length }})</div>
+  {% if pports %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th title="Имя очереди печати в системе">Очередь</th><th title="IP-адрес принтера в локальной сети">IP</th></tr></thead>
+    <tbody>
+    {% for p in pports %}
+    <tr>
+      <td class="small">{{ p.get('name') or "—" }}</td>
+      <td class="small mono">{{ p.get('ip') or "—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif pports_raw is none %}
+  <p class="muted small">Нет данных о принтерах этого ПК.</p>
+  {% else %}
+  <p class="muted small">Локальных принтеров не обнаружено.</p>
+  {% endif %}
+
+  <details style="margin-top:16px">
+    <summary>TCP-соединения ({{ conns|length }})</summary>
+    <div class="table-wrap" style="margin-top:8px">
+    <table>
+      <thead><tr>
+        <th title="Локальный IP-адрес и порт этого ПК">Локальный адрес</th>
+        <th title="IP-адрес и порт удалённой стороны соединения">Внешний адрес</th>
+        <th title="Состояние TCP-соединения (ESTABLISHED, LISTENING и т.п.)">Состояние</th>
+      </tr></thead>
+      <tbody>
+      {% for c in conns %}
+      <tr>
+        <td class="small mono">{{ c.get('local_ip') or "—" }}:{{ c.get('local_port') if c.get('local_port') is not none else "—" }}</td>
+        <td class="small mono">{{ c.get('remote_ip') or "—" }}:{{ c.get('remote_port') if c.get('remote_port') is not none else "—" }}</td>
+        <td class="small muted">{{ c.get('state') or "—" }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+
+  </div>
+</details>
+{% endif %}

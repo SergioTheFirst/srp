@@ -1,0 +1,3128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SKLAD-01 · SRP</title>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<style>
+/* ── Source coverage widget ────────────────────────────────────────────── */
+.coverage-widget {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; padding: 13px 16px; margin: 14px 0 0;
+}
+.coverage-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; gap: 12px;
+}
+.coverage-title {
+  font: 600 12px/1 var(--mono); letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted);
+}
+.coverage-counts { display: flex; gap: 14px; font: 13px/1 var(--mono); flex-wrap: wrap; }
+.cov-good { color: var(--good); }
+.cov-warn { color: var(--warn); }
+.cov-na   { color: var(--muted); }
+.coverage-bar-wrap { margin-bottom: 10px; }
+.coverage-bar { height: 5px; background: var(--line); border-radius: 3px; display: flex; overflow: hidden; }
+.cb-seg { height: 100%; transition: width .3s; }
+.cb-good { background: var(--good); }
+.cb-warn { background: var(--warn); }
+.cb-na   { background: var(--na); }
+.coverage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Axis cards (score100 axes) ────────────────────────────────────────── */
+.axis-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--na);
+  border-radius: 5px; padding: 13px 16px; margin-bottom: 8px;
+}
+.axis-card.good { border-left-color: var(--good); }
+.axis-card.warn { border-left-color: var(--warn); }
+.axis-card.high { border-left-color: var(--high); }
+.axis-card.bad  { border-left-color: var(--bad); }
+.axis-card.na   { border-left-color: var(--na); }
+.axis-head {
+  display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 14px;
+}
+.axis-name   { font-weight: 600; font-size: 16px; margin-bottom: 3px; }
+.axis-reason { font-size: 14px; color: var(--muted); }
+.axis-val    { font: 700 28px/1 var(--mono); }
+.axis-val.good { color: var(--good); }
+.axis-val.warn { color: var(--warn); }
+.axis-val.high { color: var(--high); }
+.axis-val.bad  { color: var(--bad); }
+.axis-val.na   { color: var(--muted); }
+.axis-conf {
+  font: 600 11px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted); margin-top: 3px; cursor: help;
+  border-bottom: 1px dotted var(--muted);
+}
+.axis-factors { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.axis-factor-item {
+  font-size: 13px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 3px 8px;
+}
+.axis-blind { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+/* ── Trajectory rows ───────────────────────────────────────────────────── */
+.traj-table { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.traj-row {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--na);
+  border-radius: 4px; padding: 9px 13px;
+  display: grid;
+  grid-template-columns: 185px 1fr 150px;
+  align-items: center; gap: 14px;
+}
+.traj-row.bad  { border-left-color: var(--bad); }
+.traj-row.warn { border-left-color: var(--warn); }
+.traj-row.good { border-left-color: var(--good); }
+.traj-row.na   { border-left-color: var(--na); }
+.traj-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; cursor: help; }
+.traj-val  { font: 14px/1 var(--mono); color: var(--muted); }
+.traj-bar  { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.traj-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.traj-fill.bad  { background: var(--bad); }
+.traj-fill.warn { background: var(--warn); }
+.traj-fill.good { background: var(--good); }
+.traj-fill.na   { background: var(--na); }
+.traj-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.traj-eta { font: 700 14px/1 var(--mono); color: var(--text); }
+.traj-eta.eta-imminent { color: var(--bad); animation: blink-eta 1.5s ease-in-out infinite; }
+.traj-eta.eta-soon { color: var(--warn); }
+@keyframes blink-eta {
+  0%,100% { opacity: 1; } 50% { opacity: .45; }
+}
+.table-wrap { overflow-x: auto; }
+[title] { cursor: help; }
+
+/* ── Спец-полоса «Компьютер» ───────────────────────────────────────────── */
+.spec-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px; margin-top: 4px;
+}
+.spec-item {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 11px 14px;
+  box-shadow: var(--shadow-card);
+}
+.spec-l { font: 600 11px/1 var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.spec-v { font-size: 14px; line-height: 1.45; }
+.spec-now { font: 12px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
+.spec-flags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* ── B1: «Показатели 30 дней» — картина целиком, спарклайны наверху ─────── */
+.vitals-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin: 4px 0 20px;
+}
+.vitals-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 11px 14px;
+  box-shadow: var(--shadow-card);
+}
+.vitals-l {
+  font: 600 11px/1.3 var(--mono); letter-spacing: .8px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 6px; display: inline-block;
+  border-bottom: 1px dotted var(--muted);
+}
+.vitals-v { font: 700 18px/1 var(--mono); margin-bottom: 4px; }
+.vitals-spark { height: 44px; }
+</style>
+
+<style>
+/* ─── Dark theme (default) ─────────────────────────────────────────── */
+:root {
+  --bg:          #040810;
+  --panel:       #07101e;
+  --panel-2:     #0b1828;
+  --line:        #132030;
+  --line-2:      #1d3250;
+  --text:        #deeef8;
+  --muted:       #7aa8c4;
+  --accent:      #0ea5e9;
+  --accent-dim:  rgba(14,165,233,.12);
+  --good:        #10d97a;
+  --good-dim:    rgba(16,217,122,.12);
+  --warn:        #f59e0b;
+  --warn-dim:    rgba(245,158,11,.12);
+  --high:        #f97316;
+  --high-dim:    rgba(249,115,22,.12);
+  /* Dark theme: no red — "bad" reads as a high-contrast yellow highlight. */
+  --bad:         #ffe000;
+  --bad-dim:     rgba(255,224,0,.14);
+  --na:          #5878a0;
+  --na-dim:      rgba(88,120,160,.12);
+  --mono:        "JetBrains Mono","Cascadia Code","Fira Code",Consolas,monospace;
+  --font-body:   -apple-system,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+  --r-card:      5px;
+  --r-chip:      3px;
+  --r-btn:       4px;
+  --r-pill:      100px;
+  --shadow-card: none;
+  --header-h:    44px;
+}
+
+/* ─── Meta theme ────────────────────────────────────────────────────── */
+[data-theme="meta"] {
+  --bg:          #ffffff;
+  --panel:       #f1f4f7;
+  --panel-2:     #ffffff;
+  --line:        #ced0d4;
+  --line-2:      #dee3e9;
+  --text:        #0a1317;
+  --muted:       #5d6c7b;
+  --accent:      #0064e0;
+  --accent-dim:  rgba(0,100,224,.10);
+  --good:        #31a24c;
+  --good-dim:    rgba(49,162,76,.10);
+  --warn:        #f7b928;
+  --warn-dim:    rgba(247,185,40,.12);
+  --high:        #f2a918;
+  --high-dim:    rgba(242,169,24,.12);
+  --bad:         #e41e3f;
+  --bad-dim:     rgba(228,30,63,.10);
+  --na:          #8595a4;
+  --na-dim:      rgba(133,149,164,.10);
+  --font-body:   "Helvetica Neue",Helvetica,"Segoe UI",Arial,sans-serif;
+  --r-card:      16px;
+  --r-chip:      100px;
+  --r-btn:       100px;
+  --shadow-card: rgba(20,22,26,.08) 0 1px 4px 0;
+  --header-h:    64px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 var(--font-body);
+  min-height: 100vh;
+  transition: background .2s, color .2s;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ─── Header ─────────────────────────────────────────────────────────── */
+header.top {
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 28px;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--line-2);
+  background: var(--panel);
+  position: sticky; top: 0; z-index: 100;
+  transition: background .2s, border-color .2s;
+}
+.brand {
+  font: 700 17px/1 var(--mono);
+  letter-spacing: .4px;
+  flex-shrink: 0;
+}
+.brand em { color: var(--accent); font-style: normal; }
+.sub { color: var(--muted); font-size: 14px; }
+header.top nav { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+
+/* Dark nav: plain links */
+header.top nav a {
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: var(--r-btn);
+  transition: color .15s;
+}
+header.top nav a:hover { color: var(--accent); text-decoration: none; }
+
+/* Meta nav: pill tabs */
+[data-theme="meta"] header.top .brand {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+[data-theme="meta"] header.top nav a {
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--bg);
+}
+[data-theme="meta"] header.top nav a:hover {
+  color: var(--text);
+  border-color: var(--text);
+  text-decoration: none;
+}
+[data-theme="meta"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+}
+
+/* ─── Theme toggle button ────────────────────────────────────────────── */
+#theme-toggle {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 700 13px/1 var(--font-body);
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  letter-spacing: .2px;
+  transition: border-color .15s, color .15s, background .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+[data-theme="meta"] #theme-toggle {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+[data-theme="meta"] #theme-toggle:hover {
+  background: #444950;
+  border-color: #444950;
+}
+
+main { padding: 24px 28px; max-width: 1220px; margin: 0 auto; }
+
+/* ─── Section headings ───────────────────────────────────────────────── */
+h2, .section-label {
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+  margin: 30px 0 14px;
+}
+h2::after, .section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.section-label.predictive { color: var(--accent); }
+.section-label.predictive::after { background: rgba(14,165,233,.25); }
+.section-label.incident { color: var(--warn); }
+.section-label.incident::after { background: rgba(245,158,11,.2); }
+
+/* Meta section labels: drop uppercase mono, use clean style */
+[data-theme="meta"] h2,
+[data-theme="meta"] .section-label {
+  font: 700 13px/1 var(--font-body);
+  letter-spacing: .3px;
+  text-transform: none;
+  color: var(--muted);
+}
+[data-theme="meta"] .section-label.predictive { color: var(--accent); }
+[data-theme="meta"] .section-label.incident   { color: var(--high); }
+
+/* ─── Utility ────────────────────────────────────────────────────────── */
+.muted { color: var(--muted); }
+.mono  { font-family: var(--mono); }
+.small { font-size: 14px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill {
+  font: 600 12px/1 var(--mono);
+  padding: 2px 7px; border-radius: 20px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+
+/* ─── Chips ──────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 700 13px/1 var(--mono);
+  padding: 3px 8px; border-radius: var(--r-chip);
+  letter-spacing: .3px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+[data-theme="meta"] .chip {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.chip.good { background: var(--good-dim); color: var(--good); border-color: rgba(16,217,122,.35); }
+.chip.warn { background: var(--warn-dim); color: var(--warn); border-color: rgba(245,158,11,.35); }
+.chip.high { background: var(--high-dim); color: var(--high); border-color: rgba(249,115,22,.35); }
+.chip.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,63,94,.35); }
+.chip.na   { background: var(--na-dim);   color: var(--muted);border-color: rgba(88,120,160,.35); }
+.chip.accent{ background: var(--accent-dim); color: var(--accent); border-color: rgba(14,165,233,.35); }
+/* "not in directory" chip — a typo'd org/dept code, surfaced not rejected (§7) */
+.chip-unk {
+  display: inline-block; font: 600 10px/1 var(--mono); vertical-align: middle;
+  padding: 2px 5px; border-radius: 3px;
+  background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,158,11,.35);
+}
+
+/* ─── Score grid ─────────────────────────────────────────────────────── */
+.scoregrid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.scorecard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 15px 18px;
+  box-shadow: var(--shadow-card);
+  transition: border-radius .2s, box-shadow .2s;
+}
+[data-theme="meta"] .scorecard {
+  background: #fff;
+  border-left-width: 1px;
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="meta"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 16px; right: 16px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--line);
+}
+[data-theme="meta"] .scorecard.good::before { background: var(--good); }
+[data-theme="meta"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="meta"] .scorecard.high::before { background: var(--high); }
+[data-theme="meta"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="meta"] .scorecard.na::before   { background: var(--na); }
+
+.scorecard.good { border-left-color: var(--good); }
+.scorecard.warn { border-left-color: var(--warn); }
+.scorecard.high { border-left-color: var(--high); }
+.scorecard.bad  { border-left-color: var(--bad); }
+.scorecard.na   { border-left-color: var(--na); }
+
+.scorecard .lab {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted);
+}
+[data-theme="meta"] .scorecard .lab {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+.scorecard .val {
+  font: 700 40px/1 var(--mono); margin: 8px 0 4px;
+}
+[data-theme="meta"] .scorecard .val {
+  font: 500 40px/1 var(--font-body);
+}
+.val.good { color: var(--good); }
+.val.warn { color: var(--warn); }
+.val.high { color: var(--high); }
+.val.bad  { color: var(--bad); }
+.val.na   { color: var(--na); }
+.scorecard .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 12px; }
+.scorecard .bar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.scorecard.good .bar > i { background: var(--good); }
+.scorecard.warn .bar > i { background: var(--warn); }
+.scorecard.high .bar > i { background: var(--high); }
+.scorecard.bad  .bar > i { background: var(--bad); }
+.scorecard.na   .bar > i { background: var(--na); }
+
+/* ─── Risk rows ──────────────────────────────────────────────────────── */
+.riskrow {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 14px 16px; margin-bottom: 8px;
+  box-shadow: var(--shadow-card);
+}
+.riskrow .head {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 12px;
+}
+.riskrow .name { font-weight: 600; font-size: 16px; }
+[data-theme="meta"] .riskrow { background: #fff; }
+.riskbar { height: 6px; background: var(--line); border-radius: 2px; margin: 10px 0 6px; overflow: hidden; }
+.riskbar > i { display: block; height: 100%; border-radius: 2px; transition: width .4s ease; }
+.riskbar.good > i { background: var(--good); }
+.riskbar.warn > i { background: var(--warn); }
+.riskbar.high > i { background: var(--high); }
+.riskbar.bad  > i { background: var(--bad); }
+.riskbar.na   > i { background: var(--na); }
+
+/* ─── Factors list ───────────────────────────────────────────────────── */
+.factors { list-style: none; font-size: 14px; margin-top: 8px; }
+.factors li {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted);
+}
+.factors li .w { font-family: var(--mono); }
+.w.pos { color: var(--bad); }
+.w.neg { color: var(--good); }
+
+/* ─── Table ──────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th {
+  color: var(--muted); font: 600 12px/1 var(--mono);
+  letter-spacing: 1px; text-transform: uppercase;
+  background: var(--panel);
+  position: sticky; top: var(--header-h); z-index: 10;
+}
+/* .table-wrap (printers.html, device.html + _device_net.html, print.html) sets
+   overflow-x:auto, which per the CSS Overflow spec forces overflow-y's computed
+   value to auto too (CSS Overflow §3.5) -- silently turning the div into a scroll
+   container, which becomes the sticky positioning ancestor for `th` above instead
+   of the page. Without this override the header sticks var(--header-h) INSIDE the
+   wrapper and its opaque background paints over the first data row underneath.
+   Shared here (not per-template) so every current and future .table-wrap picks it
+   up automatically -- do not remove without re-checking this interaction. */
+.table-wrap th { top: 0; }
+[data-theme="meta"] th {
+  font: 700 12px/1 var(--font-body);
+  letter-spacing: .2px; text-transform: none;
+}
+tbody tr { transition: background .1s; }
+tbody tr:hover { background: var(--panel-2); }
+[data-theme="meta"] tbody tr:hover { background: var(--panel); }
+
+/* ─── Stat cards ─────────────────────────────────────────────────────── */
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.stat {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 12px 16px; min-width: 110px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="meta"] .stat { background: #fff; }
+.stat .n { font: 700 24px/1 var(--mono); }
+[data-theme="meta"] .stat .n { font: 500 24px/1 var(--font-body); }
+.stat .l { color: var(--muted); font: 600 11px/1.2 var(--mono); letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+[data-theme="meta"] .stat .l { font: 700 12px/1.2 var(--font-body); letter-spacing: .2px; text-transform: none; }
+
+/* ─── Alert banners ──────────────────────────────────────────────────── */
+.alert-banner {
+  padding: 11px 15px; border-radius: var(--r-card); margin-bottom: 10px;
+  font-size: 15px; border-left: 3px solid;
+}
+[data-theme="meta"] .alert-banner {
+  border-left: none;
+  border-radius: var(--r-card);
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.alert-bad  { background: var(--bad-dim);  border-color: var(--bad);  color: var(--bad); }
+.alert-warn { background: var(--warn-dim); border-color: var(--warn); color: var(--warn); }
+
+/* ─── Misc ───────────────────────────────────────────────────────────── */
+details > summary { cursor: pointer; color: var(--muted); font-size: 15px; list-style: none; }
+details > summary::before { content: "▶ "; font-size: 12px; }
+details[open] > summary::before { content: "▼ "; }
+code {
+  font-family: var(--mono); background: var(--panel-2);
+  padding: 1px 5px; border-radius: 3px; font-size: 14px;
+}
+
+/* ─── Vercel theme ──────────────────────────────────────────────────────── */
+[data-theme="vercel"] {
+  --bg:          #fafafa;
+  --panel:       #ffffff;
+  --panel-2:     #f5f5f5;
+  --line:        #ebebeb;
+  --line-2:      #a1a1a1;
+  --text:        #171717;
+  --muted:       #4d4d4d;
+  --accent:      #0070f3;
+  --accent-dim:  rgba(0,112,243,.07);
+  --good:        #0070f3;
+  --good-dim:    rgba(0,112,243,.07);
+  --warn:        #f5a623;
+  --warn-dim:    rgba(245,166,35,.10);
+  --high:        #f5a623;
+  --high-dim:    rgba(245,166,35,.10);
+  --bad:         #ee0000;
+  --bad-dim:     rgba(238,0,0,.07);
+  --na:          #888888;
+  --na-dim:      rgba(136,136,136,.10);
+  --font-body:   system-ui,-apple-system,"Segoe UI Variable","Segoe UI",sans-serif;
+  --r-card:      8px;
+  --r-chip:      100px;
+  --r-btn:       6px;
+  --shadow-card: inset 0 0 0 1px rgba(0,0,0,.08),0 1px 1px rgba(0,0,0,.02),0 2px 2px rgba(0,0,0,.04);
+  --header-h:    64px;
+}
+[data-theme="vercel"] header.top {
+  background: rgba(255,255,255,.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding-top: 2px;
+}
+[data-theme="vercel"] header.top::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,#007cf0,#00dfd8,#7928ca,#ff0080,#ff4d4d,#f9cb28);
+  z-index: 1;
+}
+[data-theme="vercel"] .brand {
+  font: 600 16px/1 var(--font-body);
+  letter-spacing: -.4px;
+  color: var(--text);
+}
+[data-theme="vercel"] .brand em {
+  background: linear-gradient(90deg,#007cf0,#7928ca,#ff0080);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+[data-theme="vercel"] header.top nav a {
+  color: var(--muted);
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font: 400 14px/1 var(--font-body);
+}
+[data-theme="vercel"] header.top nav a:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+[data-theme="vercel"] header.top nav a.active {
+  background: var(--text);
+  color: #fff;
+}
+[data-theme="vercel"] #theme-toggle {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+  border-radius: var(--r-btn);
+  font: 500 14px/1 var(--font-body);
+  height: 28px;
+  padding: 0 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] #theme-toggle:hover {
+  background: #333;
+  border-color: #333;
+}
+[data-theme="vercel"] h2,
+[data-theme="vercel"] .section-label {
+  font: 400 12px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .section-label.predictive { color: var(--accent); }
+[data-theme="vercel"] .section-label.predictive::after { background: rgba(0,112,243,.15); }
+[data-theme="vercel"] .section-label.incident   { color: var(--warn); }
+[data-theme="vercel"] .section-label.incident::after   { background: rgba(245,166,35,.2); }
+[data-theme="vercel"] .scorecard {
+  background: var(--panel);
+  border: none;
+  border-left: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+  position: relative;
+  padding-top: 18px;
+}
+[data-theme="vercel"] .scorecard::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  border-radius: var(--r-card) var(--r-card) 0 0;
+  background: var(--line);
+}
+[data-theme="vercel"] .scorecard.good::before { background: var(--good); }
+[data-theme="vercel"] .scorecard.warn::before { background: var(--warn); }
+[data-theme="vercel"] .scorecard.high::before { background: var(--high); }
+[data-theme="vercel"] .scorecard.bad::before  { background: var(--bad); }
+[data-theme="vercel"] .scorecard .lab {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] .scorecard .val {
+  font: 600 40px/1 var(--font-body);
+  letter-spacing: -1.5px;
+}
+[data-theme="vercel"] .chip {
+  font: 500 12px/1 var(--font-body);
+  border-radius: var(--r-chip);
+  padding: 3px 10px;
+  letter-spacing: 0;
+}
+[data-theme="vercel"] .chip.good  { background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .chip.warn  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.high  { background: rgba(245,166,35,.10); color: #ab570a; border-color: rgba(245,166,35,.3); }
+[data-theme="vercel"] .chip.bad   { background: rgba(238,0,0,.07);    color: #ee0000; border-color: rgba(238,0,0,.2); }
+[data-theme="vercel"] .chip.na    { background: var(--panel-2);       color: var(--muted); border-color: var(--line); }
+[data-theme="vercel"] .chip.accent{ background: rgba(0,112,243,.08);  color: #0070f3; border-color: rgba(0,112,243,.2); }
+[data-theme="vercel"] .riskrow {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat {
+  background: var(--panel);
+  border: none;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+}
+[data-theme="vercel"] .stat .n {
+  font: 600 24px/1 var(--font-body);
+  letter-spacing: -.8px;
+}
+[data-theme="vercel"] .stat .l {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+[data-theme="vercel"] th {
+  background: var(--bg);
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="vercel"] td { border-bottom-color: var(--line); }
+[data-theme="vercel"] tbody tr:hover { background: rgba(0,0,0,.02); }
+[data-theme="vercel"] .alert-bad  { background: rgba(238,0,0,.06);    border-color: var(--bad);  color: #ee0000; }
+[data-theme="vercel"] .alert-warn { background: rgba(245,166,35,.08); border-color: var(--warn); color: #ab570a; }
+[data-theme="vercel"] .pill { background: var(--panel-2); border-color: var(--line); color: var(--muted); }
+[data-theme="vercel"] code { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+</style>
+<script>
+(function () {
+  var saved = localStorage.getItem("srp-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+})();
+// XSS defense (one source of truth): HTML-escape any agent/operator-controlled
+// string before it reaches an innerHTML or Plotly pseudo-HTML sink. Plotly renders
+// a <b>/<a>/<span> tag subset inside tick + hover text, so an un-escaped value there
+// executes just like innerHTML would. Escaped entities still round-trip to the
+// correct glyph for display, so legitimate names render unchanged.
+// HTML-context only: safe for innerHTML / double-quoted attributes / Plotly text.
+// NOT sufficient for a JS-string, URL/href, or unquoted-attribute sink — those need
+// their own encoding.
+window.srpEsc = function (s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+};
+</script>
+</head>
+<body>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Статичная копия демо от 2026-08-29. <a style="color:#0ea5e9" href="https://srp-demo.onrender.com/">Открыть живую версию</a> · <a style="color:#0ea5e9" href="../../../index.html">на главную j-space.ru</a></div>
+<script id="mirror-data" type="application/json">{}</script>
+<script>
+(function () {
+  var D = JSON.parse(document.getElementById("mirror-data").textContent);
+  window.fetch = function (url) {
+    var key = String(url), hit = null;
+    Object.keys(D).forEach(function (k) { if (key.indexOf(k) !== -1) { hit = k; } });
+    var v = hit === null ? null : D[hit];
+    return Promise.resolve({
+      ok: hit !== null,
+      status: hit === null ? 404 : 200,
+      json: function () { return Promise.resolve(v); },
+      text: function () {
+        return Promise.resolve(typeof v === "string" ? v : JSON.stringify(v));
+      }
+    });
+  };
+})();
+</script>
+<header class="top">
+  <div class="brand">SRP <em>//</em> раннее предупреждение</div>
+  <div class="sub">Veriton X2665G · desktop</div>
+  <nav>
+    <a href="../../index.html">флот</a>
+    <a href="../../health.html">здоровье</a>
+    <a href="../../pipeline.html">пайплайн</a>
+    <a href="../../print.html">печать</a>
+    <a href="../../printers.html">принтеры</a>
+    <a href="../../netmap.html">карта сети</a>
+    <a href="https://srp-demo.onrender.com/deploy">развёртывание</a>
+    <a href="https://srp-demo.onrender.com/api/v1/devices">API</a>
+    <button id="theme-toggle" onclick="(function(){
+      var h=document.documentElement;
+      var themes=['','meta','vercel'];
+      var labels={'':'Meta','meta':'Vercel','vercel':'Тёмный'};
+      var cur=h.getAttribute('data-theme')||'';
+      var next=themes[(themes.indexOf(cur)+1)%themes.length];
+      h.setAttribute('data-theme',next);
+      localStorage.setItem('srp-theme',next);
+      document.getElementById('theme-toggle').textContent=labels[next];
+    })()" title="Переключить тему"></button>
+    
+    <span class="chip accent" title="Публичное демо: данные вымышленные, изменение отключено">ДЕМО · только чтение</span>
+  </nav>
+</header>
+<main>
+
+
+
+<p class="small" style="margin-bottom:8px">
+  <a href="../../index.html" class="muted" style="font-family:var(--mono)">← флот</a>
+</p>
+
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">
+  <h1 style="font:700 24px/1.2 var(--mono);margin:0" title="demo-sklad-01">SKLAD-01</h1>
+  <span class="pill">desktop</span>
+</div>
+
+<div class="small muted">Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21</div>
+<div class="small muted mono" style="margin-bottom:20px">
+  demo-sklad-01
+   · Acer Veriton X2665G
+   · ООО «Ромашка»
+   / Логистика
+  · агент 0.3.0
+  · контакт 55м назад
+   · IP 192.168.77.13 <span class="chip-unk" title="дополнено картой сети">карта</span>
+   · MAC 02:1A:2B:01:00:0D
+</div>
+
+
+
+
+<div class="small muted mono" style="margin-bottom:20px">последнее обновление версии: 44д назад</div>
+
+
+
+<div class="section-label" style="margin-top:18px">Компьютер</div>
+
+
+
+<div class="spec-grid">
+  <div class="spec-item">
+    <div class="spec-l">Процессор</div>
+    <div class="spec-v">Intel Core i5-9400 · ядер: 6 / потоков: 6</div>
+    <div class="spec-now">загрузка сейчас: 30%</div>
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Память</div>
+    <div class="spec-v">8.0 ГБ</div>
+    <div class="spec-now">свободно сейчас: 1950.0 МБ</div>
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Диски</div>
+    <div class="spec-v">
+      
+      <div>KINGSTON SA400S37240G · SSD · 240.0 ГБ · SATA</div>
+      
+    </div>
+    <div class="spec-now">свободно на системном: 38%</div>
+  </div>
+  <div class="spec-item">
+    <div class="spec-l">Система</div>
+    <div class="spec-v">Microsoft Windows 10 Pro</div>
+    <div class="spec-now">аптайм: 0 ч</div>
+  </div>
+</div>
+
+<div class="spec-flags">
+  <span class="chip warn" title="Windows ожидает перезагрузку для завершения обновлений">требуется перезагрузка</span>
+  <span class="chip warn" title="Устройства с ошибками драйверов в диспетчере устройств">проблемных драйверов: 1</span>
+</div>
+
+<details style="margin-top:8px">
+  <summary>Прочее железо</summary>
+  <table style="max-width:700px;margin-top:8px">
+    <tbody>
+      <tr><td class="muted small" style="width:180px">BIOS</td><td class="small mono">R01-A2 (2020-11-02)</td></tr>
+      <tr><td class="muted small">Сборка ОС</td><td class="small mono">19045</td></tr>
+      <tr><td class="muted small">ОС установлена</td><td class="small mono">2021-04-06</td></tr>
+      
+      <tr><td class="muted small">Модули памяти</td><td class="small">
+        <div>8.0 ГБ · 2666 МГц · Micron</div>
+      </td></tr>
+      
+      <tr><td class="muted small">Период активности</td><td class="small mono">2026-07-16T05:00:00+00:00 → 2026-08-29T06:28:50.974197+00:00</td></tr>
+    </tbody>
+  </table>
+</details>
+
+
+
+
+
+
+
+
+
+
+<div class="section-label" style="margin-top:16px">Состояние машины</div>
+<div id="device-hero" class="hero-health">
+  
+  
+
+  
+  <div class="hero-verdict">
+    <div>
+      <span class="hero-kv-l">состояние</span>
+      <span class="hero-state warn">компенсация</span>
+    </div>
+    <p class="hero-action">
+      <span class="hero-kv-l">главный фактор</span> системная причина
+      · <span class="hero-kv-l">что делать</span> искать общую причину: питание, перегрев, недавнее обновление, антивирусные сканы
+    </p>
+  </div>
+
+  
+  
+  <div class="ladder">
+    
+    <div class="ladder-step ">
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">здоров</div>
+    </div>
+    
+    <div class="ladder-step ">
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">ранняя деградация</div>
+    </div>
+    
+    <div class="ladder-step current warn">
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">компенсация</div>
+    </div>
+    
+    <div class="ladder-step ">
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">ускоренная деградация</div>
+    </div>
+    
+    <div class="ladder-step ">
+      <div class="ladder-dot"></div>
+      <div class="ladder-label">предотказ</div>
+    </div>
+    
+  </div>
+  
+  <p class="hero-why">почему: 3 BSOD за 30 дней — серьёзная нестабильность системы; RSI 3.6/10 — OS заметно деградировала; 2 аварийных выключений за 30 дней; storage_wear → 1672д до предела (наклон +0.045/день); disk_fill → 677д до предела (наклон -0.057/день)</p>
+
+  
+  
+  <div class="hero-coords">
+    
+    
+    
+    
+    <div class="coord-card">
+      <div class="head">
+        <span class="name">Повреждения</span>
+        <span class="chip warn">35 из 100</span>
+      </div>
+      <div class="coord-sub">накопленный необратимый износ железа · выше = хуже</div>
+      <div class="coord-line">
+        <i class="warn" style="left:34.8%"></i>
+      </div>
+      <p class="coord-why">почему: 3 BSOD за 30 дней — серьёзная нестабильность системы; RSI 3.6/10 — OS заметно деградировала; 2 аварийных выключений за 30 дней; Power-on 27k ч</p>
+      <div class="coord-conf">уверенность: средняя</div>
+    </div>
+    
+    
+    
+    
+    <div class="coord-card">
+      <div class="head">
+        <span class="name">Устойчивость</span>
+        <span class="chip good">96 из 100</span>
+      </div>
+      <div class="coord-sub">запас прочности к новым сбоям · выше = лучше</div>
+      <div class="coord-line">
+        <i class="good" style="left:95.8%"></i>
+      </div>
+      <p class="coord-why">почему: storage_wear → 1672д до предела (наклон +0.045/день); disk_fill → 677д до предела (наклон -0.057/день); Power-on 27k ч</p>
+      <div class="coord-conf">уверенность: средняя</div>
+    </div>
+    
+    
+    
+    
+    <div class="coord-card">
+      <div class="head">
+        <span class="name">Наблюдаемость</span>
+        <span class="chip good">75 из 100</span>
+      </div>
+      <div class="coord-sub">полнота данных для оценки · выше = лучше</div>
+      <div class="coord-line">
+        <i class="good" style="left:75.0%"></i>
+      </div>
+      <p class="coord-why">почему: источник данных активен (вес 0.35); источник данных активен (вес 0.15); источник данных активен (вес 0.15); источник данных активен (вес 0.10)</p>
+      <div class="coord-conf">уверенность: высокая</div>
+    </div>
+    
+  </div>
+
+  
+  
+  <div class="axis-blind">⚠ не видно: нет телеметрии производительности; нет когорты для сравнения</div>
+  
+
+  
+  
+  
+  
+  
+  <div class="hero-chips">
+    <span class="chip accent" title="сводный индекс здоровья: свод повреждений и устойчивости; 0–100, выше = лучше; никогда не заменяет три координаты выше">
+      сводный индекс: 70 из 100
+    </span>
+    <span class="chip warn" title="истощение компенсации — прогноз горизонта 90 дней">окно до ухудшения: ≤90 дней</span>
+    <span class="chip na" title="изменение сводного индекса за 7 дней">за 7 дней: → 0.0</span>
+    
+    <span class="chip na" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: средняя</span>
+    
+  </div>
+
+  
+  
+  <div class="hero-spark-head">
+    <span class="small muted">сводный индекс, динамика</span>
+    <span>
+      <button type="button" class="btn-small active" data-hero-spark-days="30">30д</button>
+      <button type="button" class="btn-small" data-hero-spark-days="90">90д</button>
+    </span>
+  </div>
+  <div id="hero-health-spark" style="height:90px"></div>
+  <script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>
+  <script id="hero-health-series" type="application/json">[{"index": 69.8, "ts": "2026-08-29T06:28:50.974197+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:18:36.839468+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:18:36.839468+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:18:36.839468+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:18:36.839468+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:18:36.839468+00:00"}, {"index": 69.8, "ts": "2026-08-29T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T20:16:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T16:49:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T13:57:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T10:44:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T08:09:00+00:00"}, {"index": 69.8, "ts": "2026-08-28T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T20:13:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T16:40:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T13:53:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T11:04:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T07:48:00+00:00"}, {"index": 69.8, "ts": "2026-08-27T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T19:41:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T16:57:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T13:58:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T11:03:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T08:09:00+00:00"}, {"index": 69.8, "ts": "2026-08-26T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T20:17:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T17:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T14:01:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T10:52:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T07:46:00+00:00"}, {"index": 69.8, "ts": "2026-08-25T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T20:12:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T16:57:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T14:04:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T10:55:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T07:41:00+00:00"}, {"index": 69.8, "ts": "2026-08-24T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T19:40:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T16:52:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T14:16:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T11:06:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T07:58:00+00:00"}, {"index": 69.8, "ts": "2026-08-23T06:00:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T20:04:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T16:41:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T13:52:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T10:54:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T08:10:00+00:00"}, {"index": 69.8, "ts": "2026-08-22T06:00:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T20:00:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T17:07:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T14:20:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T10:59:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T07:56:00+00:00"}, {"index": 77.4, "ts": "2026-08-21T06:00:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T19:58:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T17:10:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T14:11:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T11:13:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T08:06:00+00:00"}, {"index": 77.4, "ts": "2026-08-20T06:00:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T19:50:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T16:51:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T13:48:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T10:43:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T08:05:00+00:00"}, {"index": 77.4, "ts": "2026-08-19T06:00:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T19:54:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T16:45:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T13:58:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T11:10:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T07:49:00+00:00"}, {"index": 77.4, "ts": "2026-08-18T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T19:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T17:07:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T14:05:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T11:17:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T08:08:00+00:00"}, {"index": 80.5, "ts": "2026-08-17T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T19:43:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T17:03:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T14:13:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T11:08:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T08:13:00+00:00"}, {"index": 80.5, "ts": "2026-08-16T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T20:02:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T17:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T13:50:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T10:59:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T07:51:00+00:00"}, {"index": 80.5, "ts": "2026-08-15T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T20:03:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T17:02:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T13:52:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T10:47:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T08:17:00+00:00"}, {"index": 80.5, "ts": "2026-08-14T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T20:19:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T16:51:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T13:59:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T11:09:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T07:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-13T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T20:20:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T16:42:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T13:50:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T11:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T08:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-12T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T19:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T16:48:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T13:55:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T11:15:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T07:54:00+00:00"}, {"index": 80.5, "ts": "2026-08-11T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T20:06:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T16:48:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T13:46:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T11:08:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T08:03:00+00:00"}, {"index": 80.5, "ts": "2026-08-10T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T20:11:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T17:07:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T14:10:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T10:49:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T08:20:00+00:00"}, {"index": 80.5, "ts": "2026-08-09T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T19:49:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T16:52:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T14:16:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T11:19:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T08:09:00+00:00"}, {"index": 80.5, "ts": "2026-08-08T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T19:49:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T16:47:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T14:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T11:08:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T08:02:00+00:00"}, {"index": 80.5, "ts": "2026-08-07T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T20:10:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T17:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T14:15:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T10:51:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T08:09:00+00:00"}, {"index": 80.5, "ts": "2026-08-06T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T19:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T17:03:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T14:20:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T11:01:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T08:16:00+00:00"}, {"index": 80.5, "ts": "2026-08-05T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T20:12:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T16:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T14:07:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T11:16:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T07:53:00+00:00"}, {"index": 80.5, "ts": "2026-08-04T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T19:46:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T16:53:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T13:57:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T11:10:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T08:07:00+00:00"}, {"index": 80.5, "ts": "2026-08-03T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T19:58:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T17:19:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T13:45:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T10:54:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T08:08:00+00:00"}, {"index": 80.5, "ts": "2026-08-02T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T19:57:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T17:07:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T13:53:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T11:03:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T07:56:00+00:00"}, {"index": 80.5, "ts": "2026-08-01T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T20:16:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T17:03:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T14:14:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T11:11:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T07:47:00+00:00"}, {"index": 80.5, "ts": "2026-07-31T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T20:03:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T16:42:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T13:54:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T11:02:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T07:49:00+00:00"}, {"index": 80.5, "ts": "2026-07-30T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T19:49:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T16:40:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T14:14:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T11:06:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T08:02:00+00:00"}, {"index": 80.5, "ts": "2026-07-29T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T19:45:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T16:50:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T14:08:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T10:51:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T07:45:00+00:00"}, {"index": 80.5, "ts": "2026-07-28T06:00:00+00:00"}, {"index": 80.5, "ts": "2026-07-27T19:45:00+00:00"}]</script>
+  <script>
+  (function () {
+    var el = document.getElementById("hero-health-spark");
+    var dataEl = document.getElementById("hero-health-series");
+    if (!el || !dataEl) return;
+    var all = JSON.parse(dataEl.textContent || "[]")
+                .filter(function (r) { return r.ts && r.index != null; })
+                .reverse();  // stored newest-first -> chart oldest -> newest
+    var days = 30;
+
+    function draw() {
+      if (typeof Plotly === "undefined") return;
+      var cutoff = new Date(Date.now() - days * 86400000).toISOString();
+      var rows = all.filter(function (r) { return r.ts >= cutoff; });
+      if (rows.length < 2) {
+        el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>";
+        return;
+      }
+      var css = getComputedStyle(document.documentElement);
+      var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+      var grid = css.getPropertyValue("--line").trim() || "#132030";
+      Plotly.newPlot(el, [{
+        x: rows.map(function (r) { return r.ts; }),
+        y: rows.map(function (r) { return r.index; }),
+        type: "scatter", mode: "lines",
+        line: { color: acc, width: 2 },
+        hovertemplate: "%{x}<br>индекс <b>%{y:.0f}</b><extra></extra>"
+      }], {
+        paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+        font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 11 },
+        margin: { t: 6, r: 10, b: 26, l: 32 },
+        xaxis: { gridcolor: grid, showgrid: false },
+        yaxis: { gridcolor: grid, range: [0, 100] },
+        showlegend: false, autosize: true,
+        hoverlabel: srpHoverLabel()
+      }, { responsive: true, displayModeBar: false });
+    }
+
+    function init() {
+      draw();
+      document.querySelectorAll("[data-hero-spark-days]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          document.querySelectorAll("[data-hero-spark-days]").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          days = parseInt(btn.getAttribute("data-hero-spark-days"), 10);
+          draw();
+        });
+      });
+      new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
+  })();
+  </script>
+  
+  
+</div>
+<style>
+.hero-verdict { margin: 4px 0 2px; }
+.hero-kv-l { font: 600 11px/1 var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+.hero-state { font: 700 22px/1.2 var(--font-body); }
+.hero-state.good { color: var(--good); } .hero-state.warn { color: var(--warn); }
+.hero-state.high { color: var(--high); } .hero-state.bad { color: var(--bad); }
+.hero-state.na { color: var(--na); }
+.hero-action { font-size: 15px; color: var(--text); margin: 8px 0 0; line-height: 1.55; }
+.hero-why { font-size: 13px; color: var(--text); margin: 6px 0 0; line-height: 1.5; }
+.hero-coords { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 14px 0 0; }
+.coord-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); padding: 14px 16px; box-shadow: var(--shadow-card); }
+.coord-card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.coord-card .name { font-weight: 600; font-size: 16px; }
+.coord-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.coord-line { position: relative; height: 2px; background: var(--line); border-radius: 1px; margin: 14px 0 2px; }
+.coord-line > i { position: absolute; top: -5px; width: 3px; height: 12px; border-radius: 2px; transform: translateX(-50%); }
+.coord-line > i.good { background: var(--good); } .coord-line > i.warn { background: var(--warn); }
+.coord-line > i.high { background: var(--high); } .coord-line > i.bad { background: var(--bad); }
+.coord-line > i.na { background: var(--na); }
+.coord-why { font-size: 13px; color: var(--text); margin: 8px 0 0; line-height: 1.5; }
+.coord-conf { font: 600 11px/1 var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.hero-spark-head { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 6px; }
+.btn-small.active { border-color: var(--accent); color: var(--accent); }
+.no-data { text-align: center; padding: 24px 10px; color: var(--muted); }
+.ladder { display: flex; align-items: flex-start; justify-content: space-between; position: relative; margin: 14px 0 4px; }
+.ladder::before {
+  content: ""; position: absolute; top: 7px; left: 16px; right: 16px; height: 1px;
+  background: var(--line); z-index: 0;
+}
+.ladder-step { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; z-index: 1; flex: 1; }
+.ladder-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line); }
+.ladder-step.current .ladder-dot { width: 20px; height: 20px; border-color: transparent; }
+.ladder-step.current.good .ladder-dot { background: var(--good); }
+.ladder-step.current.warn .ladder-dot { background: var(--warn); }
+.ladder-step.current.bad  .ladder-dot { background: var(--bad); }
+.ladder-step.current.na   .ladder-dot { background: var(--na); }
+.ladder-label { font: 600 10px/1 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.ladder-step.current .ladder-label { color: var(--text); }
+</style>
+
+
+
+
+
+  
+  
+    
+    
+      
+      
+    
+  
+
+  
+  
+    
+    
+      
+    
+  
+
+  
+  
+    
+    
+      
+      
+    
+  
+
+  
+  
+    
+    
+      
+      
+    
+  
+
+  
+  
+    
+    
+      
+      
+        
+      
+    
+  
+
+  
+  
+    
+    
+      
+      
+    
+  
+
+
+
+
+
+<div class="section-label incident" id="attention-label" style="margin-top:24px">Требует внимания</div>
+
+
+  
+  
+    
+      
+<div class="axis-card bad">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Нестабильность ОС: RSI Windows (индекс стабильности 1–10, ниже = хуже), синие экраны, неожиданные выключения, время загрузки. 0–100, выше = хуже">Стабильность ОС</div>
+      <div class="axis-reason"></div>
+    </div>
+    
+    <div style="text-align:right">
+      <div class="axis-val bad" title="Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50">58 из 100</div>
+      <div class="axis-conf" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: средняя</div>
+    </div>
+    
+  </div>
+  <div class="axis-factors"><div class="axis-factor-item">RSI 3.6/10 — OS заметно деградировала</div><div class="axis-factor-item">3 BSOD за 30 дней — серьёзная нестабильность системы</div><div class="axis-factor-item">2 аварийных выключений за 30 дней</div></div>
+  
+  
+  <div class="axis-blind">⚠ не видно: статус ожидающей перезагрузки не собирается — машина, ожидающая перезагрузки для применения обновлений безопасности или driver-обновлений, находится в деградированном состоянии, которое здесь не обнаруживается; счётчики сбоев не позволяют различить аппаратную неисправность, регрессию driver или повреждение OS — определение причины требует анализа каждого события</div>
+  
+</div>
+
+    
+  
+
+
+
+
+
+<script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>
+<script>
+// Общий хелпер для всех спарклайнов страницы устройства (полоса «Показатели
+// 30 дней» и посуточные карточки, напр. история SMART дисков, B4).
+// Объявлен один раз; вызывающий код сам ждёт DOMContentLoaded перед вызовом,
+// поэтому здесь достаточно проверить готовность Plotly (CDN-скрипт deferred).
+function srpSpark(el, dates, values) {
+  if (!el || typeof Plotly === "undefined") return;
+  var pts = [];
+  for (var i = 0; i < dates.length; i++) {
+    if (values[i] != null) { pts.push([dates[i], values[i]]); }
+  }
+  if (pts.length < 2) {
+    el.innerHTML = "<div class=\"no-data\" style=\"font-size:11px\">мало данных</div>";
+    return;
+  }
+  var x = pts.map(function (p) { return p[0]; });
+  var y = pts.map(function (p) { return p[1]; });
+  var hoverText = x.map(function (d, i) { return window.srpEsc(d) + ": " + window.srpEsc(y[i]); });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    Plotly.newPlot(el, [{
+      x: x, y: y, type: "scatter", mode: "lines",
+      line: { color: acc, width: 2 },
+      hoverinfo: "text", text: hoverText,
+    }], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      margin: { t: 4, r: 4, b: 4, l: 4 },
+      xaxis: { visible: false, fixedrange: true },
+      yaxis: { visible: false, fixedrange: true },
+      showlegend: false, autosize: true,
+      hoverlabel: srpHoverLabel(),
+    }, { responsive: true, displayModeBar: false });
+  }
+  draw();
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+}
+</script>
+
+
+
+
+
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+
+<div class="section-label" style="margin-top:24px">Показатели 30 дней</div>
+<div class="vitals-grid">
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль загрузки CPU за день — типичный пик нагрузки, без редких выбросов">ЦП, p95</div>
+    <div class="vitals-v">30%</div>
+    <div id="vit-cpu" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наименьшее количество свободной оперативной памяти за день">Память, мин. свободно</div>
+    <div class="vitals-v">1.9 ГБ</div>
+    <div id="vit-mem" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль длины очереди диска за день — сколько запросов одновременно ждут выполнения">Очередь диска, p95</div>
+    <div class="vitals-v">0.3</div>
+    <div id="vit-dq" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наибольшее число открытых дескрипторов процессов за день — устойчивый рост может означать утечку хендлов">Дескрипторы, max</div>
+    <div class="vitals-v">56000</div>
+    <div id="vit-han" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наименьший процент свободного места на системном диске за день">Свободно на диске, min</div>
+    <div class="vitals-v">38%</div>
+    <div id="vit-free" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наибольшая продолжительность непрерывной работы без перезагрузки за день">Аптайм, max</div>
+    <div class="vitals-v">0.6 дн</div>
+    <div id="vit-up" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль доли выделенной (committed) памяти за день — насколько близко система подходит к лимиту виртуальной памяти">Выделено памяти, p95</div>
+    <div class="vitals-v">71%</div>
+    <div id="vit-committed" class="vitals-spark"></div>
+  </div>
+  
+</div>
+<script>
+(function () {
+  function init() {
+    var dataEl = document.getElementById("hb-rollup-data");
+    if (!dataEl) return;
+    // hb-rollup-data carries 90д (shared with the disk-latency chart) but this
+    // strip is titled "Показатели 30 дней" -- clip before reversing (rollup
+    // rows arrive newest-first, so the first 30 are the most recent 30 days).
+    var rows = JSON.parse(dataEl.textContent || "[]").slice(0, 30).reverse();  // oldest -> newest
+    var dates = rows.map(function (r) { return r.day; });
+    function vals(key) { return rows.map(function (r) { return r[key]; }); }
+    srpSpark(document.getElementById("vit-cpu"), dates, vals("cpu_p95"));
+    srpSpark(document.getElementById("vit-mem"), dates, vals("mem_avail_min"));
+    srpSpark(document.getElementById("vit-dq"), dates, vals("disk_queue_p95"));
+    srpSpark(document.getElementById("vit-han"), dates, vals("handles_max"));
+    srpSpark(document.getElementById("vit-free"), dates, vals("free_space_min"));
+    srpSpark(document.getElementById("vit-up"), dates, vals("uptime_max"));
+    srpSpark(document.getElementById("vit-committed"), dates, vals("committed_pct_p95"));
+    // vit-nic может отсутствовать в DOM (карточка условная) -- srpSpark сама
+    // выходит по "if (!el) return", отдельная проверка тут не нужна.
+    srpSpark(document.getElementById("vit-nic"), dates, vals("nic_errors_max"));
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+
+
+
+<div class="section-label" style="margin-top:24px">Диски (SMART)</div>
+
+<p class="muted small" style="margin:2px 0 8px">Текущие показания SMART по каждому диску — часть значений уже могла войти в «Требует внимания» выше, если превышен порог риска.</p>
+<div class="disk-grid">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <div class="disk-card">
+    <div class="disk-head">
+      <div class="disk-model">KINGSTON SA400S37240G #1</div>
+      <div class="disk-bus">SSD · SATA</div>
+    </div>
+    
+    <div class="disk-metrics">
+      <div>
+        <div class="disk-m-l" title="Температура диска сейчас. Устойчиво высокая температура ускоряет износ и повышает риск отказа">Темп.</div>
+        <div class="disk-m-v good">45°C</div>
+      </div>
+      <div>
+        <div class="disk-m-l" title="Износ ресурса SSD/NVMe в % — 100% значит ресурс перезаписи исчерпан (для HDD обычно не сообщается)">Износ</div>
+        <div class="disk-m-v good">24%</div>
+      </div>
+      <div>
+        <div class="disk-m-l" title="Power-On Hours — суммарное время работы диска под питанием с завода">Наработка</div>
+        <div class="disk-m-v warn">
+          3 г 260 ч
+        </div>
+      </div>
+    </div>
+    
+    <div class="disk-sparks">
+      <div>
+        <div class="disk-m-l">Темп., история</div>
+        <div id="disk-spark-temp-0" class="disk-spark"></div>
+      </div>
+      <div>
+        <div class="disk-m-l">Износ, история</div>
+        <div id="disk-spark-wear-0" class="disk-spark"></div>
+      </div>
+    </div>
+    
+  </div>
+
+</div>
+<style>
+.disk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 4px 0 20px; }
+.disk-card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--na); border-radius: var(--r-card); padding: 13px 16px; box-shadow: var(--shadow-card); }
+.disk-card.bad { border-left-color: var(--bad); }
+.disk-model { font-weight: 600; font-size: 15px; }
+.disk-bus { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.disk-fail-badge { display: inline-block; font-size: 14px; padding: 6px 12px; margin: 8px 0; }
+.disk-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+.disk-m-l { font: 600 10px/1.3 var(--mono); letter-spacing: .6px; text-transform: uppercase; color: var(--muted); border-bottom: 1px dotted var(--muted); display: inline-block; }
+.disk-m-v { font: 700 16px/1.3 var(--mono); margin-top: 2px; }
+.disk-m-v.good { color: var(--good); }
+.disk-m-v.warn { color: var(--warn); }
+.disk-m-v.bad  { color: var(--bad); }
+.disk-m-v.na   { color: var(--na); }
+.disk-errs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.disk-sparks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.disk-spark { height: 36px; }
+</style>
+<script id="disk-series-data" type="application/json">{"0": [{"nvme_percentage_used": null, "received_at": "2026-08-29T06:00:00+00:00", "temperature_c": 45, "wear_pct": 24.0}, {"nvme_percentage_used": null, "received_at": "2026-08-28T06:00:00+00:00", "temperature_c": 45, "wear_pct": 23.954545454545453}, {"nvme_percentage_used": null, "received_at": "2026-08-27T06:00:00+00:00", "temperature_c": 45, "wear_pct": 23.90909090909091}, {"nvme_percentage_used": null, "received_at": "2026-08-26T06:00:00+00:00", "temperature_c": 45, "wear_pct": 23.863636363636363}, {"nvme_percentage_used": null, "received_at": "2026-08-25T06:00:00+00:00", "temperature_c": 45, "wear_pct": 23.818181818181817}, {"nvme_percentage_used": null, "received_at": "2026-08-24T06:00:00+00:00", "temperature_c": 45, "wear_pct": 23.772727272727273}, {"nvme_percentage_used": null, "received_at": "2026-08-23T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.727272727272727}, {"nvme_percentage_used": null, "received_at": "2026-08-22T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.681818181818183}, {"nvme_percentage_used": null, "received_at": "2026-08-21T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.636363636363637}, {"nvme_percentage_used": null, "received_at": "2026-08-20T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.59090909090909}, {"nvme_percentage_used": null, "received_at": "2026-08-19T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.545454545454547}, {"nvme_percentage_used": null, "received_at": "2026-08-18T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.5}, {"nvme_percentage_used": null, "received_at": "2026-08-17T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.454545454545453}, {"nvme_percentage_used": null, "received_at": "2026-08-16T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.40909090909091}, {"nvme_percentage_used": null, "received_at": "2026-08-15T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.363636363636363}, {"nvme_percentage_used": null, "received_at": "2026-08-14T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.318181818181817}, {"nvme_percentage_used": null, "received_at": "2026-08-13T06:00:00+00:00", "temperature_c": 44, "wear_pct": 23.272727272727273}, {"nvme_percentage_used": null, "received_at": "2026-08-12T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.227272727272727}, {"nvme_percentage_used": null, "received_at": "2026-08-11T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.181818181818183}, {"nvme_percentage_used": null, "received_at": "2026-08-10T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.136363636363637}, {"nvme_percentage_used": null, "received_at": "2026-08-09T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.09090909090909}, {"nvme_percentage_used": null, "received_at": "2026-08-08T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.045454545454547}, {"nvme_percentage_used": null, "received_at": "2026-08-07T06:00:00+00:00", "temperature_c": 43, "wear_pct": 23.0}, {"nvme_percentage_used": null, "received_at": "2026-08-06T06:00:00+00:00", "temperature_c": 43, "wear_pct": 22.954545454545453}, {"nvme_percentage_used": null, "received_at": "2026-08-05T06:00:00+00:00", "temperature_c": 43, "wear_pct": 22.90909090909091}, {"nvme_percentage_used": null, "received_at": "2026-08-04T06:00:00+00:00", "temperature_c": 43, "wear_pct": 22.863636363636363}, {"nvme_percentage_used": null, "received_at": "2026-08-03T06:00:00+00:00", "temperature_c": 43, "wear_pct": 22.818181818181817}, {"nvme_percentage_used": null, "received_at": "2026-08-02T06:00:00+00:00", "temperature_c": 43, "wear_pct": 22.772727272727273}, {"nvme_percentage_used": null, "received_at": "2026-08-01T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.727272727272727}, {"nvme_percentage_used": null, "received_at": "2026-07-31T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.681818181818183}, {"nvme_percentage_used": null, "received_at": "2026-07-30T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.636363636363637}, {"nvme_percentage_used": null, "received_at": "2026-07-29T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.59090909090909}, {"nvme_percentage_used": null, "received_at": "2026-07-28T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.545454545454547}, {"nvme_percentage_used": null, "received_at": "2026-07-27T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.5}, {"nvme_percentage_used": null, "received_at": "2026-07-26T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.454545454545453}, {"nvme_percentage_used": null, "received_at": "2026-07-25T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.40909090909091}, {"nvme_percentage_used": null, "received_at": "2026-07-24T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.363636363636363}, {"nvme_percentage_used": null, "received_at": "2026-07-23T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.318181818181817}, {"nvme_percentage_used": null, "received_at": "2026-07-22T06:00:00+00:00", "temperature_c": 42, "wear_pct": 22.272727272727273}, {"nvme_percentage_used": null, "received_at": "2026-07-21T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.227272727272727}, {"nvme_percentage_used": null, "received_at": "2026-07-20T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.181818181818183}, {"nvme_percentage_used": null, "received_at": "2026-07-19T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.136363636363637}, {"nvme_percentage_used": null, "received_at": "2026-07-18T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.09090909090909}, {"nvme_percentage_used": null, "received_at": "2026-07-17T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.045454545454547}, {"nvme_percentage_used": null, "received_at": "2026-07-16T06:00:00+00:00", "temperature_c": 41, "wear_pct": 22.0}]}</script>
+<script>
+(function () {
+  function init() {
+    var dataEl = document.getElementById("disk-series-data");
+    if (!dataEl) return;
+    var bySlot = JSON.parse(dataEl.textContent || "{}");
+    // B4-review LOW: loop by disk COUNT, not Object.keys(bySlot) -- a disk
+    // beyond the history cap (or without a serial_hash) has no entry in
+    // bySlot at all, so it was skipped outright, leaving its labelled 36px
+    // slot permanently blank instead of showing srpSpark's own "мало данных".
+    var diskCount = 1;
+    for (var idx = 0; idx < diskCount; idx++) {
+      var rows = (bySlot[idx] || []).slice().reverse();  // stored newest-first -> oldest->newest
+      var dates = rows.map(function (r) { return r.received_at; });
+      srpSpark(document.getElementById("disk-spark-temp-" + idx), dates,
+        rows.map(function (r) { return r.temperature_c; }));
+      srpSpark(document.getElementById("disk-spark-wear-" + idx), dates,
+        // review B1-B5 final HIGH: must match the header's own formula
+        // (wear_vals|max above) -- picking wear_pct whenever present and
+        // IGNORING a higher nvme_percentage_used made the sparkline
+        // contradict the bigger number shown right above it on the same card.
+        rows.map(function (r) {
+          var w = r.wear_pct, n = r.nvme_percentage_used;
+          if (w == null) return n;
+          if (n == null) return w;
+          return Math.max(w, n);
+        }));
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+
+<div class="section-label predictive" style="margin-top:28px">Прогноз — ресурс и сроки</div>
+
+
+
+
+<style>
+/* B6 6.3: no engine threshold behind this note (bayesian.py untouched) --
+   neutral accent per the design directive's "без порога — нейтральный
+   .accent" rule. */
+.traj-cohort-note { font-size: 12px; color: var(--accent); margin: -2px 2px 4px; }
+</style>
+
+
+
+
+
+<div class="traj-table">
+
+  
+  
+  
+  
+    
+      
+    
+    
+  
+  <div class="traj-row bad">
+    <div>
+      <div class="traj-name" title="Износ SSD в %% — нарастает при активной записи. ETA: прогноз до 100%% при текущем темпе">Износ SSD</div>
+      <div class="traj-val">
+        
+          24.0%
+          
+        
+      </div>
+    </div>
+    <div class="traj-bar">
+      <div class="traj-fill bad" style="width:24.0%"></div>
+    </div>
+    <div class="traj-right">
+      <span class="chip bad" style="font-size:10px"
+            title="Направление тренда: ухудшается / улучшается / стабильно / мало данных">↑ ухудш.</span>
+      
+      <div class="traj-eta "
+           title="Прогноз даты выхода за порог при текущем темпе изменений">
+        ~1672д · 2031-03-28
+      </div>
+      
+    </div>
+  </div>
+  
+  
+
+  
+
+  
+  
+  
+  
+    
+      
+    
+    
+  
+  <div class="traj-row bad">
+    <div>
+      <div class="traj-name" title="Заполненность диска в %%. ETA: прогноз до полного заполнения при текущем темпе роста">Заполнение диска</div>
+      <div class="traj-val">
+        
+          38.5%
+          
+        
+      </div>
+    </div>
+    <div class="traj-bar">
+      <div class="traj-fill bad" style="width:38.5%"></div>
+    </div>
+    <div class="traj-right">
+      <span class="chip bad" style="font-size:10px"
+            title="Направление тренда: ухудшается / улучшается / стабильно / мало данных">↑ ухудш.</span>
+      
+      <div class="traj-eta "
+           title="Прогноз даты выхода за порог при текущем темпе изменений">
+        ~677д · 2028-07-06
+      </div>
+      
+    </div>
+  </div>
+  
+  
+
+  
+
+  
+  
+  
+  
+    
+      
+    
+    
+  
+  <div class="traj-row bad">
+    <div>
+      <div class="traj-name" title="Среднее время загрузки в секундах. Рост указывает на деградацию ОС или накопленный «мусор»">Время загрузки</div>
+      <div class="traj-val">
+        
+          56с
+          
+        
+      </div>
+    </div>
+    <div class="traj-bar">
+      <div class="traj-fill bad" style="width:46.9%"></div>
+    </div>
+    <div class="traj-right">
+      <span class="chip bad" style="font-size:10px"
+            title="Направление тренда: ухудшается / улучшается / стабильно / мало данных">↑ ухудш.</span>
+      
+      <div class="traj-eta" style="color:var(--muted)" title="Тренд стабилен или данных недостаточно для прогноза">—</div>
+      
+    </div>
+  </div>
+  
+  
+
+  
+
+  
+  
+  
+  
+    
+      
+    
+    
+  
+  <div class="traj-row bad">
+    <div>
+      <div class="traj-name" title="Недобор частоты CPU до номинала в %% (троттлинг/перегрев): 0%% — полный номинал. Показывает только направление — ETA нет">Троттлинг CPU</div>
+      <div class="traj-val">
+        
+          6%
+        
+      </div>
+    </div>
+    <div class="traj-bar">
+      <div class="traj-fill bad" style="width:5.9%"></div>
+    </div>
+    <div class="traj-right">
+      <span class="chip bad" style="font-size:10px"
+            title="Направление тренда: ухудшается / улучшается / стабильно / мало данных">↑ ухудш.</span>
+      
+      <div class="traj-eta" style="color:var(--muted)" title="Тренд стабилен или данных недостаточно для прогноза">—</div>
+      
+    </div>
+  </div>
+  
+  
+
+  
+
+</div>
+
+
+
+
+<div class="axis-card">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">Латентность диска (p95), мс — по дням</div>
+      <div class="axis-reason">посуточная свёртка, 90 дней</div>
+    </div>
+  </div>
+  <div id="chart-disk-p95" style="height:200px; margin-top:6px"></div>
+</div>
+<script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>
+<script id="hb-rollup-data" type="application/json">[{"committed_pct_p95": 71.0, "cpu_p50": 30.0, "cpu_p95": 30.0, "day": "2026-08-29", "disk_queue_p95": 0.3, "disk_read_ms_p95": 14.0, "disk_write_ms_p95": 13.0, "free_space_min": 38.5, "handles_max": 56000, "mem_avail_min": 1950.0, "n": 6, "nic_errors_max": 0, "pagefile_p95": 33.0, "uptime_max": 14.03}, {"committed_pct_p95": 70.79545454545455, "cpu_p50": 29.795454545454547, "cpu_p95": 29.795454545454547, "day": "2026-08-28", "disk_queue_p95": 0.2954545454545454, "disk_read_ms_p95": 13.886363636363637, "disk_write_ms_p95": 12.886363636363637, "free_space_min": 38.55681818181818, "handles_max": 55818, "mem_avail_min": 1962.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 32.79545454545455, "uptime_max": 14.02}, {"committed_pct_p95": 70.5909090909091, "cpu_p50": 29.590909090909093, "cpu_p95": 29.590909090909093, "day": "2026-08-27", "disk_queue_p95": 0.2909090909090909, "disk_read_ms_p95": 13.772727272727273, "disk_write_ms_p95": 12.772727272727273, "free_space_min": 38.61363636363636, "handles_max": 55636, "mem_avail_min": 1975.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 32.59090909090909, "uptime_max": 14.07}, {"committed_pct_p95": 70.38636363636364, "cpu_p50": 29.386363636363637, "cpu_p95": 29.386363636363637, "day": "2026-08-26", "disk_queue_p95": 0.2863636363636364, "disk_read_ms_p95": 13.65909090909091, "disk_write_ms_p95": 12.65909090909091, "free_space_min": 38.67045454545455, "handles_max": 55455, "mem_avail_min": 1987.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 32.38636363636364, "uptime_max": 13.88}, {"committed_pct_p95": 70.18181818181819, "cpu_p50": 29.18181818181818, "cpu_p95": 29.18181818181818, "day": "2026-08-25", "disk_queue_p95": 0.2818181818181818, "disk_read_ms_p95": 13.545454545454545, "disk_write_ms_p95": 12.545454545454545, "free_space_min": 38.72727272727273, "handles_max": 55273, "mem_avail_min": 2000.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 32.18181818181818, "uptime_max": 13.92}, {"committed_pct_p95": 69.97727272727273, "cpu_p50": 28.977272727272727, "cpu_p95": 28.977272727272727, "day": "2026-08-24", "disk_queue_p95": 0.2772727272727272, "disk_read_ms_p95": 13.431818181818182, "disk_write_ms_p95": 12.431818181818182, "free_space_min": 38.78409090909091, "handles_max": 55091, "mem_avail_min": 2012.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 31.977272727272727, "uptime_max": 14.16}, {"committed_pct_p95": 69.77272727272727, "cpu_p50": 28.772727272727273, "cpu_p95": 28.772727272727273, "day": "2026-08-23", "disk_queue_p95": 0.2727272727272727, "disk_read_ms_p95": 13.318181818181818, "disk_write_ms_p95": 12.318181818181818, "free_space_min": 38.84090909090909, "handles_max": 54909, "mem_avail_min": 2025.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 31.772727272727273, "uptime_max": 13.95}, {"committed_pct_p95": 69.56818181818181, "cpu_p50": 28.56818181818182, "cpu_p95": 28.56818181818182, "day": "2026-08-22", "disk_queue_p95": 0.2681818181818182, "disk_read_ms_p95": 13.204545454545455, "disk_write_ms_p95": 12.204545454545455, "free_space_min": 38.89772727272727, "handles_max": 54727, "mem_avail_min": 2037.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 31.56818181818182, "uptime_max": 13.96}, {"committed_pct_p95": 69.36363636363636, "cpu_p50": 28.363636363636363, "cpu_p95": 28.363636363636363, "day": "2026-08-21", "disk_queue_p95": 0.26363636363636367, "disk_read_ms_p95": 13.09090909090909, "disk_write_ms_p95": 12.09090909090909, "free_space_min": 38.95454545454545, "handles_max": 54545, "mem_avail_min": 2050.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 31.363636363636363, "uptime_max": 14.11}, {"committed_pct_p95": 69.1590909090909, "cpu_p50": 28.159090909090907, "cpu_p95": 28.159090909090907, "day": "2026-08-20", "disk_queue_p95": 0.25909090909090904, "disk_read_ms_p95": 12.977272727272727, "disk_write_ms_p95": 11.977272727272727, "free_space_min": 39.01136363636363, "handles_max": 54364, "mem_avail_min": 2062.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 31.159090909090907, "uptime_max": 13.91}, {"committed_pct_p95": 68.95454545454545, "cpu_p50": 27.954545454545453, "cpu_p95": 27.954545454545453, "day": "2026-08-19", "disk_queue_p95": 0.2545454545454545, "disk_read_ms_p95": 12.863636363636363, "disk_write_ms_p95": 11.863636363636363, "free_space_min": 39.06818181818182, "handles_max": 54182, "mem_avail_min": 2075.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 30.954545454545453, "uptime_max": 13.76}, {"committed_pct_p95": 68.75, "cpu_p50": 27.75, "cpu_p95": 27.75, "day": "2026-08-18", "disk_queue_p95": 0.25, "disk_read_ms_p95": 12.75, "disk_write_ms_p95": 11.75, "free_space_min": 39.125, "handles_max": 54000, "mem_avail_min": 2087.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 30.75, "uptime_max": 14.18}, {"committed_pct_p95": 68.54545454545455, "cpu_p50": 27.545454545454547, "cpu_p95": 27.545454545454547, "day": "2026-08-17", "disk_queue_p95": 0.24545454545454545, "disk_read_ms_p95": 12.636363636363637, "disk_write_ms_p95": 11.636363636363637, "free_space_min": 39.18181818181818, "handles_max": 53818, "mem_avail_min": 2100.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 30.545454545454547, "uptime_max": 13.98}, {"committed_pct_p95": 68.3409090909091, "cpu_p50": 27.340909090909093, "cpu_p95": 27.340909090909093, "day": "2026-08-16", "disk_queue_p95": 0.2409090909090909, "disk_read_ms_p95": 12.522727272727273, "disk_write_ms_p95": 11.522727272727273, "free_space_min": 39.23863636363637, "handles_max": 53636, "mem_avail_min": 2112.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 30.340909090909093, "uptime_max": 13.93}, {"committed_pct_p95": 68.13636363636364, "cpu_p50": 27.136363636363637, "cpu_p95": 27.136363636363637, "day": "2026-08-15", "disk_queue_p95": 0.23636363636363636, "disk_read_ms_p95": 12.409090909090908, "disk_write_ms_p95": 11.409090909090908, "free_space_min": 39.29545454545455, "handles_max": 53455, "mem_avail_min": 2125.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 30.136363636363637, "uptime_max": 13.93}, {"committed_pct_p95": 67.93181818181819, "cpu_p50": 26.93181818181818, "cpu_p95": 26.93181818181818, "day": "2026-08-14", "disk_queue_p95": 0.2318181818181818, "disk_read_ms_p95": 12.295454545454545, "disk_write_ms_p95": 11.295454545454545, "free_space_min": 39.35227272727273, "handles_max": 53273, "mem_avail_min": 2137.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 29.93181818181818, "uptime_max": 14.09}, {"committed_pct_p95": 67.72727272727273, "cpu_p50": 26.727272727272727, "cpu_p95": 26.727272727272727, "day": "2026-08-13", "disk_queue_p95": 0.22727272727272727, "disk_read_ms_p95": 12.181818181818182, "disk_write_ms_p95": 11.181818181818182, "free_space_min": 39.40909090909091, "handles_max": 53091, "mem_avail_min": 2150.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 29.727272727272727, "uptime_max": 13.97}, {"committed_pct_p95": 67.52272727272727, "cpu_p50": 26.522727272727273, "cpu_p95": 26.522727272727273, "day": "2026-08-12", "disk_queue_p95": 0.22272727272727272, "disk_read_ms_p95": 12.068181818181818, "disk_write_ms_p95": 11.068181818181818, "free_space_min": 39.46590909090909, "handles_max": 52909, "mem_avail_min": 2162.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 29.522727272727273, "uptime_max": 13.84}, {"committed_pct_p95": 67.31818181818181, "cpu_p50": 26.31818181818182, "cpu_p95": 26.31818181818182, "day": "2026-08-11", "disk_queue_p95": 0.2181818181818182, "disk_read_ms_p95": 11.954545454545455, "disk_write_ms_p95": 10.954545454545455, "free_space_min": 39.52272727272727, "handles_max": 52727, "mem_avail_min": 2175.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 29.31818181818182, "uptime_max": 14.0}, {"committed_pct_p95": 67.11363636363636, "cpu_p50": 26.113636363636363, "cpu_p95": 26.113636363636363, "day": "2026-08-10", "disk_queue_p95": 0.21363636363636362, "disk_read_ms_p95": 11.840909090909092, "disk_write_ms_p95": 10.840909090909092, "free_space_min": 39.57954545454545, "handles_max": 52545, "mem_avail_min": 2187.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 29.113636363636363, "uptime_max": 13.7}, {"committed_pct_p95": 66.9090909090909, "cpu_p50": 25.909090909090907, "cpu_p95": 25.909090909090907, "day": "2026-08-09", "disk_queue_p95": 0.20909090909090908, "disk_read_ms_p95": 11.727272727272727, "disk_write_ms_p95": 10.727272727272727, "free_space_min": 39.63636363636363, "handles_max": 52364, "mem_avail_min": 2200.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 28.909090909090907, "uptime_max": 13.91}, {"committed_pct_p95": 66.70454545454545, "cpu_p50": 25.704545454545453, "cpu_p95": 25.704545454545453, "day": "2026-08-08", "disk_queue_p95": 0.20454545454545453, "disk_read_ms_p95": 11.613636363636363, "disk_write_ms_p95": 10.613636363636363, "free_space_min": 39.69318181818182, "handles_max": 52182, "mem_avail_min": 2212.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 28.704545454545453, "uptime_max": 14.16}, {"committed_pct_p95": 66.5, "cpu_p50": 25.5, "cpu_p95": 25.5, "day": "2026-08-07", "disk_queue_p95": 0.2, "disk_read_ms_p95": 11.5, "disk_write_ms_p95": 10.5, "free_space_min": 39.75, "handles_max": 52000, "mem_avail_min": 2225.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 28.5, "uptime_max": 13.88}, {"committed_pct_p95": 66.29545454545455, "cpu_p50": 25.295454545454547, "cpu_p95": 25.295454545454547, "day": "2026-08-06", "disk_queue_p95": 0.19545454545454544, "disk_read_ms_p95": 11.386363636363637, "disk_write_ms_p95": 10.386363636363637, "free_space_min": 39.80681818181818, "handles_max": 51818, "mem_avail_min": 2237.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 28.295454545454547, "uptime_max": 14.15}, {"committed_pct_p95": 66.0909090909091, "cpu_p50": 25.09090909090909, "cpu_p95": 25.09090909090909, "day": "2026-08-05", "disk_queue_p95": 0.19090909090909092, "disk_read_ms_p95": 11.272727272727273, "disk_write_ms_p95": 10.272727272727273, "free_space_min": 39.86363636363637, "handles_max": 51636, "mem_avail_min": 2250.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 28.09090909090909, "uptime_max": 14.16}, {"committed_pct_p95": 65.88636363636364, "cpu_p50": 24.886363636363637, "cpu_p95": 24.886363636363637, "day": "2026-08-04", "disk_queue_p95": 0.18636363636363634, "disk_read_ms_p95": 11.15909090909091, "disk_write_ms_p95": 10.15909090909091, "free_space_min": 39.92045454545455, "handles_max": 51455, "mem_avail_min": 2262.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 27.886363636363637, "uptime_max": 13.78}, {"committed_pct_p95": 65.68181818181819, "cpu_p50": 24.681818181818183, "cpu_p95": 24.681818181818183, "day": "2026-08-03", "disk_queue_p95": 0.18181818181818182, "disk_read_ms_p95": 11.045454545454545, "disk_write_ms_p95": 10.045454545454545, "free_space_min": 39.97727272727273, "handles_max": 51273, "mem_avail_min": 2275.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 27.681818181818183, "uptime_max": 14.29}, {"committed_pct_p95": 65.47727272727273, "cpu_p50": 24.477272727272727, "cpu_p95": 24.477272727272727, "day": "2026-08-02", "disk_queue_p95": 0.17727272727272728, "disk_read_ms_p95": 10.931818181818182, "disk_write_ms_p95": 9.931818181818182, "free_space_min": 40.03409090909091, "handles_max": 51091, "mem_avail_min": 2287.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 27.477272727272727, "uptime_max": 14.12}, {"committed_pct_p95": 65.27272727272727, "cpu_p50": 24.272727272727273, "cpu_p95": 24.272727272727273, "day": "2026-08-01", "disk_queue_p95": 0.17272727272727273, "disk_read_ms_p95": 10.818181818181818, "disk_write_ms_p95": 9.818181818181818, "free_space_min": 40.09090909090909, "handles_max": 50909, "mem_avail_min": 2300.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 27.272727272727273, "uptime_max": 13.94}, {"committed_pct_p95": 65.06818181818181, "cpu_p50": 24.068181818181817, "cpu_p95": 24.068181818181817, "day": "2026-07-31", "disk_queue_p95": 0.16818181818181818, "disk_read_ms_p95": 10.704545454545455, "disk_write_ms_p95": 9.704545454545455, "free_space_min": 40.14772727272727, "handles_max": 50727, "mem_avail_min": 2312.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 27.068181818181817, "uptime_max": 13.99}, {"committed_pct_p95": 64.86363636363636, "cpu_p50": 23.863636363636363, "cpu_p95": 23.863636363636363, "day": "2026-07-30", "disk_queue_p95": 0.16363636363636364, "disk_read_ms_p95": 10.59090909090909, "disk_write_ms_p95": 9.59090909090909, "free_space_min": 40.20454545454545, "handles_max": 50545, "mem_avail_min": 2325.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 26.863636363636363, "uptime_max": 14.25}, {"committed_pct_p95": 64.6590909090909, "cpu_p50": 23.65909090909091, "cpu_p95": 23.65909090909091, "day": "2026-07-29", "disk_queue_p95": 0.1590909090909091, "disk_read_ms_p95": 10.477272727272727, "disk_write_ms_p95": 9.477272727272727, "free_space_min": 40.26136363636363, "handles_max": 50364, "mem_avail_min": 2337.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 26.65909090909091, "uptime_max": 13.73}, {"committed_pct_p95": 64.45454545454545, "cpu_p50": 23.454545454545453, "cpu_p95": 23.454545454545453, "day": "2026-07-28", "disk_queue_p95": 0.15454545454545454, "disk_read_ms_p95": 10.363636363636363, "disk_write_ms_p95": 9.363636363636363, "free_space_min": 40.31818181818182, "handles_max": 50182, "mem_avail_min": 2350.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 26.454545454545453, "uptime_max": 13.96}, {"committed_pct_p95": 64.25, "cpu_p50": 23.25, "cpu_p95": 23.25, "day": "2026-07-27", "disk_queue_p95": 0.15, "disk_read_ms_p95": 10.25, "disk_write_ms_p95": 9.25, "free_space_min": 40.375, "handles_max": 50000, "mem_avail_min": 2362.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 26.25, "uptime_max": 13.77}, {"committed_pct_p95": 64.04545454545455, "cpu_p50": 23.045454545454547, "cpu_p95": 23.045454545454547, "day": "2026-07-26", "disk_queue_p95": 0.14545454545454545, "disk_read_ms_p95": 10.136363636363637, "disk_write_ms_p95": 9.136363636363637, "free_space_min": 40.43181818181818, "handles_max": 49818, "mem_avail_min": 2375.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 26.045454545454547, "uptime_max": 14.21}, {"committed_pct_p95": 63.84090909090909, "cpu_p50": 22.84090909090909, "cpu_p95": 22.84090909090909, "day": "2026-07-25", "disk_queue_p95": 0.14090909090909093, "disk_read_ms_p95": 10.022727272727273, "disk_write_ms_p95": 9.022727272727273, "free_space_min": 40.48863636363637, "handles_max": 49636, "mem_avail_min": 2387.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 25.84090909090909, "uptime_max": 13.96}, {"committed_pct_p95": 63.63636363636363, "cpu_p50": 22.636363636363637, "cpu_p95": 22.636363636363637, "day": "2026-07-24", "disk_queue_p95": 0.13636363636363635, "disk_read_ms_p95": 9.90909090909091, "disk_write_ms_p95": 8.90909090909091, "free_space_min": 40.54545454545455, "handles_max": 49455, "mem_avail_min": 2400.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 25.636363636363637, "uptime_max": 13.91}, {"committed_pct_p95": 63.43181818181818, "cpu_p50": 22.431818181818183, "cpu_p95": 22.431818181818183, "day": "2026-07-23", "disk_queue_p95": 0.13181818181818183, "disk_read_ms_p95": 9.795454545454545, "disk_write_ms_p95": 8.795454545454545, "free_space_min": 40.60227272727273, "handles_max": 49273, "mem_avail_min": 2412.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 25.431818181818183, "uptime_max": 14.1}, {"committed_pct_p95": 63.22727272727273, "cpu_p50": 22.227272727272727, "cpu_p95": 22.227272727272727, "day": "2026-07-22", "disk_queue_p95": 0.12727272727272726, "disk_read_ms_p95": 9.681818181818182, "disk_write_ms_p95": 8.681818181818182, "free_space_min": 40.65909090909091, "handles_max": 49091, "mem_avail_min": 2425.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 25.227272727272727, "uptime_max": 14.18}, {"committed_pct_p95": 63.02272727272727, "cpu_p50": 22.022727272727273, "cpu_p95": 22.022727272727273, "day": "2026-07-21", "disk_queue_p95": 0.12272727272727273, "disk_read_ms_p95": 9.568181818181818, "disk_write_ms_p95": 8.568181818181818, "free_space_min": 40.71590909090909, "handles_max": 48909, "mem_avail_min": 2437.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 25.022727272727273, "uptime_max": 14.17}, {"committed_pct_p95": 62.81818181818182, "cpu_p50": 21.818181818181817, "cpu_p95": 21.818181818181817, "day": "2026-07-20", "disk_queue_p95": 0.1181818181818182, "disk_read_ms_p95": 9.454545454545455, "disk_write_ms_p95": 8.454545454545455, "free_space_min": 40.77272727272727, "handles_max": 48727, "mem_avail_min": 2450.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 24.818181818181817, "uptime_max": 13.75}, {"committed_pct_p95": 62.61363636363637, "cpu_p50": 21.613636363636363, "cpu_p95": 21.613636363636363, "day": "2026-07-19", "disk_queue_p95": 0.11363636363636365, "disk_read_ms_p95": 9.340909090909092, "disk_write_ms_p95": 8.340909090909092, "free_space_min": 40.82954545454545, "handles_max": 48545, "mem_avail_min": 2462.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 24.613636363636363, "uptime_max": 14.15}, {"committed_pct_p95": 62.40909090909091, "cpu_p50": 21.40909090909091, "cpu_p95": 21.40909090909091, "day": "2026-07-18", "disk_queue_p95": 0.1090909090909091, "disk_read_ms_p95": 9.227272727272727, "disk_write_ms_p95": 8.227272727272727, "free_space_min": 40.88636363636363, "handles_max": 48364, "mem_avail_min": 2475.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 24.40909090909091, "uptime_max": 14.12}, {"committed_pct_p95": 62.20454545454545, "cpu_p50": 21.204545454545453, "cpu_p95": 21.204545454545453, "day": "2026-07-17", "disk_queue_p95": 0.10454545454545455, "disk_read_ms_p95": 9.113636363636363, "disk_write_ms_p95": 8.113636363636363, "free_space_min": 40.94318181818182, "handles_max": 48182, "mem_avail_min": 2487.5, "n": 5, "nic_errors_max": 0, "pagefile_p95": 24.204545454545453, "uptime_max": 13.91}, {"committed_pct_p95": 62.0, "cpu_p50": 21.0, "cpu_p95": 21.0, "day": "2026-07-16", "disk_queue_p95": 0.1, "disk_read_ms_p95": 9.0, "disk_write_ms_p95": 8.0, "free_space_min": 41.0, "handles_max": 48000, "mem_avail_min": 2500.0, "n": 5, "nic_errors_max": 0, "pagefile_p95": 24.0, "uptime_max": 13.89}]</script>
+<script>
+(function () {
+  var el = document.getElementById("chart-disk-p95");
+  if (!el) return;
+  var rows = JSON.parse(document.getElementById("hb-rollup-data").textContent || "[]")
+               .filter(function (r) { return r.day && (r.disk_read_ms_p95 != null || r.disk_write_ms_p95 != null); })
+               .reverse();  // stored newest-first; chart oldest -> newest
+  if (rows.length < 2) { el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>"; return; }
+  var x = rows.map(function (r) { return r.day; });
+  var yRead = rows.map(function (r) { return r.disk_read_ms_p95; });
+  var yWrite = rows.map(function (r) { return r.disk_write_ms_p95; });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    var warn = css.getPropertyValue("--warn").trim() || "#f59e0b";
+    var grid = css.getPropertyValue("--line").trim() || "#132030";
+    Plotly.newPlot(el, [
+      { x: x, y: yRead, name: "чтение", type: "scatter", mode: "lines+markers",
+        line: { color: acc, width: 2 }, marker: { color: acc, size: 4 },
+        hovertemplate: "%{x}<br>чтение <b>%{y:.1f}</b> мс<extra></extra>" },
+      { x: x, y: yWrite, name: "запись", type: "scatter", mode: "lines+markers",
+        line: { color: warn, width: 2 }, marker: { color: warn, size: 4 },
+        hovertemplate: "%{x}<br>запись <b>%{y:.1f}</b> мс<extra></extra>" }
+    ], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+      margin: { t: 8, r: 14, b: 36, l: 46 },
+      xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "мс", font: { size: 11 } } },
+      showlegend: true, legend: { orientation: "h", y: -0.22 }, autosize: true,
+      hoverlabel: srpHoverLabel(),
+    }, { responsive: true, displayModeBar: false });
+  }
+  function init() {
+    // Plotly is deferred -- it exists only after DOM parsing, never during it.
+    if (typeof Plotly === "undefined") return;
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+
+
+
+
+
+
+<div class="chip accent" style="margin:4px 0 10px; display:inline-block"
+     title="Аппаратные ошибки (CPU/память/шина) — косвенный признак деградации железа">WHEA-ошибок за 30 дн: 1</div>
+
+
+
+
+<div class="axis-card">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name">События в день (30 дн)</div>
+      <div class="axis-reason">посуточная свёртка журнала событий; выделены дни с BSOD/KP41</div>
+    </div>
+  </div>
+  <div id="chart-events-daily" style="height:180px; margin-top:6px"></div>
+</div>
+
+<script>
+  /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
+     Читает текущие CSS-токены темы -- при переключении темы возвращает верные
+     цвета, без привязки к конкретной палитре (дефолт остаётся тёмным). */
+  function srpHoverLabel() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var val = css.getPropertyValue(name);
+      return (val && val.trim()) || fallback;
+    }
+    return {
+      bgcolor: v("--panel-2", "#0b1828"),
+      bordercolor: v("--line-2", "#1d3250"),
+      font: { color: v("--text", "#deeef8"), size: 13 }
+    };
+  }
+</script>
+<script id="ev-rollup-data" type="application/json">[{"day": "2026-08-28", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-28", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-27", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-27", "event_key": "EventLog:6008", "n": 1}, {"day": "2026-08-26", "event_key": "Service Control Manager:7031", "n": 1}, {"day": "2026-08-26", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-25", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-25", "event_key": "EventLog:6008", "n": 1}, {"day": "2026-08-25", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-24", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-23", "event_key": "Application Error:1000", "n": 1}, {"day": "2026-08-17", "event_key": "Application Error:1000", "n": 1}, {"day": "2026-08-16", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-15", "event_key": "Service Control Manager:7031", "n": 1}, {"day": "2026-08-15", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-14", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-13", "event_key": "EventLog:6008", "n": 1}, {"day": "2026-08-13", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-12", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-07", "event_key": "Application Error:1000", "n": 1}, {"day": "2026-08-03", "event_key": "Service Control Manager:7031", "n": 1}, {"day": "2026-08-03", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}, {"day": "2026-08-02", "event_key": "EventLog:6008", "n": 1}, {"day": "2026-08-02", "event_key": "BugCheck:1001", "n": 1}, {"day": "2026-08-01", "event_key": "Microsoft-Windows-Kernel-Power:41", "n": 1}]</script>
+<script>
+(function () {
+  var el = document.getElementById("chart-events-daily");
+  if (!el) return;
+  var CRASH_IDS = [41, 1001, 6008];
+  function init() {
+    var dataEl = document.getElementById("ev-rollup-data");
+    if (!dataEl || typeof Plotly === "undefined") return;
+    var rows = JSON.parse(dataEl.textContent || "[]");
+    var byDay = {};
+    rows.forEach(function (r) {
+      if (!r.day) return;
+      var d = byDay[r.day] || (byDay[r.day] = { total: 0, crash: false, byKey: {} });
+      d.total += r.n || 0;
+      d.byKey[r.event_key] = (d.byKey[r.event_key] || 0) + (r.n || 0);
+      var eid = parseInt(String(r.event_key).split(":").pop(), 10);
+      if (CRASH_IDS.indexOf(eid) !== -1) { d.crash = true; }
+    });
+    var days = Object.keys(byDay).sort();  // "YYYY-MM-DD" -- лексикографически = хронологически
+    if (!days.length) { el.innerHTML = "<div class=\"no-data\">Недостаточно точек для графика</div>"; return; }
+    var totals = days.map(function (d) { return byDay[d].total; });
+    var hoverText = days.map(function (d) {
+      var byKey = byDay[d].byKey;
+      return Object.keys(byKey).map(function (k) {
+        return window.srpEsc(k) + ": " + byKey[k];
+      }).join("<br>");
+    });
+    function draw() {
+      var css = getComputedStyle(document.documentElement);
+      var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+      var bad = css.getPropertyValue("--bad").trim() || "#ffe000";
+      var grid = css.getPropertyValue("--line").trim() || "#132030";
+      var colors = days.map(function (d) { return byDay[d].crash ? bad : acc; });
+      Plotly.newPlot(el, [{
+        x: days, y: totals, type: "bar", marker: { color: colors },
+        // hovertext, а не text: text Plotly печатает ПРЯМО НА столбцах — ключи
+        // событий вставали вертикально поверх графика и превращали его в кашу.
+        hovertext: hoverText,
+        hovertemplate: "%{x}<br><b>%{y}</b> событий<br>%{hovertext}<extra></extra>",
+      }], {
+        paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+        font: { color: css.getPropertyValue("--text").trim() || "#deeef8", family: "JetBrains Mono, Consolas, monospace", size: 12 },
+        margin: { t: 8, r: 14, b: 36, l: 40 },
+        xaxis: { gridcolor: grid }, yaxis: { gridcolor: grid, title: { text: "событий", font: { size: 11 } } },
+        showlegend: false, autosize: true,
+        hoverlabel: srpHoverLabel(),
+      }, { responsive: true, displayModeBar: false });
+    }
+    draw();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+
+<details id="device-diagnostics" style="margin-top:26px">
+  <summary>Подробная диагностика · проверок без замечаний: 4 · без данных: 1</summary>
+  <div style="margin-top:12px">
+  
+
+
+
+  
+  
+    
+      
+<div class="axis-card good">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Риск отказа диска на основе данных SMART: переназначенные секторы, ошибки чтения/записи, температура, износ SSD. 0–100, выше = хуже">Здоровье диска (SMART)</div>
+      <div class="axis-reason"></div>
+    </div>
+    
+    <div style="text-align:right">
+      <div class="axis-val good" title="Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50">4 из 100</div>
+      <div class="axis-conf" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: высокая</div>
+    </div>
+    
+  </div>
+  <div class="axis-factors"><div class="axis-factor-item">Power-on 27k ч</div></div>
+  
+  
+</div>
+
+    
+  
+
+  
+  
+    
+      
+<div class="axis-card good">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Риск нехватки места на диске и сбоя обслуживания Windows (обновления, патчи). Основан на медиане свободного места за 14 дней и ошибках обновлений. 0–100, выше = хуже">Заполнение диска / обслуживание Windows</div>
+      <div class="axis-reason">системный диск: достаточно свободного места; сбоев Windows Update не обнаружено</div>
+    </div>
+    
+    <div style="text-align:right">
+      <div class="axis-val good" title="Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50">0 из 100</div>
+      <div class="axis-conf" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: высокая</div>
+    </div>
+    
+  </div>
+  
+  
+  
+  <div class="axis-blind">⚠ не видно: наблюдается только свободное место на системном диске (другие тома не измеряются); состояние обслуживания Windows определяется только по событиям сбоев WindowsUpdateClient</div>
+  
+</div>
+
+    
+  
+
+  
+  
+    
+      
+<div class="axis-card good">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Состояние сети машины: потери и задержка до шлюза, адрес без DHCP (APIPA), слабый Wi-Fi. 0–100, выше = хуже. Блокировка ICMP честно показывается как «не видно», а не как авария">Здоровье сети</div>
+      <div class="axis-reason">связь со шлюзом в норме</div>
+    </div>
+    
+    <div style="text-align:right">
+      <div class="axis-val good" title="Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50">0 из 100</div>
+      <div class="axis-conf" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: средняя</div>
+    </div>
+    
+  </div>
+  
+  
+  
+  <div class="axis-blind">⚠ не видно: видимость только с этой машины: путь за пределами шлюза не наблюдается</div>
+  
+</div>
+
+    
+  
+
+  
+  
+    
+      
+<div class="axis-card na">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Сравнение с другими устройствами того же типа или объекта. Выявляет массовые проблемы: плохой патч ОС, нестабильное питание в здании. 0–100, выше = хуже">Аномалии флота</div>
+      <div class="axis-reason">только 1 устройство с этой моделью — нужно ≥2 для сравнения</div>
+    </div>
+    
+      <span class="chip na" title="Менее 2 устройств того же типа — сравнение невозможно">НЕИЗВЕСТНО</span>
+    
+  </div>
+  
+  
+  
+</div>
+
+    
+  
+
+  
+  
+    
+      
+<div class="axis-card good">
+  <div class="axis-head">
+    <div>
+      <div class="axis-name" title="Насколько быстро показатели движутся к допустимым пределам: износ SSD, заполнение диска, время загрузки. 0–100, выше = хуже">Риск по трендам</div>
+      <div class="axis-reason">совокупный риск выхода за пределы</div>
+    </div>
+    
+    <div style="text-align:right">
+      <div class="axis-val good" title="Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50">5 из 100</div>
+      <div class="axis-conf" title="Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных">уверенность: высокая</div>
+    </div>
+    
+  </div>
+  <div class="axis-factors"><div class="axis-factor-item">storage_wear → 1672д до предела (наклон +0.045/день)</div><div class="axis-factor-item">disk_fill → 677д до предела (наклон -0.057/день)</div></div>
+  
+  
+  <div class="axis-blind">⚠ не видно: nvme_spare: недостаточно истории</div>
+  
+</div>
+
+    
+  
+
+
+
+
+
+
+
+<div class="scoregrid" style="margin-top:16px">
+  <div class="scorecard good"
+       title="Производительность: текущий балл 0–100 (выше = лучше). Складывается из загрузки CPU, свободной памяти и скорости диска">
+    <div class="lab">Производительность</div>
+    <div class="val good">88</div>
+    <div class="bar"><i style="width:87.7%"></i></div>
+    <div class="lab" style="margin-top:6px">сейчас</div>
+  </div>
+  <div class="scorecard bad"
+       title="Надёжность: стабильность за 30 дней 0–100 (выше = лучше). Учитывает RSI Windows, синие экраны, частоту зависаний">
+    <div class="lab">Надёжность</div>
+    <div class="val bad">0</div>
+    <div class="bar"><i style="width:0.0%"></i></div>
+    <div class="lab" style="margin-top:6px">история 30д</div>
+  </div>
+  <div class="scorecard warn"
+       title="Остаток ресурса: износ оборудования 0–100 (выше = лучше). Учитывает износ SSD и возраст BIOS">
+    <div class="lab">Остаток ресурса</div>
+    <div class="val warn">60</div>
+    <div class="bar"><i style="width:60.0%"></i></div>
+    <div class="lab" style="margin-top:6px">железо</div>
+  </div>
+  <div class="scorecard warn"
+       title="Суммарный риск сбоя: 0–100 (выше = хуже). Итоговая оценка по всем компонентам системы">
+    <div class="lab">Суммарный риск сбоя</div>
+    <div class="val warn">15</div>
+    <div class="bar"><i style="width:15.0%"></i></div>
+    <div class="lab" style="margin-top:6px">старая шкала · выше = хуже</div>
+  </div>
+</div>
+
+
+
+
+
+  
+  
+  
+
+  
+  
+  
+
+  
+  
+  
+
+  
+  
+  
+
+  
+  
+  
+
+  
+  
+  
+
+<div class="coverage-widget">
+  <div class="coverage-head">
+    <span class="coverage-title" title="Сколько источников телеметрии признаны достоверными">Покрытие источников</span>
+    <div class="coverage-counts">
+      <span class="cov-good" title="Источники с проверенными данными">✓ 6 доверен</span>
+      
+      
+    </div>
+  </div>
+  
+  <div class="coverage-bar-wrap">
+    <div class="coverage-bar">
+      <div class="cb-seg cb-good" style="width:100.0%"></div>
+      <div class="cb-seg cb-warn" style="width:0.0%"></div>
+      <div class="cb-seg cb-na"   style="width:0.0%"></div>
+    </div>
+  </div>
+  
+  <div class="coverage-chips">
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="storage: данные источника признаны достоверными">storage</span>
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="disk_fill: данные источника признаны достоверными">disk_fill</span>
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="os_stability: данные источника признаны достоверными">os_stability</span>
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="boot: данные источника признаны достоверными">boot</span>
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="thermal: данные источника признаны достоверными">thermal</span>
+    
+    <span class="chip good"
+          style="font-size:10px"
+          title="network: данные источника признаны достоверными">network</span>
+    
+  </div>
+</div>
+
+
+
+<div class="section-label" style="margin-top:24px"
+     title="Байесовская оценка вероятности отказа по каждому классу. Основана на весах сигналов из телеметрии">Классы отказа (байесовский анализ)</div>
+
+<div class="riskrow">
+  <div class="head">
+    <span class="name">Стабильность ОС/ПО</span>
+    
+    <span class="chip bad"
+          title="Вероятность отказа по классу «Стабильность ОС/ПО»: байесовская оценка на основе телеметрии">93%</span>
+    
+  </div>
+  <div class="riskbar bad">
+    <i style="width:93.4%"></i>
+  </div>
+  <ul class="factors">
+    
+    <li>
+      <span>Базовый риск класса (prior)</span>
+      <span class="w neg"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">-2.94</span>
+    </li>
+    
+    <li>
+      <span>3x BSOD (30д)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+2.40</span>
+    </li>
+    
+    <li>
+      <span>Низкий индекс стабильности (3.6/10)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+1.50</span>
+    </li>
+    
+    <li>
+      <span>Движок деградации OS: 58/100</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.70</span>
+    </li>
+    
+    <li>
+      <span>1 устройство(а) с ошибкой драйвера</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.60</span>
+    </li>
+    
+    <li>
+      <span>Ожидается перезагрузка (обновления зависли)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.40</span>
+    </li>
+    
+  </ul>
+</div>
+
+<div class="riskrow">
+  <div class="head">
+    <span class="name">Питание / перегрев</span>
+    
+    <span class="chip warn"
+          title="Вероятность отказа по классу «Питание / перегрев»: байесовская оценка на основе телеметрии">24%</span>
+    
+  </div>
+  <div class="riskbar warn">
+    <i style="width:23.6%"></i>
+  </div>
+  <ul class="factors">
+    
+    <li>
+      <span>Базовый риск класса (prior)</span>
+      <span class="w neg"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">-3.48</span>
+    </li>
+    
+    <li>
+      <span>6x внезапное отключение KP41 (усилитель)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+1.00</span>
+    </li>
+    
+    <li>
+      <span>2x грязное выключение (6008)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.80</span>
+    </li>
+    
+    <li>
+      <span>Лёгкий троттлинг CPU (94%)</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.50</span>
+    </li>
+    
+  </ul>
+</div>
+
+<div class="riskrow">
+  <div class="head">
+    <span class="name">Накопитель (SSD/HDD)</span>
+    
+    <span class="chip warn"
+          title="Вероятность отказа по классу «Накопитель (SSD/HDD)»: байесовская оценка на основе телеметрии">14%</span>
+    
+  </div>
+  <div class="riskbar warn">
+    <i style="width:14.5%"></i>
+  </div>
+  <ul class="factors">
+    
+    <li>
+      <span>Базовый риск класса (prior)</span>
+      <span class="w neg"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">-2.94</span>
+    </li>
+    
+    <li>
+      <span>Износ SSD 24%</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.84</span>
+    </li>
+    
+    <li>
+      <span>Возраст оборудования ~6 лет</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.29</span>
+    </li>
+    
+    <li>
+      <span>Движок хранилища (SMART): 4/100</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+0.04</span>
+    </li>
+    
+  </ul>
+</div>
+
+<div class="riskrow">
+  <div class="head">
+    <span class="name">Память (RAM)</span>
+    
+    <span class="chip good"
+          title="Вероятность отказа по классу «Память (RAM)»: байесовская оценка на основе телеметрии">6%</span>
+    
+  </div>
+  <div class="riskbar good">
+    <i style="width:6.3%"></i>
+  </div>
+  <ul class="factors">
+    
+    <li>
+      <span>Базовый риск класса (prior)</span>
+      <span class="w neg"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">-3.89</span>
+    </li>
+    
+    <li>
+      <span>3x BSOD — часть приходится на память</span>
+      <span class="w pos"
+            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">+1.20</span>
+    </li>
+    
+  </ul>
+</div>
+
+
+
+<div class="section-label" style="margin-top:8px"
+     title="Детальный разбор: какие метрики и насколько повлияли на каждый из четырёх базовых скоров">Диагностика — что повлияло на базовые скоры</div>
+
+
+<details open style="margin-bottom:7px">
+  <summary>Производительность — 3 фактор(ов)</summary>
+  
+  <ul class="factors" style="margin-top:8px;padding-left:4px">
+    
+    <li>
+      <span>Троттлинг CPU (94% номинала)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-1.3</span>
+    </li>
+    
+    <li>
+      <span>Дефицит памяти (&lt;2 ГБ свободно)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-6.0</span>
+    </li>
+    
+    <li>
+      <span>Загрузка дольше целевой (56 с)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-5.0</span>
+    </li>
+    
+  </ul>
+  
+</details>
+
+<details open style="margin-bottom:7px">
+  <summary>Надёжность — 5 фактор(ов)</summary>
+  
+  <ul class="factors" style="margin-top:8px;padding-left:4px">
+    
+    <li>
+      <span>Низкий индекс стабильности (3.6/10)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-15.0</span>
+    </li>
+    
+    <li>
+      <span>6x внезапное отключение (KP41, 30д)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-35.0</span>
+    </li>
+    
+    <li>
+      <span>3x BSOD (BugCheck 1001, 30д)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-36.0</span>
+    </li>
+    
+    <li>
+      <span>2x грязное выключение (6008, 30д)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-10.0</span>
+    </li>
+    
+    <li>
+      <span>5x падение приложений (1000, 30д)</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-5.0</span>
+    </li>
+    
+  </ul>
+  
+</details>
+
+<details open style="margin-bottom:7px">
+  <summary>Остаток ресурса — 3 фактор(ов)</summary>
+  
+  <ul class="factors" style="margin-top:8px;padding-left:4px">
+    
+    <li>
+      <span>Износ SSD 24%</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-24.0</span>
+    </li>
+    
+    <li>
+      <span>Наработка диска 27k ч</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-8.0</span>
+    </li>
+    
+    <li>
+      <span>Возраст оборудования ~6 лет</span>
+      <span class="w neg"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">-8.0</span>
+    </li>
+    
+  </ul>
+  
+</details>
+
+<details open style="margin-bottom:7px">
+  <summary>Суммарный риск сбоя — 2 фактор(ов)</summary>
+  
+  <ul class="factors" style="margin-top:8px;padding-left:4px">
+    
+    <li>
+      <span>Ожидается перезагрузка (обновления зависли)</span>
+      <span class="w pos"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">+10.0</span>
+    </li>
+    
+    <li>
+      <span>1 устройство(а) с ошибкой драйвера</span>
+      <span class="w pos"
+            title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">+5.0</span>
+    </li>
+    
+  </ul>
+  
+</details>
+
+  </div>
+</details>
+
+
+
+<details style="margin-top:8px">
+  <summary>Журнал событий (28)</summary>
+  <div style="margin-top:12px">
+  <div class="section-label">Недавние события</div>
+  
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th><th>Журнал</th><th>Источник</th>
+        <th>ID</th><th>Уровень</th><th>Сообщение</th>
+      </tr>
+    </thead>
+    <tbody>
+    
+    <tr>
+      <td class="muted small mono">2026-08-28T15:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-28T04:48:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-27T18:00:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">EventLog</td>
+      <td class="mono small">6008</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The previous system shutdown was unexpected.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-27T07:12:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-26T20:24:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Service Control Manager</td>
+      <td class="mono small">7031</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The Print Spooler service terminated unexpectedly. It has done this 1 time(s). The following corrective action will be taken in 60000 milliseconds: Restart the service.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-26T09:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-25T22:48:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-25T12:00:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">EventLog</td>
+      <td class="mono small">6008</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The previous system shutdown was unexpected.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-25T01:12:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-24T14:24:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-23T16:48:00+00:00</td>
+      <td class="small">Application</td>
+      <td class="small">Application Error</td>
+      <td class="mono small">1000</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">Faulting application name: EXCEL.EXE, version 16.0.17928.20114, faulting module name: ntdll.dll, version 10.0.19041.4355, exception code: 0xc0000005.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-17T09:36:00+00:00</td>
+      <td class="small">Application</td>
+      <td class="small">Application Error</td>
+      <td class="mono small">1000</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">Faulting application name: EXCEL.EXE, version 16.0.17928.20114, faulting module name: ntdll.dll, version 10.0.19041.4355, exception code: 0xc0000005.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-16T01:12:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-15T14:24:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Service Control Manager</td>
+      <td class="mono small">7031</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The Print Spooler service terminated unexpectedly. It has done this 1 time(s). The following corrective action will be taken in 60000 milliseconds: Restart the service.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-15T03:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-14T16:48:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-13T19:12:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">EventLog</td>
+      <td class="mono small">6008</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The previous system shutdown was unexpected.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-13T08:24:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-12T21:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-07T12:00:00+00:00</td>
+      <td class="small">Application</td>
+      <td class="small">Application Error</td>
+      <td class="mono small">1000</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">Faulting application name: EXCEL.EXE, version 16.0.17928.20114, faulting module name: ntdll.dll, version 10.0.19041.4355, exception code: 0xc0000005.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-03T10:48:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Service Control Manager</td>
+      <td class="mono small">7031</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The Print Spooler service terminated unexpectedly. It has done this 1 time(s). The following corrective action will be taken in 60000 milliseconds: Restart the service.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-03T00:00:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-02T13:12:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">EventLog</td>
+      <td class="mono small">6008</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The previous system shutdown was unexpected.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-02T02:24:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">BugCheck</td>
+      <td class="mono small">1001</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The computer has rebooted from a bugcheck. The bugcheck was: 0x00000133 (0x0000000000000001, 0x0000000000001e00, 0xfffff8047a9c5320, 0x0000000000000000).</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-08-01T15:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-07-25T21:36:00+00:00</td>
+      <td class="small">Application</td>
+      <td class="small">Application Error</td>
+      <td class="mono small">1000</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">Faulting application name: EXCEL.EXE, version 16.0.17928.20114, faulting module name: ntdll.dll, version 10.0.19041.4355, exception code: 0xc0000005.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-07-21T09:36:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">EventLog</td>
+      <td class="mono small">6008</td>
+      <td><span class="chip bad"
+                title="Error">Ошибка</span></td>
+      <td class="small" style="max-width:360px">The previous system shutdown was unexpected.</td>
+    </tr>
+    
+    <tr>
+      <td class="muted small mono">2026-07-20T22:48:00+00:00</td>
+      <td class="small">System</td>
+      <td class="small">Microsoft-Windows-Kernel-Power</td>
+      <td class="mono small">41</td>
+      <td><span class="chip bad"
+                title="Critical">Критич.</span></td>
+      <td class="small" style="max-width:360px">The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly.</td>
+    </tr>
+    
+    </tbody>
+  </table>
+  </div>
+  
+  </div>
+</details>
+
+
+<div class="section-label">Сертификаты</div>
+
+
+
+
+  <p class="muted small">Действующих личных сертификатов нет.</p>
+
+
+
+
+
+
+
+
+<div class="section-label">Сеть</div>
+
+
+<details>
+  <summary>Адаптеры (1)</summary>
+  <table style="margin-top:8px">
+  <thead><tr><th>Адаптер</th><th>Тип</th><th>IP</th><th>Шлюз</th><th>Статус</th></tr></thead>
+  <tbody>
+  
+  <tr>
+    <td class="small">Ethernet</td>
+    <td class="small muted">ethernet</td>
+    <td class="small mono">192.168.77.13</td>
+    <td class="small mono">192.168.77.1</td>
+    <td><span class="chip good" title="Адаптер активен">вверх</span></td>
+  </tr>
+  
+  </tbody>
+  </table>
+</details>
+<p class="muted small">Соседей в сети: 6 · связей: 0 · <a href="../../netmap.html">карта сети</a></p>
+
+<p class="small" style="margin:10px 0 6px"><strong>Качество связи</strong> <span class="muted">(пробы с этой машины)</span></p>
+<table style="max-width:640px">
+  <thead><tr><th>Цель</th><th>Тип</th><th>Задержка</th><th>Потери</th></tr></thead>
+  <tbody>
+  
+  <tr>
+    <td class="small mono">192.168.77.1</td>
+    <td class="small muted">шлюз</td>
+    <td class="small mono">2 мс</td>
+    <td>
+      <span class="chip good">0%</span>
+    </td>
+  </tr>
+  
+  <tr>
+    <td class="small mono">192.168.77.1</td>
+    <td class="small muted">DNS</td>
+    <td class="small mono">2 мс</td>
+    <td>
+      <span class="chip good">0%</span>
+    </td>
+  </tr>
+  
+  </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<details style="margin-top:8px">
+  <summary>Сеть этой машины · адаптеров: 1</summary>
+  <div style="margin-top:12px">
+
+  <div class="section-label">Адаптеры</div>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th title="Имя сетевого адаптера">Адаптер</th>
+        <th title="Вид адаптера: проводной / Wi-Fi / другое">Тип</th>
+        <th title="Присвоенные IPv4-адреса">IPv4</th>
+        <th title="Физический MAC-адрес адаптера">MAC</th>
+        <th title="DNS-серверы, которые использует адаптер">DNS</th>
+        <th title="Получен ли адрес автоматически по DHCP">DHCP</th>
+        <th title="Согласованная скорость линка, Мбит/с">Скорость</th>
+        <th title="Шлюз по умолчанию для этого адаптера">Шлюз</th>
+      </tr>
+    </thead>
+    <tbody>
+    
+    
+    
+    <tr>
+      <td class="small">Ethernet</td>
+      <td class="small muted">ethernet</td>
+      <td class="small mono">192.168.77.13</td>
+      <td class="small mono muted">02:1A:2B:01:00:0D</td>
+      <td class="small mono">192.168.77.1</td>
+      <td class="small">да</td>
+      <td class="small mono">1000</td>
+      <td class="small mono">192.168.77.1</td>
+    </tr>
+    
+    </tbody>
+  </table>
+  </div>
+
+  <div class="section-label" style="margin-top:16px">ARP-соседи (6)</div>
+  
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th title="Имя NetBIOS соседа по локальной сети, если удалось определить">Имя</th>
+        <th>IP</th>
+        <th>MAC</th>
+      </tr>
+    </thead>
+    <tbody>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.1</td>
+      <td class="small mono muted">02:1A:2B:00:00:01</td>
+    </tr>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.2</td>
+      <td class="small mono muted">02:1A:2B:00:00:02</td>
+    </tr>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.3</td>
+      <td class="small mono muted">02:1A:2B:00:00:03</td>
+    </tr>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.21</td>
+      <td class="small mono muted">02:1A:2B:00:00:21</td>
+    </tr>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.22</td>
+      <td class="small mono muted">02:1A:2B:00:00:22</td>
+    </tr>
+    
+    <tr>
+      <td class="small">—</td>
+      <td class="small mono">192.168.77.23</td>
+      <td class="small mono muted">02:1A:2B:00:00:23</td>
+    </tr>
+    
+    </tbody>
+  </table>
+  </div>
+  
+
+  <div class="section-label" style="margin-top:16px">Маршруты (0)</div>
+  
+  <p class="muted small">Нет данных о маршрутах.</p>
+  
+
+  <div class="section-label" style="margin-top:16px">Принтеры этого ПК (0)</div>
+  
+  <p class="muted small">Нет данных о принтерах этого ПК.</p>
+  
+
+  <details style="margin-top:16px">
+    <summary>TCP-соединения (0)</summary>
+    <div class="table-wrap" style="margin-top:8px">
+    <table>
+      <thead><tr>
+        <th title="Локальный IP-адрес и порт этого ПК">Локальный адрес</th>
+        <th title="IP-адрес и порт удалённой стороны соединения">Внешний адрес</th>
+        <th title="Состояние TCP-соединения (ESTABLISHED, LISTENING и т.п.)">Состояние</th>
+      </tr></thead>
+      <tbody>
+      
+      </tbody>
+    </table>
+    </div>
+  </details>
+
+  </div>
+</details>
+
+
+
+
+
+
+<div class="section-label" style="margin-top:28px">Сеть — топология</div>
+<details class="net-topo" open>
+  <summary>
+    <span class="chip na">неизвестно</span>
+    <span class="pill">неизвестно</span>
+    
+    · <a href="../../netdisco/device/nd-demo-sklad-01.html">полная карточка устройства</a>
+  </summary>
+
+  <div class="nt-meta small muted mono">
+    IP 192.168.77.13 · MAC 02:1A:2B:01:00:0D
+    · впервые 2026-08-29T06:18:45.902139+00:00 · последний раз 2026-08-29T06:18:45.902139+00:00
+  </div>
+
+  
+
+  
+  <ul class="nt-links">
+    
+    
+    <li>
+      <a href="../../netdisco/device/nd-switch.html">nd-switch</a>
+      <span class="chip good">high</span>
+      <span class="via muted">link · через demo</span>
+    </li>
+    
+  </ul>
+  
+
+  
+</details>
+<style>
+.net-topo { margin-top: 8px; }
+.net-topo > summary { cursor: pointer; font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.net-topo .nt-meta { margin: 10px 0 2px; }
+.net-topo .nt-links { list-style: none; margin-top: 8px; padding: 0; }
+.net-topo .nt-links li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.net-topo .nt-links .via { font: 500 12px/1 var(--mono); }
+</style>
+
+
+
+<div class="section-label" style="margin-top:30px">Учёт печати (30 дней)</div>
+<div id="print-summary" class="cards">
+  <div class="stat"><div class="n muted">…</div><div class="l">Страниц</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Заданий</div></div>
+  <div class="stat"><div class="n muted">…</div><div class="l">Принтеров</div></div>
+</div>
+<script>
+(function () {
+  var did = "demo-sklad-01";
+  fetch("/api/v1/devices/" + encodeURIComponent(did) + "/print?days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (p) {
+      var cards = document.querySelectorAll("#print-summary .stat .n");
+      cards[0].textContent = (p.total_pages || 0).toLocaleString("ru");
+      cards[1].textContent = (p.total_jobs  || 0).toLocaleString("ru");
+      cards[2].textContent = (p.printers    || []).length;
+      cards[0].classList.remove("muted");
+      cards[1].classList.remove("muted");
+      cards[2].classList.remove("muted");
+    })
+    .catch(function () {});
+})();
+</script>
+
+
+
+<div class="section-label" style="margin-top:22px">Комментарий</div>
+<div class="dept-row">
+  <input id="comment-input" class="dept-input" type="text"
+         placeholder="Например: касса №3"
+         value="">
+  <button id="comment-save" class="btn-small" disabled title="демо: только чтение">Сохранить</button>
+  <span id="comment-status" class="small muted"></span>
+</div>
+<style>
+.dept-row { display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap; }
+.dept-input {
+  background: var(--panel); border: 1px solid var(--line-2);
+  color: var(--text); border-radius: 4px; padding: 7px 11px;
+  font: 14px/1 var(--mono); width: 260px; max-width: 100%;
+  transition: border-color .15s;
+}
+.dept-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.1); }
+.btn-small {
+  font: 600 13px/1 var(--mono); padding: 7px 14px; border-radius: 3px;
+  cursor: pointer; background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line-2); transition: all .12s;
+}
+.btn-small:hover { border-color: var(--accent); color: var(--accent); }
+.dept-ok  { color: var(--good); }
+.dept-err { color: var(--bad); }
+</style>
+<script>
+(function () {
+  var did = "demo-sklad-01";
+  var inp = document.getElementById("comment-input");
+  var btn = document.getElementById("comment-save");
+  var st  = document.getElementById("comment-status");
+  btn.addEventListener("click", function () {
+    var val = inp.value.trim();
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/meta", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: val }),
+    })
+      .then(function (r) {
+        // Без проверки статуса отказ (422 на длинном тексте, 401) выглядел как «✓».
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.json();
+      })
+      .then(function () {
+        st.textContent = "✓ сохранено";
+        st.className = "small dept-ok";
+        setTimeout(function () { st.textContent = ""; st.className = "small muted"; }, 2500);
+      })
+      .catch(function () {
+        st.textContent = "ошибка";
+        st.className = "small dept-err";
+      });
+  });
+})();
+</script>
+
+
+<div class="section-label" style="margin-top:22px">Персональные данные</div>
+<div class="dept-row">
+  <label class="small muted" style="width:90px">ФИО</label>
+  <input id="owner-name-input" class="dept-input" type="text"
+         maxlength="140" value="Гаврилов Пётр Николаевич">
+</div>
+<div class="dept-row">
+  <label class="small muted" style="width:90px">Должность</label>
+  <input id="owner-position-input" class="dept-input" type="text"
+         maxlength="140" value="Кладовщик">
+</div>
+<div class="dept-row">
+  <label class="small muted" style="width:90px">Телефон</label>
+  <input id="owner-phone-input" class="dept-input" type="text"
+         maxlength="32" value="+7 900 000-02-21">
+</div>
+<div class="dept-row">
+  <button id="owner-save" class="btn-small" disabled title="демо: только чтение">Сохранить</button>
+  <span id="owner-status" class="small muted"></span>
+</div>
+<script>
+(function () {
+  var did = "demo-sklad-01";
+  var nameInp = document.getElementById("owner-name-input");
+  var posInp = document.getElementById("owner-position-input");
+  var phoneInp = document.getElementById("owner-phone-input");
+  var btn = document.getElementById("owner-save");
+  var st  = document.getElementById("owner-status");
+  // В PATCH уходят ТОЛЬКО изменённые поля. Иначе очистка одного поля закрепляла
+  // два других за оператором, и агент переставал их обновлять, хотя оператор их
+  // не трогал. API пропускает отсутствующие ключи.
+  var snapshot = function () {
+    return {
+      owner_full_name: nameInp.value.trim(),
+      owner_position: posInp.value.trim(),
+      owner_phone: phoneInp.value.trim(),
+    };
+  };
+  var initial = snapshot();
+  btn.addEventListener("click", function () {
+    var current = snapshot();
+    var changed = {};
+    Object.keys(current).forEach(function (k) {
+      if (current[k] !== initial[k]) { changed[k] = current[k]; }
+    });
+    if (!Object.keys(changed).length) {
+      st.textContent = "нет изменений";
+      st.className = "small muted";
+      return;
+    }
+    fetch("/api/v1/devices/" + encodeURIComponent(did) + "/meta", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changed),
+    })
+      .then(function (r) {
+        // Без проверки статуса отказ (422 на длинном тексте, 401) выглядел как «✓».
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.json();
+      })
+      .then(function () {
+        initial = current;  // сохранено -> новая точка отсчёта
+        st.textContent = "✓ сохранено";
+        st.className = "small dept-ok";
+        setTimeout(function () { st.textContent = ""; st.className = "small muted"; }, 2500);
+      })
+      .catch(function () {
+        st.textContent = "ошибка";
+        st.className = "small dept-err";
+      });
+  });
+})();
+</script>
+
+</main>
+<script>
+(function () {
+  var btn = document.getElementById("theme-toggle");
+  var labels = {'': 'Meta', 'meta': 'Vercel', 'vercel': 'Тёмный'};
+  var cur = document.documentElement.getAttribute('data-theme') || '';
+  btn.textContent = labels[cur] || 'Meta';
+})();
+</script>
+</body>
+</html>

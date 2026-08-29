@@ -1,0 +1,12 @@
+{# B6 6.2: WHEA-чип. НЕ зависит от event_rollups: whea_errors_30d — отдельное
+   скалярное поле в d.historical (RAW envelope, см. _disk_smart.html про
+   .get()-only), а не посуточная свёртка, и может быть известно раньше первой
+   ночной свёртки журнала. bayesian.py:10-15 сознательно исключил WHEA из
+   скоринга как шумный сигнал — здесь только показ, риск-движки не трогаются. #}
+{% set whea_hist = d.historical or {} %}
+{% set whea_n = whea_hist.get("whea_errors_30d") %}
+{% set whea_n = (whea_n|float) if whea_n is not none else none %}
+{% if whea_n is not none and whea_n > 0 %}
+<div class="chip accent" style="margin:4px 0 10px; display:inline-block"
+     title="Аппаратные ошибки (CPU/память/шина) — косвенный признак деградации железа">WHEA-ошибок за 30 дн: {{ whea_n|int }}</div>
+{% endif %}

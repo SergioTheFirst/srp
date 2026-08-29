@@ -1,0 +1,640 @@
+"""P1 transport hardening: reconnect jitter, idempotency dedup, rate-limit, body size.
+
+RED phase: each test is written against the behaviour we WANT; all should fail
+until the matching implementation is in place.
+
+Unit tests (pure Python, no HTTP):
+  - Envelope carries a unique idempotency_key per build.
+  - Retry sleep includes random jitter (sleep > _RETRY_BACKOFF_SEC).
+
+Integration tests (FastAPI TestClient):
+  - Duplicate envelope (same idempotency_key) returns 200 with duplicate:true.
+  - A business-validation failure (422) does not burn the idempotency key --
+    retry with corrected content is processed, not dropped as a duplicate.
+  - Rate-limited device returns 429 after _RATE_MAX_PER_WINDOW requests.
+  - Request body exceeding the size limit returns 413.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from fastapi.testclient import TestClient
+from server.config import ServerConfig
+from server.main import create_app
+
+from tests.conftest import envelope, healthy
+
+pytestmark = pytest.mark.unit
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _app(tmp_path):
+    return create_app(ServerConfig(db_path=str(tmp_path / "t.db")))
+
+
+def _make_transport(tmp_path):
+    from client.config import ClientConfig
+    from client.transport import Transport
+
+    cfg = ClientConfig(
+        server_url="http://127.0.0.1:9/",
+        device_id="t-dev",
+        buffer_path=str(tmp_path / "buf.jsonl"),
+    )
+    return Transport(cfg)
+
+
+# --------------------------------------------------------------------------- #
+# Unit: envelope idempotency_key
+# --------------------------------------------------------------------------- #
+
+
+def test_envelope_has_idempotency_key(tmp_path):
+    """Every envelope built by the transport must carry a 32-char hex idempotency key."""
+    t = _make_transport(tmp_path)
+    env = t._envelope("heartbeat", {"cpu_pct": 1.0})
+    key = env.get("idempotency_key")
+    assert key is not None, "idempotency_key missing from envelope"
+    assert isinstance(key, str)
+    assert len(key) == 32
+    assert all(c in "0123456789abcdef" for c in key)
+
+
+def test_each_envelope_gets_unique_key(tmp_path):
+    """Two separate envelope builds must produce different idempotency keys."""
+    t = _make_transport(tmp_path)
+    k1 = t._envelope("heartbeat", {})["idempotency_key"]
+    k2 = t._envelope("heartbeat", {})["idempotency_key"]
+    assert k1 != k2
+
+
+def test_buffered_envelope_retains_key(tmp_path, monkeypatch):
+    """When an envelope is buffered and later re-read, the key is preserved."""
+    import json
+
+    t = _make_transport(tmp_path)
+    env = t._envelope("heartbeat", {"cpu_pct": 3.0})
+    original_key = env["idempotency_key"]
+    t._append_buffer(env)
+    lines = t._read_buffer()
+    recovered = json.loads(lines[0])
+    assert recovered["idempotency_key"] == original_key
+
+
+# --------------------------------------------------------------------------- #
+# Unit: retry jitter
+# --------------------------------------------------------------------------- #
+
+
+def test_retry_sleep_includes_jitter(tmp_path, monkeypatch):
+    """Retry backoff sleep must be RETRY_BACKOFF_SEC + random jitter, not flat."""
+    import client.transport as tm
+
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(tm.time, "sleep", lambda s: sleep_calls.append(s))
+    monkeypatch.setattr(tm.random, "uniform", lambda a, b: 1.5)  # fixed jitter
+
+    t = _make_transport(tmp_path)
+    monkeypatch.setattr(t, "_attempt", lambda env: "retry")  # always fail
+    t._deliver(t._envelope("heartbeat", {}))
+
+    # _SEND_ATTEMPTS=2 → sleep called once between the two attempts
+    assert len(sleep_calls) == 1
+    # sleep = _RETRY_BACKOFF_SEC + jitter; jitter mocked as 1.5 → 2.5
+    assert sleep_calls[0] == pytest.approx(tm._RETRY_BACKOFF_SEC + 1.5)
+
+
+def test_jitter_constant_is_positive():
+    """_RETRY_JITTER_SEC must be defined and > 0 so jitter actually randomises backoff."""
+    import client.transport as tm
+
+    assert hasattr(tm, "_RETRY_JITTER_SEC"), "_RETRY_JITTER_SEC constant missing"
+    assert tm._RETRY_JITTER_SEC > 0
+
+
+# --------------------------------------------------------------------------- #
+# Unit: ingest_guards module
+# --------------------------------------------------------------------------- #
+
+
+def test_idempotency_new_key_is_not_seen():
+    from server.ingest_guards import has_seen, reset_guards
+
+    reset_guards()
+    assert has_seen("aabbccdd" * 4) is False
+
+
+def test_idempotency_marked_key_is_seen():
+    from server.ingest_guards import has_seen, mark_seen, reset_guards
+
+    reset_guards()
+    key = "deadbeef" * 4
+    assert has_seen(key) is False
+    mark_seen(key)
+    assert has_seen(key) is True  # duplicate
+
+
+def test_idempotency_none_key_never_marks():
+    """Agents that don't send a key (old agents) must never be blocked."""
+    from server.ingest_guards import has_seen, mark_seen, reset_guards
+
+    reset_guards()
+    assert has_seen(None) is False
+    mark_seen(None)
+    assert has_seen(None) is False  # None never deduplicates
+
+
+def test_rate_limit_allows_within_window(monkeypatch):
+    from server import ingest_guards
+    from server.ingest_guards import check_rate_limit, reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 3)
+    reset_guards()
+    assert check_rate_limit("dev-x") is True
+    assert check_rate_limit("dev-x") is True
+    assert check_rate_limit("dev-x") is True
+
+
+def test_rate_limit_blocks_excess(monkeypatch):
+    from server import ingest_guards
+    from server.ingest_guards import check_rate_limit, reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 3)
+    reset_guards()
+    for _ in range(3):
+        check_rate_limit("dev-y")
+    assert check_rate_limit("dev-y") is False
+
+
+def test_rate_limit_independent_per_device(monkeypatch):
+    from server import ingest_guards
+    from server.ingest_guards import check_rate_limit, reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 2)
+    reset_guards()
+    check_rate_limit("a")
+    check_rate_limit("a")
+    # "a" is exhausted, "b" starts fresh
+    assert check_rate_limit("a") is False
+    assert check_rate_limit("b") is True
+
+
+def test_device_windows_trims_stale_entries_past_threshold():
+    """stoperrors P2-7: _device_windows must not grow unboundedly for devices that
+    stop sending -- mirrors the existing _seen_keys opportunistic trim (mark_seen,
+    above). Seeds > _TRIM_THRESHOLD devices with an aged-out timestamp each, then
+    confirms one more real call shrinks the dict instead of leaving it to grow
+    forever (today's code, pre-fix, never removes a device once added)."""
+    import time
+
+    from server import ingest_guards
+    from server.ingest_guards import check_rate_limit, reset_guards
+
+    reset_guards()
+    # Guaranteed older than any cutoff check_rate_limit computes below, regardless
+    # of how long the seeding loop takes (monotonic clock never goes backwards).
+    old_ts = time.monotonic() - ingest_guards._RATE_WINDOW_SEC - 1.0
+    n = ingest_guards._TRIM_THRESHOLD + 1  # > 50_000, per stoperrors P2-7
+    for i in range(n):
+        ingest_guards._device_windows[f"stale-{i}"] = [old_ts]
+
+    check_rate_limit("fresh-device")  # dict is over threshold -> trim should fire
+
+    assert len(ingest_guards._device_windows) == 1
+    assert list(ingest_guards._device_windows) == ["fresh-device"]
+
+
+# --------------------------------------------------------------------------- #
+# Unit: client-side payload size cap
+# --------------------------------------------------------------------------- #
+
+
+def test_oversized_payload_dropped_not_buffered(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from client import transport as tr
+
+    cfg = SimpleNamespace(
+        server_url="http://127.0.0.1:9",  # discard-порт: сеть не должна понадобиться
+        offline_mode=False,
+        device_id="d1",
+        hostname="h",
+        site_code="",
+        site_name="",
+        org_code="",
+        dept_code="",
+        comment="",
+        owner_full_name="",
+        owner_position="",
+        owner_phone="",
+        ingest_token="",
+        http_timeout_sec=1.0,
+        resolved_buffer_path=lambda: tmp_path / "buffer.jsonl",
+    )
+    t = tr.Transport(cfg)
+
+    big = {"blob": "x" * (tr._MAX_PAYLOAD_BYTES + 1)}
+    assert t.send("historical", big) is True  # «обработан» = отброшен без ретраев
+    assert t.buffer_depth() == 0  # и НЕ лёг в оффлайн-буфер
+    assert "cap" in t.last_error
+
+
+# --------------------------------------------------------------------------- #
+# Integration: HTTP behaviour
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.integration
+def test_duplicate_envelope_returns_200_with_flag(tmp_path):
+    """POSTing the same idempotency_key twice: second returns 200 duplicate:true."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        env = envelope("dup-dev", "heartbeat", healthy("heartbeat"))
+        env["idempotency_key"] = "cafebabe" * 4
+        r1 = c.post("/api/v1/ingest", json=env)
+        assert r1.status_code == 200
+        assert r1.json().get("duplicate") is not True  # first is processed
+
+        r2 = c.post("/api/v1/ingest", json=env)
+        assert r2.status_code == 200
+        assert r2.json().get("duplicate") is True  # second is a dup
+
+
+@pytest.mark.integration
+def test_422_does_not_burn_idempotency_key(tmp_path):
+    """stoperrors P1-3: a business-validation failure (422) must not permanently
+    mark the key as seen -- retrying with corrected content must be processed,
+    not silently dropped as a false duplicate (permanent data loss)."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        key = "0badf00d" * 4
+        bad = envelope("p13-dev", "heartbeat", {"cpu_pct": "not-a-number"})
+        bad["idempotency_key"] = key
+        r1 = c.post("/api/v1/ingest", json=bad)
+        assert r1.status_code == 422
+
+        good = envelope("p13-dev", "heartbeat", healthy("heartbeat"))
+        good["idempotency_key"] = key
+        r2 = c.post("/api/v1/ingest", json=good)
+        assert r2.status_code == 200, r2.text
+        assert r2.json().get("duplicate") is not True
+
+
+@pytest.mark.integration
+def test_rate_limited_device_returns_429(tmp_path, monkeypatch):
+    """After _RATE_MAX_PER_WINDOW ingest calls, next returns HTTP 429."""
+    from server import ingest_guards
+    from server.ingest_guards import reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 3)
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        for i in range(3):
+            env = envelope("rate-dev", "heartbeat", healthy("heartbeat"))
+            env["idempotency_key"] = f"aaaa{i:028x}"  # unique key each time
+            r = c.post("/api/v1/ingest", json=env)
+            assert r.status_code == 200, f"request {i} failed: {r.text}"
+
+        env = envelope("rate-dev", "heartbeat", healthy("heartbeat"))
+        env["idempotency_key"] = "ffff" + "0" * 28
+        r = c.post("/api/v1/ingest", json=env)
+        assert r.status_code == 429
+
+
+@pytest.mark.integration
+def test_oversized_body_returns_413(tmp_path):
+    """A request body exceeding the server limit must be rejected with 413."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    # Build a payload large enough to trip the 512 KB limit
+    big_env = envelope("big-dev", "heartbeat", healthy("heartbeat"))
+    big_env["_filler"] = "x" * (600 * 1024)  # ~600 KB
+    with TestClient(_app(tmp_path)) as c:
+        r = c.post(
+            "/api/v1/ingest",
+            content=__import__("json").dumps(big_env).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 413
+
+
+@pytest.mark.integration
+def test_malformed_content_length_returns_413(tmp_path):
+    """stoperrors P2-10: a non-numeric Content-Length header must be rejected
+    with 413, not allowed to bubble up as an unhandled ValueError → 500."""
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    env = envelope("malformed-dev", "heartbeat", healthy("heartbeat"))
+    with TestClient(_app(tmp_path)) as c:
+        r = c.post(
+            "/api/v1/ingest",
+            json=env,
+            headers={"Content-Length": "abc"},  # non-numeric, should fail parsing
+        )
+        assert r.status_code == 413
+
+
+# --------------------------------------------------------------------------- #
+# stoperrors P2-9: chunked (no Content-Length) ingest body must not be fully
+# buffered before the size guard runs.
+# --------------------------------------------------------------------------- #
+
+
+def _chunked_receive(chunk: bytes, count: int):
+    """Fake ASGI receive() yielding `count` copies of `chunk` as separate
+    http.request messages (more_body=True until the last), simulating a
+    Transfer-Encoding: chunked body with unknown total length. Returns the
+    callable plus a call counter so tests can see how many chunks the guard
+    actually pulled before giving up."""
+    calls = {"n": 0}
+
+    async def receive():
+        i = calls["n"]
+        calls["n"] += 1
+        if i >= count:  # defensive: never actually hit once the guard aborts early
+            return {"type": "http.disconnect"}
+        return {"type": "http.request", "body": chunk, "more_body": i < count - 1}
+
+    return receive, calls
+
+
+def test_chunked_oversized_body_aborts_before_full_buffering():
+    """No Content-Length header (chunked transfer) + body over the limit: the
+    guard must stop pulling chunks once the running total crosses
+    _MAX_INGEST_BODY_BYTES, not drain the whole stream first.
+
+    Pre-fix, `_IngestBodySizeMiddleware.dispatch` calls `await request.body()`
+    for the no-Content-Length path, which fully drains every chunk (all 50,
+    ~5 MB) before ever checking the size -- an attacker can exhaust memory
+    with an unbounded chunked body before the limit has a chance to reject
+    it. Post-fix, it must reject after only enough chunks to cross the 512 KB
+    limit (6 chunks of 100 KB = 600 KB), leaving the remaining 44 unread.
+    """
+    from server.main import _IngestBodySizeMiddleware
+    from starlette.requests import Request
+
+    chunk = b"x" * (100 * 1024)  # 100 KB per chunk
+    total_chunks = 50  # 5 MB if fully drained -- far past the 512 KB limit
+    receive, calls = _chunked_receive(chunk, total_chunks)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/ingest",
+        "headers": [],  # no content-length -> chunked / unknown-length path
+        "query_string": b"",
+    }
+    request = Request(scope, receive=receive)
+    middleware = _IngestBodySizeMiddleware(app=None)
+
+    async def _never_call_next(_request):
+        raise AssertionError("call_next must not run for an oversized body")
+
+    response = asyncio.run(middleware.dispatch(request, _never_call_next))
+
+    assert response.status_code == 413
+    assert calls["n"] < total_chunks, (
+        f"guard pulled {calls['n']}/{total_chunks} chunks before rejecting -- it "
+        "must abort as soon as the running total exceeds the limit, not after "
+        "buffering the entire oversized body"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# o5 блок C: буфер и коды ответа
+# --------------------------------------------------------------------------- #
+
+
+def _throttle_transport(tmp_path, monkeypatch, code: int):
+    """Транспорт, у которого urlopen всегда бросает HTTPError с данным кодом."""
+    import urllib.error
+
+    import client.transport as tm
+
+    def _boom(*_a, **_kw):
+        raise urllib.error.HTTPError(
+            url="http://127.0.0.1:9/api/v1/ingest", code=code, msg="x", hdrs=None, fp=None
+        )
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)  # без реальных пауз
+    return _make_transport(tmp_path)
+
+
+def test_http_429_is_buffered_not_dropped(tmp_path, monkeypatch):
+    """o5-C1: 429 -- «сервер тормозит», а не «конверт плохой»: буферизуем."""
+    t = _throttle_transport(tmp_path, monkeypatch, 429)
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert t.buffer_depth() == 1
+
+
+def test_http_422_still_dropped(tmp_path, monkeypatch):
+    """o5-C1: настоящий отказ по содержимому по-прежнему отбрасывается."""
+    t = _throttle_transport(tmp_path, monkeypatch, 422)
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is True
+    assert t.buffer_depth() == 0
+
+
+def test_buffer_depth_does_not_slurp_whole_file(tmp_path, monkeypatch):
+    """o5-C6: глубина считается потоково, без чтения всего файла в память."""
+    from client.transport import Transport
+
+    t = _make_transport(tmp_path)
+    for _ in range(3):
+        t._append_buffer(t._envelope("heartbeat", {}))
+
+    def _forbidden(_self):
+        raise AssertionError("buffer_depth must not read the whole buffer")
+
+    monkeypatch.setattr(Transport, "_read_buffer", _forbidden)
+    assert t.buffer_depth() == 3
+
+
+def test_buffer_trimmed_by_bytes(tmp_path):
+    """o5-C6: кап по строкам не ограничивает байты -- нужен байтовый кап."""
+    import client.transport as tm
+
+    t = _make_transport(tmp_path)
+    line = "x" * (1024 * 1024)  # 1 МиБ на строку, строк мало -> строковый кап молчит
+    n = tm._MAX_BUFFER_BYTES // len(line) + 10
+    t._buffer.parent.mkdir(parents=True, exist_ok=True)
+    t._buffer.write_text("\n".join([line] * n) + "\n", encoding="utf-8")
+
+    t._trim_buffer()
+
+    assert t._buffer.stat().st_size <= tm._MAX_BUFFER_BYTES
+
+
+def test_buffer_rewrite_is_atomic(tmp_path, monkeypatch):
+    """o5-C8: сбой на середине перезаписи не должен рвать существующий буфер."""
+    from pathlib import Path
+
+    t = _make_transport(tmp_path)
+    t._append_buffer(t._envelope("heartbeat", {"cpu_pct": 1.0}))
+    original = t._buffer.read_bytes()
+
+    real_write_text = Path.write_text
+
+    def _write_then_fail(self, data, *a, **kw):
+        real_write_text(self, data, *a, **kw)
+        raise OSError("disk full mid-write")
+
+    monkeypatch.setattr(Path, "write_text", _write_then_fail)
+    t._write_buffer(["{}"])  # должно не тронуть исходный файл
+
+    assert t._buffer.read_bytes() == original
+
+
+@pytest.mark.integration
+def test_chunked_small_body_still_reaches_handler(tmp_path):
+    """A legitimate chunked (no Content-Length) request UNDER the limit must
+    still be readable by the /ingest route handler itself.
+
+    Guards against a regression where fixing the guard via request.stream()
+    leaves the body only partially cached: Starlette's BaseHTTPMiddleware
+    wraps the request in a _CachedRequest whose wrapped_receive() replays the
+    full body downstream only when `request._body` ends up set -- if the
+    guard consumed the stream without populating that cache, the route's own
+    request.json() parse would see an empty body instead of the envelope.
+    """
+    from server.ingest_guards import reset_guards
+
+    reset_guards()
+    env = envelope("chunked-dev", "heartbeat", healthy("heartbeat"))
+    body = __import__("json").dumps(env).encode()
+
+    def _body_chunks():
+        # A generator (not bytes/str) makes httpx omit Content-Length and send
+        # Transfer-Encoding: chunked instead -- see httpx._content.encode_content.
+        yield body
+
+    with TestClient(_app(tmp_path)) as c:
+        r = c.post(
+            "/api/v1/ingest",
+            content=_body_chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 200, r.text
+
+
+# --------------------------------------------------------------------------- #
+# Троттлинг: сервер говорит СКОЛЬКО ждать, агент не долбит в закрытое окно      #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.integration
+def test_rate_limited_response_carries_retry_after(tmp_path, monkeypatch):
+    """Без Retry-After клиент не знает, сколько ждать, и ретраит вслепую."""
+    from server import ingest_guards
+    from server.ingest_guards import reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 1)
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        env = envelope("ra-dev", "heartbeat", healthy("heartbeat"))
+        env["idempotency_key"] = "a" * 32
+        assert c.post("/api/v1/ingest", json=env).status_code == 200
+
+        env["idempotency_key"] = "b" * 32
+        r = c.post("/api/v1/ingest", json=env)
+        assert r.status_code == 429
+        assert "retry-after" in {k.lower() for k in r.headers}
+        assert int(r.headers["retry-after"]) > 0
+
+
+def test_throttled_send_does_not_retry_in_process(tmp_path, monkeypatch):
+    """Окно лимитера -- 60 с, а внутрипроцессный ретрай идёт через 1-3 с: он
+    обречён и лишь удваивает поток отказов. На 429 конверт буферизуется сразу."""
+    import urllib.error
+
+    import client.transport as tm
+
+    calls = {"n": 0}
+
+    def _throttled(*_a, **_kw):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(
+            url="http://127.0.0.1:9/api/v1/ingest",
+            code=429,
+            msg="Too Many Requests",
+            hdrs={"Retry-After": "60"},
+            fp=None,
+        )
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _throttled)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)
+    t = _make_transport(tmp_path)
+
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert calls["n"] == 1, f"на 429 сделано {calls['n']} запросов вместо одного"
+    assert t.buffer_depth() == 1
+
+
+def test_throttled_transport_skips_network_until_window_passes(tmp_path, monkeypatch):
+    """Остальные конверты цикла не должны ходить в сеть, пока окно не истекло:
+    в логе сервера это давало серию обречённых 429 на каждый тип сообщения."""
+    import urllib.error
+
+    import client.transport as tm
+
+    calls = {"n": 0}
+
+    def _throttled(*_a, **_kw):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(
+            url="http://127.0.0.1:9/api/v1/ingest",
+            code=429,
+            msg="Too Many Requests",
+            hdrs={"Retry-After": "60"},
+            fp=None,
+        )
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _throttled)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)
+    t = _make_transport(tmp_path)
+
+    for msg in ("inventory", "historical", "heartbeat", "events", "liveness"):
+        t.send(msg, {"x": 1})
+
+    assert calls["n"] == 1, f"агент сходил в сеть {calls['n']} раз при закрытом окне"
+    assert t.buffer_depth() == 5  # всё сохранено, ничего не потеряно
+
+
+def test_error_response_is_drained_and_closed(tmp_path, monkeypatch):
+    """HTTPError -- это ещё и объект ответа. Не дочитав и не закрыв его, клиент
+    оставляет сокет сборщику мусора, сервер видит принудительный обрыв и печатает
+    трейсбек (WinError 10054) в окне оператора."""
+    import urllib.error
+
+    import client.transport as tm
+
+    state = {"read": False, "closed": False}
+
+    class _Err(urllib.error.HTTPError):
+        def read(self, *a, **kw):
+            state["read"] = True
+            return b""
+
+        def close(self):
+            state["closed"] = True
+
+    def _boom(*_a, **_kw):
+        raise _Err("http://x/api/v1/ingest", 500, "boom", {}, None)
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)
+    _make_transport(tmp_path).send("heartbeat", {"cpu_pct": 1.0})
+
+    assert state["read"], "тело ответа не дочитано"
+    assert state["closed"], "ответ не закрыт"

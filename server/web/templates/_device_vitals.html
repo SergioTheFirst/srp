@@ -1,0 +1,141 @@
+{# ── B1: «Показатели 30 дней» — сигнатурный блок, картина целиком до всех
+   деталей ниже. Значения из уже прочитанных heartbeat_rollups (dashboard.py) —
+   без новых запросов. Последнее значение = самый свежий свёрнутый день; если
+   поле в нём не собралось — «—» (не берём соседний день, UNKNOWN over false
+   confidence). Включается через {% include %} (контекст наследуется по
+   умолчанию), вынесен из device.html только ради лимита 800 строк на файл. #}
+{# srpSpark (+ её зависимость srpHoverLabel) объявлены БЕЗ условия на
+   heartbeat_rollups: у свежего устройства со SMART (B4), но без ни одной
+   посуточной свёртки, карточки «Диски (SMART)» всё равно должны иметь рабочий
+   спарклайн-хелпер -- значит обе функции обязаны существовать вне
+   {% if heartbeat_rollups %}, иначе JS падает на необъявленной srpSpark/
+   srpHoverLabel (ReferenceError). _plotly_hover.html уже безопасно
+   переподключать несколько раз (см. device.html) -- функция просто
+   переобъявляется. #}
+{% include "_plotly_hover.html" %}
+<script>
+// Общий хелпер для всех спарклайнов страницы устройства (полоса «Показатели
+// 30 дней» и посуточные карточки, напр. история SMART дисков, B4).
+// Объявлен один раз; вызывающий код сам ждёт DOMContentLoaded перед вызовом,
+// поэтому здесь достаточно проверить готовность Plotly (CDN-скрипт deferred).
+function srpSpark(el, dates, values) {
+  if (!el || typeof Plotly === "undefined") return;
+  var pts = [];
+  for (var i = 0; i < dates.length; i++) {
+    if (values[i] != null) { pts.push([dates[i], values[i]]); }
+  }
+  if (pts.length < 2) {
+    el.innerHTML = "<div class=\"no-data\" style=\"font-size:11px\">мало данных</div>";
+    return;
+  }
+  var x = pts.map(function (p) { return p[0]; });
+  var y = pts.map(function (p) { return p[1]; });
+  var hoverText = x.map(function (d, i) { return window.srpEsc(d) + ": " + window.srpEsc(y[i]); });
+  function draw() {
+    var css = getComputedStyle(document.documentElement);
+    var acc = css.getPropertyValue("--accent").trim() || "#0ea5e9";
+    Plotly.newPlot(el, [{
+      x: x, y: y, type: "scatter", mode: "lines",
+      line: { color: acc, width: 2 },
+      hoverinfo: "text", text: hoverText,
+    }], {
+      paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+      margin: { t: 4, r: 4, b: 4, l: 4 },
+      xaxis: { visible: false, fixedrange: true },
+      yaxis: { visible: false, fixedrange: true },
+      showlegend: false, autosize: true,
+      hoverlabel: srpHoverLabel(),
+    }, { responsive: true, displayModeBar: false });
+  }
+  draw();
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+}
+</script>
+{% if heartbeat_rollups %}
+{% set hb0 = heartbeat_rollups[0] %}
+{# B6 6.1: "Ошибки сети" only earns a slot when the 30-day window actually saw
+   one -- a device with a clean NIC for 30 days shows no card at all (not a
+   "0" card), same UNKNOWN-over-false-confidence spirit as _disk_smart.html's
+   all-clear gating. Window mirrors the JS clip below (rollups arrive
+   newest-first; the first 30 rows are the most recent 30 days). #}
+{% set nic_win = heartbeat_rollups[:30] %}
+{% set nic_positive = [] %}
+{% for r in nic_win %}
+  {% if r.nic_errors_max is not none and r.nic_errors_max > 0 %}{% set _ = nic_positive.append(r.nic_errors_max) %}{% endif %}
+{% endfor %}
+{% set has_nic_errors_30d = nic_positive|length > 0 %}
+<div class="section-label" style="margin-top:24px">Показатели 30 дней</div>
+<div class="vitals-grid">
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль загрузки CPU за день — типичный пик нагрузки, без редких выбросов">ЦП, p95</div>
+    <div class="vitals-v">{% if hb0.cpu_p95 is not none %}{{ "%.0f"|format(hb0.cpu_p95) }}%{% else %}—{% endif %}</div>
+    <div id="vit-cpu" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наименьшее количество свободной оперативной памяти за день">Память, мин. свободно</div>
+    <div class="vitals-v">{% if hb0.mem_avail_min is not none %}{{ "%.1f"|format(hb0.mem_avail_min / 1024) }} ГБ{% else %}—{% endif %}</div>
+    <div id="vit-mem" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль длины очереди диска за день — сколько запросов одновременно ждут выполнения">Очередь диска, p95</div>
+    <div class="vitals-v">{% if hb0.disk_queue_p95 is not none %}{{ "%.1f"|format(hb0.disk_queue_p95) }}{% else %}—{% endif %}</div>
+    <div id="vit-dq" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наибольшее число открытых дескрипторов процессов за день — устойчивый рост может означать утечку хендлов">Дескрипторы, max</div>
+    <div class="vitals-v">{% if hb0.handles_max is not none %}{{ hb0.handles_max|int }}{% else %}—{% endif %}</div>
+    <div id="vit-han" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наименьший процент свободного места на системном диске за день">Свободно на диске, min</div>
+    <div class="vitals-v">{% if hb0.free_space_min is not none %}{{ "%.0f"|format(hb0.free_space_min) }}%{% else %}—{% endif %}</div>
+    <div id="vit-free" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наибольшая продолжительность непрерывной работы без перезагрузки за день">Аптайм, max</div>
+    <div class="vitals-v">{% if hb0.uptime_max is not none %}{{ "%.1f"|format(hb0.uptime_max / 24) }} дн{% else %}—{% endif %}</div>
+    <div id="vit-up" class="vitals-spark"></div>
+  </div>
+  <div class="vitals-card">
+    <div class="vitals-l" title="95-й перцентиль доли выделенной (committed) памяти за день — насколько близко система подходит к лимиту виртуальной памяти">Выделено памяти, p95</div>
+    <div class="vitals-v">{% if hb0.committed_pct_p95 is not none %}{{ "%.0f"|format(hb0.committed_pct_p95) }}%{% else %}—{% endif %}</div>
+    <div id="vit-committed" class="vitals-spark"></div>
+  </div>
+  {% if has_nic_errors_30d %}
+  <div class="vitals-card">
+    <div class="vitals-l" title="Наибольшее число сетевых ошибок за день — карточка появляется только когда за 30 дней была хотя бы одна">Ошибки сети, max/день</div>
+    <div class="vitals-v">{% if hb0.nic_errors_max is not none %}{{ hb0.nic_errors_max|int }}{% else %}—{% endif %}</div>
+    <div id="vit-nic" class="vitals-spark"></div>
+  </div>
+  {% endif %}
+</div>
+<script>
+(function () {
+  function init() {
+    var dataEl = document.getElementById("hb-rollup-data");
+    if (!dataEl) return;
+    // hb-rollup-data carries 90д (shared with the disk-latency chart) but this
+    // strip is titled "Показатели 30 дней" -- clip before reversing (rollup
+    // rows arrive newest-first, so the first 30 are the most recent 30 days).
+    var rows = JSON.parse(dataEl.textContent || "[]").slice(0, 30).reverse();  // oldest -> newest
+    var dates = rows.map(function (r) { return r.day; });
+    function vals(key) { return rows.map(function (r) { return r[key]; }); }
+    srpSpark(document.getElementById("vit-cpu"), dates, vals("cpu_p95"));
+    srpSpark(document.getElementById("vit-mem"), dates, vals("mem_avail_min"));
+    srpSpark(document.getElementById("vit-dq"), dates, vals("disk_queue_p95"));
+    srpSpark(document.getElementById("vit-han"), dates, vals("handles_max"));
+    srpSpark(document.getElementById("vit-free"), dates, vals("free_space_min"));
+    srpSpark(document.getElementById("vit-up"), dates, vals("uptime_max"));
+    srpSpark(document.getElementById("vit-committed"), dates, vals("committed_pct_p95"));
+    // vit-nic может отсутствовать в DOM (карточка условная) -- srpSpark сама
+    // выходит по "if (!el) return", отдельная проверка тут не нужна.
+    srpSpark(document.getElementById("vit-nic"), dates, vals("nic_errors_max"));
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+{% endif %}

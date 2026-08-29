@@ -1,0 +1,239 @@
+{# Fleet KPIs + site-grouped device table.
+   Rendered on first load AND polled via /fleet/fragment. Autoescaped. #}
+
+{# ── KPI strip ──────────────────────────────────────────────────────────── #}
+<div class="kpi-strip">
+  <div class="kpi" data-filter="all">
+    <div class="kn">{{ summary.total }}</div>
+    <div class="kl">устройств</div>
+  </div>
+  <div class="kpi" data-filter="at_risk">
+    <div class="kn {{ 'bad' if summary.at_risk else 'na' }}">{{ summary.at_risk }}</div>
+    <div class="kl">в зоне риска</div>
+  </div>
+  <div class="kpi" data-filter="worsening">
+    <div class="kn {{ 'warn' if summary.worsening else 'na' }}">{{ summary.worsening }}</div>
+    <div class="kl">тренд ↑</div>
+  </div>
+  <div class="kpi" data-filter="unknown">
+    <div class="kn {{ 'high' if summary.unknown else 'na' }}">{{ summary.unknown }}</div>
+    <div class="kl">unknown</div>
+  </div>
+  <div class="kpi" data-filter="regressed">
+    <div class="kn {{ 'high' if summary.regressed else 'na' }}">{{ summary.regressed }}</div>
+    <div class="kl">пропал</div>
+  </div>
+  <div class="kpi" data-filter="stale">
+    <div class="kn {{ 'warn' if summary.stale else 'na' }}">{{ summary.stale }}</div>
+    <div class="kl">не на связи</div>
+  </div>
+  <div class="kpi" data-filter="expiring">
+    <div class="kn {{ 'bad' if summary.expiring else 'na' }}">{{ summary.expiring }}</div>
+    <div class="kl">cert ≤30д</div>
+  </div>
+  <div class="kpi" data-filter="untrusted">
+    <div class="kn {{ 'bad' if summary.untrusted else 'na' }}">{{ summary.untrusted }}</div>
+    <div class="kl">untrusted</div>
+  </div>
+  <div class="kpi" data-filter="update_pending">
+    <div class="kn {{ 'warn' if summary.update_pending else 'na' }}">{{ summary.update_pending }}</div>
+    <div class="kl">не применяют обновл.</div>
+  </div>
+  <div class="kpi" data-filter="outdated"
+       title="Версия агента ниже выложенной на сервере — устройства ждут обновления">
+    <div class="kn {{ 'bad' if summary.outdated else 'na' }}">{{ summary.outdated }} из {{ summary.total }}</div>
+    <div class="kl">агенты устарели</div>
+  </div>
+  <div class="kpi" data-filter="new">
+    <div class="kn {{ 'good' if summary.new7d else 'na' }}">{{ summary.new7d }}</div>
+    <div class="kl">новых ≤7д</div>
+  </div>
+</div>
+
+{% if device_limit and not demo_mode() and device_count_raw >= device_limit %}
+<div class="alert-banner alert-warn" role="alert" style="margin-bottom:16px">
+  Лимит бесплатной версии: {{ device_count_raw }}/{{ device_limit }} компьютеров.
+  Полная версия — без лимита, с автообновлением агентов и мульти-организациями.
+  {% if device_count_raw > summary.total %}Часть слотов занимают старые записи переустановленных агентов — удалите их кнопкой ✕ в таблице, чтобы освободить место.{% endif %}
+  <a href="https://j-space.ru/#full">Подробнее</a>
+</div>
+{% endif %}
+
+{% if not groups %}
+  <p class="muted small" style="padding:24px 0">
+    Нет данных. Запустите агента — он пришлёт первую телеметрию.
+  </p>
+{% else %}
+{% for site, devs in groups %}
+<div class="site">
+  <div class="site-head">
+    <span class="site-name">Объект: {{ site }}</span>
+    <span class="muted small mono">{{ devs|length }}</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th class="sortable" data-col="0" data-sort="text"><span>Устройство</span><span class="sort-icon"></span></th>
+        <th>Статус</th>
+        <th class="sortable" data-col="2" title="сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше"><span>Индекс</span><span class="sort-icon"></span></th>
+        <th class="sortable" data-col="3" title="состояние по координатной модели: от «здоров» до «предотказ»"><span>Состояние</span><span class="sort-icon"></span></th>
+        <th title="главный фактор деградации и прогноз окна до ухудшения">Главный фактор</th>
+        <th>Сертификат</th>
+        <th title="страниц за сегодня">Печать</th>
+        <th>Связь</th>
+        <th title="локальный IP — клик копирует">IP</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for d in devs %}
+    <tr class="devrow {{ 'stale-row' if d.stale else '' }}"
+        data-flags="{{ d.flags|join(' ') }}"
+        data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id ~ ' ' ~ site ~ ' ' ~ (d.org_label.text or '') ~ ' ' ~ (d.dept_label.text or ''))|lower }}"
+        data-id="{{ d.device_id }}"
+        data-risk="{{ d.risk_exposure or 0 }}">
+
+      {# ── Device name + identity sub-line ─────────────────────────────── #}
+      <td data-name="{{ d.display_name|lower }}">
+        <a href="/device/{{ d.device_id }}" title="{{ d.device_id }}">{{ d.display_name }}</a>{% set owner_parts = [d.owner_full_name, d.owner_position, d.owner_phone] | select | list %}{% if owner_parts %}<span class="dev-sub">, {{ owner_parts | join(", ") }}</span>{% endif %}{% if d.chassis or d.model %}<span class="dev-sub"> · {{ d.chassis or '' }}{% if d.model %} {{ d.model[:18] }}{% endif %}</span>{% endif %}
+        <div class="dev-sub2">
+          {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
+          {%- if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
+          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновл.</span>{% endif %}{% if d.update_available_version %} <span class="badge warn" title="агент видит обновление, но не применяет его">доступна {{ d.update_available_version }}</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}
+        </div>
+      </td>
+
+      {# ── Status badges ────────────────────────────────────────────────── #}
+      <td>
+        <div class="alerts">
+          {% if d.stale %}<span class="badge warn">OFFLINE</span>{% endif %}
+          {% if d.device_trust == "untrusted" %}<span class="badge bad">untrusted</span>{% endif %}
+          {% if d.unknown_domains %}<span class="badge na">{{ d.unknown_domains }}×unkn</span>{% endif %}
+          {% if d.regressed_count %}<span class="badge high">{{ d.regressed_count }}×пропал</span>{% endif %}
+          {% if not d.stale and not d.device_trust and not d.unknown_domains and not d.regressed_count and not d.cert_expiring %}
+            <span class="badge good">OK</span>
+          {% endif %}
+        </div>
+      </td>
+
+      {# ── Health: сводный индекс + состояние + главный фактор (ssd3 Ф7) ──── #}
+      {# One coordinate-model verdict replaces the four flat scores + Тренд:
+         index carries the 7-day delta (so no separate trend column), state is
+         the qualitative reading, dominant is what drives it. Same fields and
+         terminology as the device card -> the two pages never disagree. #}
+      {% set hh = d.health %}
+      {% if hh %}
+        {% set hband = band_class(hh.band) %}
+        {# index is only meaningful with a known state: the >10d staleness overlay
+           forces state->unknown but leaves the stale number, so gate on state. #}
+        {% set idx_ok = hh.index is not none and hh.state != 'unknown' %}
+        {% set delta = hh.delta_7d %}
+        {% set delta_cls = 'na' if (delta is none or delta == 0) else ('good' if delta > 0 else 'bad') %}
+        <td data-val="{{ hh.index if idx_ok else 0 }}">
+          <span class="hidx {{ hband }}">{{ "%.0f"|format(hh.index) if idx_ok else "—" }}</span>{% if idx_ok and delta is not none and delta != 0 %} <span class="hdelta {{ delta_cls }}" title="изменение индекса за 7 дней">{{ "▲" if delta > 0 else "▼" }}{{ "%.0f"|format(delta|abs) }}</span>{% endif %}
+        </td>
+        <td data-val="{{ {'h4':4,'h3':3,'h2':2,'h1':1,'h0':0}.get(hh.state, -1) }}">
+          <span class="hstate {{ hband }}">{{ state_label_for(hh.state) }}</span>
+        </td>
+        <td class="hfactor">
+          {% if hh.state not in ('h0', 'unknown') and hh.dominant %}
+            {{ dominant_label_for(hh.dominant) }}{% if hh.horizon_days %} <span class="hfar" title="{{ hh.horizon_reason or 'прогноз окна до ухудшения состояния' }}">≤{{ hh.horizon_days }}дн</span>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+      {% else %}
+        <td data-val="0"><span class="hidx na">—</span></td>
+        <td data-val="-1"><span class="hstate na">нет данных</span></td>
+        <td class="hfactor"><span class="muted">—</span></td>
+      {% endif %}
+
+      {# ── Certificate: soonest active machine or personal cert ──────────── #}
+      <td>
+        {% if d.cert_min_days is none %}
+          <span class="chip na">—</span>
+        {% elif d.cert_min_days < 17 %}
+          <span class="cert-alert">{{ d.cert_min_days }}д</span>
+        {% else %}
+          <span class="chip na">{{ d.cert_min_days }}д</span>
+        {% endif %}
+      </td>
+
+      {# ── Print pages (today) — populated async by JS ──────────────────── #}
+      <td class="pprint" data-dev="{{ d.device_id }}">
+        <span class="chip na">…</span>
+      </td>
+
+      {# ── Last seen ────────────────────────────────────────────────────── #}
+      <td class="mono" title="{{ d.last_seen or '' }}">
+        {{ fmt_age(d.last_seen_age_sec) }}
+      </td>
+
+      {# ── Local IP (click to copy) ─────────────────────────────────────── #}
+      <td class="mono">
+        {% if d.local_ip %}
+          <span class="ip-copy" data-ip="{{ d.local_ip }}" title="скопировать IP">{{ d.local_ip }}</span>
+        {% else %}
+          <span class="muted">—</span>
+        {% endif %}
+      </td>
+
+      {# ── Ack ──────────────────────────────────────────────────────────── #}
+      <td>
+        <button class="ackbtn {{ 'acked' if d.ack else '' }}"
+                data-id="{{ d.device_id }}"
+                {% if demo_mode() %}disabled title="демо: только чтение"
+                {% else %}title="{{ d.ack.note if d.ack else 'квитировать' }}"{% endif %}>
+          {{ '✓' if d.ack else '·' }}
+        </button>
+        <button class="delbtn"
+                data-id="{{ d.device_id }}"
+                data-name="{{ d.display_name }}"
+                {% if demo_mode() %}disabled title="демо: только чтение"
+                {% else %}title="удалить запись и все её данные из базы"{% endif %}>✕</button>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+{% endif %}
+
+{# ── Скрытые дубликаты имени (переустановка агента) ────────────────────────
+   Производное от get_devices(): при одинаковом hostname свежая запись выше, а
+   старые OFFLINE-тёзки собраны здесь. Ничего не удалено — удаляет автоочистка
+   по молчанию (device_retention_days) или кнопка ✕. Свёрнуто по умолчанию. #}
+{% if dupes_total %}
+<details class="site dupes">
+  <summary class="site-head">
+    <span class="site-name">Скрытые дубликаты имени: {{ dupes_total }}</span>
+    <span class="muted small">старые записи тех же ПК (переустановка агента); свежая осталась в списке — удалятся автоочисткой по молчанию или кнопкой ✕</span>
+  </summary>
+  <table>
+    <thead>
+      <tr><th>Устройство</th><th>Версия</th><th>Связь</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for d in dupes %}
+    <tr class="devrow {{ 'stale-row' if d.stale else '' }}"
+        data-flags="{{ d.flags|join(' ') }}"
+        data-text="{{ ((d.hostname or '') ~ ' ' ~ d.device_id)|lower }}"
+        data-id="{{ d.device_id }}"
+        data-risk="{{ d.risk_exposure or 0 }}">
+      <td data-name="{{ d.display_name|lower }}">
+        <a href="/device/{{ d.device_id }}" title="{{ d.device_id }}">{{ d.display_name }}</a>
+      </td>
+      <td class="mono"><span class="ver">v{{ d.agent_version or "?" }}</span></td>
+      <td class="mono" title="{{ d.last_seen or '' }}">{{ fmt_age(d.last_seen_age_sec) }}</td>
+      <td>
+        <button class="delbtn"
+                data-id="{{ d.device_id }}"
+                data-name="{{ d.display_name }}"
+                {% if demo_mode() %}disabled title="демо: только чтение"
+                {% else %}title="удалить запись и все её данные из базы"{% endif %}>✕</button>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}

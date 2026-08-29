@@ -1,0 +1,268 @@
+"""Phase 4: NetdiscoConfig — OFF by default, intervals clamped (mirror PrinterConfig).
+
+Discovery must never run unless explicitly enabled, and no interval may drop
+below the floor however the config is set (never hammer the network/server).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import pytest
+from server.netdisco.config import load_netdisco_config
+
+
+def test_defaults_are_off_and_safe() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.enabled is False
+    assert cfg.inventory_interval_sec == 900
+    assert cfg.jitter_sec == 30
+
+
+def test_enabled_requires_explicit_true() -> None:
+    assert load_netdisco_config({"enabled": "yes"}).enabled is False  # only True enables
+    assert load_netdisco_config({"enabled": 1}).enabled is False
+    assert load_netdisco_config({"enabled": True}).enabled is True
+
+
+def test_interval_is_clamped_to_the_floor() -> None:
+    assert load_netdisco_config({"inventory_interval_sec": 5}).inventory_interval_sec == 60
+    assert load_netdisco_config({"inventory_interval_sec": 1200}).inventory_interval_sec == 1200
+
+
+def test_jitter_is_non_negative_and_unknown_keys_ignored() -> None:
+    cfg = load_netdisco_config({"jitter_sec": -5, "totally_unknown_key": 99})
+    assert cfg.jitter_sec == 0
+
+
+def test_bad_types_fall_back_to_defaults() -> None:
+    assert load_netdisco_config({"inventory_interval_sec": "abc"}).inventory_interval_sec == 900
+
+
+def test_config_is_frozen() -> None:
+    cfg = load_netdisco_config(None)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cfg.enabled = True
+
+
+def test_server_config_exposes_netdisco_config() -> None:
+    from server.config import ServerConfig
+
+    cfg = ServerConfig(netdisco={"enabled": True, "inventory_interval_sec": 5})
+    nd = cfg.netdisco_config()
+    assert nd.enabled is True
+    assert nd.inventory_interval_sec == 60  # clamped through load_netdisco_config
+    assert ServerConfig().netdisco_enabled is False  # OFF by default
+
+
+# --- Phase 5: active-scan config fields (mirror PrinterConfig + scan ports/workers) ---
+
+
+def test_scan_defaults_are_safe_and_off() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.active_scan is False  # the stop-gate default
+    assert cfg.scan_cidrs == ()
+    assert cfg.static_ips == ()
+    assert cfg.scan_max_hosts == 4096
+    assert cfg.scan_workers == 64
+    assert cfg.snmp_community == "public"
+    assert cfg.snmp_version == 1
+    assert cfg.discovery_interval_sec == 900
+    assert cfg.scan_ports  # a non-empty default liveness-port set
+
+
+def test_active_scan_requires_explicit_true() -> None:
+    assert load_netdisco_config({"active_scan": "yes"}).active_scan is False
+    assert load_netdisco_config({"active_scan": 1}).active_scan is False
+    assert load_netdisco_config({"active_scan": True}).active_scan is True
+
+
+def test_scan_cidrs_keep_only_rfc1918() -> None:
+    cfg = load_netdisco_config(
+        {"scan_cidrs": ["10.0.0.0/24", "8.8.8.0/24", "192.168.1.0/24", "not-a-cidr"]}
+    )
+    assert cfg.scan_cidrs == ("10.0.0.0/24", "192.168.1.0/24")  # public/garbage dropped
+
+
+def test_static_ips_keep_only_rfc1918() -> None:
+    cfg = load_netdisco_config({"static_ips": ["10.0.0.5", "1.1.1.1", "192.168.0.9"]})
+    assert cfg.static_ips == ("10.0.0.5", "192.168.0.9")
+
+
+def test_scan_max_hosts_is_non_negative() -> None:
+    assert load_netdisco_config({"scan_max_hosts": -1}).scan_max_hosts == 0  # 0 = kill-switch
+    assert load_netdisco_config({"scan_max_hosts": 10}).scan_max_hosts == 10
+    assert load_netdisco_config({"scan_max_hosts": "abc"}).scan_max_hosts == 4096
+
+
+def test_scan_workers_clamped_to_bounds() -> None:
+    assert load_netdisco_config({"scan_workers": 0}).scan_workers == 1  # at least one worker
+    assert load_netdisco_config({"scan_workers": 9999}).scan_workers == 256  # hard ceiling
+    assert load_netdisco_config({"scan_workers": 32}).scan_workers == 32
+
+
+def test_scan_ports_validated_deduped_order_preserved() -> None:
+    cfg = load_netdisco_config({"scan_ports": [80, 80, 70000, 0, -5, 443, "x"]})
+    assert cfg.scan_ports == (80, 443)  # only in-range ints, deduped, order kept
+
+
+def test_scan_ports_empty_or_all_invalid_falls_back_to_default() -> None:
+    default_ports = load_netdisco_config(None).scan_ports
+    assert load_netdisco_config({"scan_ports": []}).scan_ports == default_ports
+    assert load_netdisco_config({"scan_ports": [0, 99999]}).scan_ports == default_ports
+
+
+def test_snmp_version_only_0_or_1() -> None:
+    assert load_netdisco_config({"snmp_version": 3}).snmp_version == 1
+    assert load_netdisco_config({"snmp_version": 0}).snmp_version == 0
+
+
+def test_discovery_interval_clamped_to_floor() -> None:
+    assert load_netdisco_config({"discovery_interval_sec": 5}).discovery_interval_sec == 60
+    assert load_netdisco_config({"discovery_interval_sec": 1800}).discovery_interval_sec == 1800
+
+
+# --- Phase 6: classify interval (rare loop, clamped to the floor) ---
+
+
+def test_classify_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).classify_interval_sec == 3600  # rare by default
+    assert load_netdisco_config({"classify_interval_sec": 5}).classify_interval_sec == 60
+    assert load_netdisco_config({"classify_interval_sec": 7200}).classify_interval_sec == 7200
+    assert load_netdisco_config({"classify_interval_sec": "x"}).classify_interval_sec == 3600
+
+
+def test_topology_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).topology_interval_sec == 3600  # L2 evidence is rare
+    assert load_netdisco_config({"topology_interval_sec": 5}).topology_interval_sec == 60
+    assert load_netdisco_config({"topology_interval_sec": 1800}).topology_interval_sec == 1800
+    assert load_netdisco_config({"topology_interval_sec": "x"}).topology_interval_sec == 3600
+
+
+def test_reachability_interval_default_and_clamp() -> None:
+    assert load_netdisco_config(None).reachability_interval_sec == 600
+    assert load_netdisco_config({"reachability_interval_sec": 5}).reachability_interval_sec == 60
+    assert load_netdisco_config({"reachability_interval_sec": 300}).reachability_interval_sec == 300
+
+
+# --- D2: "missing" threshold (replaces the old 3x-topology-interval guess) ---
+
+
+def test_missing_after_default_and_clamp() -> None:
+    assert load_netdisco_config(None).missing_after_sec == 6 * 3600
+    assert load_netdisco_config({"missing_after_sec": 5}).missing_after_sec == 60
+    assert load_netdisco_config({"missing_after_sec": 7200}).missing_after_sec == 7200
+    assert load_netdisco_config({"missing_after_sec": "x"}).missing_after_sec == 6 * 3600
+
+
+# --- Phase 8: passive identification (OFF by default, per-protocol control) ---
+
+
+def test_passive_defaults_off_and_safe() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.passive_enabled is False  # secure default
+    assert cfg.passive_interval_sec == 3600  # rare loop, like classify/topology
+    # default = every known passive source available (operator narrows if wanted)
+    assert set(cfg.passive_protocols) == {
+        "data",
+        "reverse_dns",
+        "mdns",
+        "ssdp",
+        "netbios",
+        "wsd",
+        "banner",
+    }
+
+
+def test_passive_enabled_requires_explicit_true() -> None:
+    assert load_netdisco_config({"passive_enabled": "yes"}).passive_enabled is False
+    assert load_netdisco_config({"passive_enabled": 1}).passive_enabled is False
+    assert load_netdisco_config({"passive_enabled": True}).passive_enabled is True
+
+
+def test_passive_interval_clamped_to_floor() -> None:
+    assert load_netdisco_config({"passive_interval_sec": 5}).passive_interval_sec == 60
+    assert load_netdisco_config({"passive_interval_sec": 1800}).passive_interval_sec == 1800
+    assert load_netdisco_config({"passive_interval_sec": "x"}).passive_interval_sec == 3600
+
+
+def test_passive_protocols_keep_only_known_deduped_order() -> None:
+    cfg = load_netdisco_config(
+        {"passive_protocols": ["mdns", "mdns", "telnet", "banner", "garbage"]}
+    )
+    assert cfg.passive_protocols == ("mdns", "banner")  # unknown dropped, deduped, order kept
+
+
+def test_passive_protocols_empty_falls_back_to_all() -> None:
+    default = set(load_netdisco_config(None).passive_protocols)
+    assert set(load_netdisco_config({"passive_protocols": []}).passive_protocols) == default
+    assert set(load_netdisco_config({"passive_protocols": ["nope"]}).passive_protocols) == default
+
+
+# --- Phase 9: optional adapters (operator-credentialed; endpoint RFC1918-only) ---
+
+
+def test_adapter_defaults_empty_and_interval() -> None:
+    cfg = load_netdisco_config(None)
+    assert cfg.optional_adapters == ()
+    assert cfg.adapter_interval_sec == 900
+
+
+def test_adapter_interval_clamped_to_floor() -> None:
+    assert load_netdisco_config({"adapter_interval_sec": 5}).adapter_interval_sec == 60
+    assert load_netdisco_config({"adapter_interval_sec": 1200}).adapter_interval_sec == 1200
+
+
+def test_adapter_valid_mikrotik_entry_parsed() -> None:
+    cfg = load_netdisco_config(
+        {
+            "optional_adapters": [
+                {
+                    "adapter_type": "mikrotik",
+                    "endpoint": "10.0.0.1",
+                    "credential": "mikrotik-core",
+                    "tls_verify": False,
+                    "site_id": "hq",
+                }
+            ]
+        }
+    )
+    assert len(cfg.optional_adapters) == 1
+    a = cfg.optional_adapters[0]
+    assert a.adapter_type == "mikrotik" and a.endpoint == "10.0.0.1"
+    assert a.credential == "mikrotik-core" and a.tls_verify is False and a.site_id == "hq"
+
+
+def test_adapter_unknown_type_dropped() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "telnet-bot", "endpoint": "10.0.0.1"}]}
+    )
+    assert cfg.optional_adapters == ()
+
+
+def test_adapter_public_endpoint_dropped() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "mikrotik", "endpoint": "8.8.8.8"}]}
+    )
+    assert cfg.optional_adapters == ()  # never let an adapter point off-LAN
+
+
+def test_adapter_missing_or_bad_endpoint_dropped() -> None:
+    cfg = load_netdisco_config(
+        {
+            "optional_adapters": [
+                {"adapter_type": "mikrotik"},  # no endpoint
+                {"adapter_type": "mikrotik", "endpoint": "not-an-ip"},
+                "not-a-dict",
+            ]
+        }
+    )
+    assert cfg.optional_adapters == ()
+
+
+def test_adapter_defaults_filled() -> None:
+    cfg = load_netdisco_config(
+        {"optional_adapters": [{"adapter_type": "unifi", "endpoint": "192.168.1.10"}]}
+    )
+    a = cfg.optional_adapters[0]
+    assert a.credential == "" and a.tls_verify is True and a.site_id == ""
