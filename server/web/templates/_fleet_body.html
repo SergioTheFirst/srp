@@ -136,7 +136,9 @@
           <span class="hstate {{ hband }}">{{ state_label_for(hh.state) }}</span>
         </td>
         <td class="hfactor">
-          {% if hh.state not in ('h0', 'unknown') and hh.dominant %}
+          {# dominant is only ever a watch/bad axis (health._dominant), so a healthy
+             machine with a bad network axis still names its mechanism here. #}
+          {% if hh.state != 'unknown' and hh.dominant %}
             {{ dominant_label_for(hh.dominant) }}{% if hh.horizon_days %} <span class="hfar" title="{{ hh.horizon_reason or 'прогноз окна до ухудшения состояния' }}">≤{{ hh.horizon_days }}дн</span>{% endif %}
           {% else %}<span class="muted">—</span>{% endif %}
         </td>

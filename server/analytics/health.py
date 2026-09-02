@@ -477,6 +477,63 @@ def _reconcile(state: str, index: Optional[float], o_val: float) -> tuple[str, l
 # --------------------------------------------------------------------------- #
 # Step 9: Dominant / systemic / horizon
 # --------------------------------------------------------------------------- #
+# Trend key -> physical mechanism. Three SMART counters of ONE dying disk are one
+# mechanism, not three: "systemic" means several independent things degrade at once.
+_TREND_MECHANISM = {
+    "storage_wear": "storage",
+    "nvme_spare": "storage",
+    "smart_pending": "storage",
+    "smart_realloc": "storage",
+    "smart_media_errors": "storage",
+    "disk_tail_ratio": "storage",
+    "disk_fill": "disk_fill",
+    "boot_time": "os",
+    "throttle": "thermal",
+    "gateway_latency": "network",
+}
+# Damage counters: any growth is real damage (validators treat a drop as a reset).
+_COUNTER_TRENDS = frozenset({"smart_pending", "smart_realloc", "smart_media_errors"})
+# A depletion metric worsens materially when the boundary is within a year; an
+# unbounded one when it drifts >= 10 % of its current value per 30 days. Below that
+# a Theil-Sen slope on noisy flat data is a coin flip, not a mechanism.
+_MATERIAL_ETA_DAYS = 365.0
+_MATERIAL_DRIFT_30D = 0.10
+
+
+def _material_worsening(key: str, t: Optional[dict]) -> bool:
+    t = t or {}
+    if t.get("direction") != "worsening":
+        return False
+    if key in _COUNTER_TRENDS:
+        return True
+    eta = t.get("eta_days")
+    if eta is not None:
+        return float(eta) <= _MATERIAL_ETA_DAYS
+    slope, current = t.get("slope_per_day"), t.get("current")
+    if slope is None or current is None:
+        return False
+    if not current:  # already at the floor/zero -- nothing left to drift
+        return True
+    return abs(float(slope)) * 30.0 / abs(float(current)) >= _MATERIAL_DRIFT_30D
+
+
+def _material_mechanisms(trends: dict) -> set[str]:
+    return {
+        _TREND_MECHANISM.get(key, key) for key, t in trends.items() if _material_worsening(key, t)
+    }
+
+
+# Mechanism -> the axis that carries it, so a trend-driven state (Resilience
+# surcharges for a depleting spare / tail ratio) still names its mechanism even
+# while the axis's own band reads "good".
+_MECHANISM_AXIS = {
+    "storage": "storage_risk",
+    "disk_fill": "disk_fill_risk",
+    "os": "os_degradation_risk",
+    "network": "network_risk",
+}
+
+
 def _is_systemic(axes: dict, trends: dict) -> bool:
     mechs = sum(
         1
@@ -484,18 +541,21 @@ def _is_systemic(axes: dict, trends: dict) -> bool:
         if _ax(axes, name).get("value") is not None
         and _ax(axes, name).get("band") in ("watch", "bad")
     )
-    worsening = sum(1 for t in trends.values() if (t or {}).get("direction") == "worsening")
-    return mechs >= 3 or worsening >= 3
+    return mechs >= 3 or len(_material_mechanisms(trends)) >= 3
 
 
 def _dominant(axes: dict, trends: dict) -> tuple[Optional[str], bool]:
     if _is_systemic(axes, trends):
         return "systemic", True
+    live = {_MECHANISM_AXIS[m] for m in _material_mechanisms(trends) if m in _MECHANISM_AXIS}
     best_key: Optional[str] = None
-    best_score = 0.0
+    best_score = -1.0  # a qualifying axis wins even at value 0 (trend-driven state)
     for name, short in _AXIS_TO_DOMINANT.items():
         v = _ax_val(axes, name)
-        if v is None:
+        # A "good"-band axis is background, not a mechanism: naming it would put
+        # "накопитель" on a healthy machine whose wear ticked from 11 to 12 %.
+        # Unless its own trends are materially worsening (that IS the mechanism).
+        if v is None or (_ax(axes, name).get("band") not in ("watch", "bad") and name not in live):
             continue
         score = v * _SEVERITY.get(name, 1.0)
         if score > best_score:

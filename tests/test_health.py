@@ -406,6 +406,44 @@ def test_systemic_three_watch_axes() -> None:
     assert v.band in ("watch", "bad")  # reconciliation must clamp systemic-floored state too
 
 
+def test_systemic_needs_three_distinct_material_mechanisms() -> None:
+    # one dying disk: three SMART counters + a tail ratio are ONE mechanism (storage),
+    # a noise-level boot_time drift is no mechanism at all -> dominant stays storage.
+    axes = {"storage_risk": _axis(60, coords=_st_coords(damage=60))}
+    one_disk = {
+        "smart_pending": _trend(direction="worsening", n_points=8),
+        "smart_realloc": _trend(direction="worsening", n_points=8),
+        "smart_media_errors": _trend(direction="worsening", n_points=8),
+        "disk_tail_ratio": _trend(direction="worsening", n_points=8, current=3.0),
+        "boot_time": _trend(direction="worsening", n_points=8, slope_per_day=2.0, current=22000.0),
+        "throttle": _trend(direction="worsening", n_points=8, slope_per_day=-0.01, current=99.0),
+        "storage_wear": _trend(direction="worsening", n_points=8, eta_days=1600),
+    }
+    v = _call(axes, trends=one_disk)
+    assert v.dominant == "storage"
+    # three independent mechanisms with material drift -> systemic
+    three = {
+        "smart_realloc": _trend(direction="worsening", n_points=8),
+        "boot_time": _trend(
+            direction="worsening", n_points=8, slope_per_day=200.0, current=30000.0
+        ),
+        "disk_fill": _trend(direction="worsening", n_points=8, eta_days=120),
+    }
+    assert _call(axes, trends=three).dominant == "systemic"
+    # a good-band axis never becomes "the" mechanism: healthy machine -> no dominant
+    quiet = {"storage_risk": _axis(0.0, coords=_st_coords()), "disk_fill_risk": _axis(4)}
+    assert _call(quiet, trends=_mature_key_trend()).dominant is None
+    # state driven by Resilience trend surcharges while the axis band still reads
+    # good: the mechanism is still storage, never "данных недостаточно".
+    surcharged = {
+        "nvme_spare": _trend(direction="worsening", n_points=8, eta_days=200),
+        "disk_tail_ratio": _trend(direction="worsening", n_points=8, current=3.0),
+    }
+    v = _call({"storage_risk": _axis(0.0, coords=_st_coords())}, trends=surcharged)
+    assert v.state != "h0"
+    assert v.dominant == "storage"
+
+
 def test_systemic_never_overrides_blind_zone() -> None:
     # >=3 watch/bad axes would normally floor state at h2, but K5 (blind device
     # can never read as healthier than "unknown") outranks the systemic floor.
