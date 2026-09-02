@@ -607,6 +607,18 @@
     });
   }
 
+  /* Подписи узлов отталкиваются друг от друга: по умолчанию под узлом, а если
+     место уже занято подписью соседа — над узлом. Иначе два близких узла
+     (принтер рядом с агентом) печатают имена одно поверх другого. */
+  var labelBoxes = [];
+  function labelHits(b) {
+    for (var i = 0; i < labelBoxes.length; i++) {
+      var o = labelBoxes[i];
+      if (b[0] < o[0] + o[2] && b[0] + b[2] > o[0] && b[1] < o[1] + o[3] && b[1] + b[3] > o[1]) return true;
+    }
+    return false;
+  }
+
   function drawNode(n, dimN, highlight) {
     var col = C[n.cls];
     var dimmed = dimN;
@@ -719,7 +731,11 @@
       if (name.length > 18) name = name.slice(0, 17) + "…";
       ctx.globalAlpha = dimmed ? 0.06 : 0.85;
       ctx.fillStyle = C.text; ctx.font = "500 10px " + C.mono; ctx.textAlign = "center";
-      ctx.fillText(name, n.x, n.y + n.r + 13);
+      var tw = ctx.measureText(name).width, ly = n.y + n.r + 13;
+      var box = [n.x - tw / 2, ly - 10, tw, 12];
+      if (labelHits(box)) { ly = n.y - n.r - 6; box = [n.x - tw / 2, ly - 10, tw, 12]; }
+      labelBoxes.push(box);
+      ctx.fillText(name, n.x, ly);
     }
   }
 
@@ -876,6 +892,7 @@
       }
     }
 
+    labelBoxes = [];
     for (var j = 0; j < nodes.length; j++) {
       var n = nodes[j];
       var out = nodeFilteredOut(n);

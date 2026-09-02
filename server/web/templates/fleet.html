@@ -142,6 +142,12 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 table th { padding: 5px 8px; }
 table td { padding: 4px 8px; }
 tbody td { color: #e8f4ff; font-size: 15px; white-space: nowrap; }
+/* Первая колонка (имя + владелец + модель) — единственная, которой можно переноситься:
+   иначе на 1440 px таблица шире окна и появляется горизонтальный скролл. */
+#fleet tbody td:first-child { white-space: normal; min-width: 280px; }
+/* Страница флота — одна плотная таблица: общий кап main 1220 px здесь только сжимает
+   первую колонку в 4 строки при пустых полях по бокам. */
+body main { max-width: none; }  /* специфичнее базового main{max-width:1220px} */
 tbody td a { color: #e8f4ff; font-weight: 600; font-size: 15px; }
 tbody td a:hover { color: var(--accent); text-decoration: none; }
 .dev-sub { color: var(--muted); font: 400 11px/1 var(--mono); margin-left: 5px; }
