@@ -8,7 +8,7 @@ def test_limits_defaults(monkeypatch):
     from server import limits
 
     importlib.reload(limits)
-    assert limits.MAX_DEVICES is None
+    assert limits.MAX_DEVICES == 3
     assert limits.DEMO_MODE is False
 
 
@@ -68,9 +68,11 @@ def test_delete_frees_slot(client, monkeypatch):
     assert client.post("/api/v1/ingest", json=_hb("s-new")).status_code == 200
 
 
-def test_no_limit_by_default(client):
-    for i in range(5):
-        assert client.post("/api/v1/ingest", json=_hb(f"free-{i}")).status_code == 200
+def test_demo_edition_limit_is_three(client):
+    """Демо-версия принимает ровно 3 компьютера — то, что обещает README."""
+    for i in range(3):
+        assert client.post("/api/v1/ingest", json=_hb(f"demo-{i}")).status_code == 200
+    assert client.post("/api/v1/ingest", json=_hb("demo-3")).status_code == 403
 
 
 def test_fleet_shows_limit_note(client, monkeypatch):

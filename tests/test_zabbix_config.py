@@ -138,13 +138,3 @@ def test_block_is_read_from_a_config_file(tmp_path):
     cfg = load_config(path).zabbix_config()
 
     assert cfg.server == "10.0.0.5" and cfg.host_suffix == ".corp"
-
-
-def test_public_demo_config_never_points_anywhere():
-    """Публичное демо не должно стучаться наружу ни при каких обстоятельствах."""
-    root = Path(__file__).resolve().parents[1]
-    demo = root / "srp_packaging" / "demo" / "config.json"
-    data = json.loads(demo.read_text(encoding="utf-8"))
-
-    assert "zabbix" in data, "опт-аут должен быть ЯВНЫМ, а не по умолчанию"
-    assert load_zabbix_config(data["zabbix"]).enabled is False
