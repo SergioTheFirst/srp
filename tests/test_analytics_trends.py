@@ -203,6 +203,20 @@ def test_stable_trends_score_zero_good():
     assert s.band == "good"
 
 
+def test_worsening_spare_without_threshold_is_missing_not_stable():
+    # KodSR M9: nvme_spare falling 20 -> 10 but the disk never reports its own
+    # nvme_spare_threshold_pct -- ETA can't be computed. This used to fall
+    # through both branches silently and read as "тренды стабильны" (good,
+    # value 0.0), indistinguishable from an actually flat disk.
+    disks = [{"received_at": _at(d), "ts": _at(d), "nvme_spare_pct": 20 - d} for d in (0, 5, 10)]
+    trends = compute_trends([], [], disk_series=disks)
+    assert trends["nvme_spare"].direction == "worsening"
+    assert trends["nvme_spare"].eta_days is None
+    s = trajectory_risk_score(trends)
+    assert not (s.band == "good" and s.value == 0.0)
+    assert any("spare" in m for m in s.missing_evidence)
+
+
 def test_confidence_scales_with_sample_count():
     few = [_hist(d, wear=10 + d) for d in (0, 5, 10)]  # 3 points
     many = [_hist(d, wear=10 + d) for d in range(0, 12, 2)]  # 6 points

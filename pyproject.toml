@@ -45,6 +45,10 @@ indent-style = "space"
 # --------------------------------------------------------------------------- #
 [tool.mypy]
 python_version = "3.9"
+# SRP targets Windows only (agent uses winreg / ctypes.windll). Without this the
+# Linux CI job type-checks the agent against POSIX typeshed and invents 21 errors
+# that do not exist on the real target platform.
+platform = "win32"
 plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
 warn_redundant_casts = true

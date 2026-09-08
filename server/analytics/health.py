@@ -34,7 +34,7 @@ Two interface points the plan leaves for the wiring task (documented for review)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from server.scoring.score100 import band_for_risk_score
@@ -146,6 +146,7 @@ _HORIZON_STATE_REASON = {
 _HORIZON_ETA_REASON = {
     30: "истощение ресурса в пределах 30 дней",
     90: "истощение ресурса в пределах 90 дней",
+    180: "ресурс кончится в пределах полугода",
 }
 _BLIND_ACTION = "восстановить видимость: проверить агент и доступ к SMART/журналам"
 _MSG_IMMATURE = "оценка устойчивости незрелая"
@@ -534,14 +535,27 @@ _MECHANISM_AXIS = {
 }
 
 
+# score100 axis name -> physical mechanism (for _is_systemic dedup). trajectory_risk
+# shares "storage" with storage_risk -- both describe the same dying disk, not two
+# independent things going wrong (KodSR bug hunt 2026-09-02, HIGH).
+_AXIS_MECHANISM = {
+    "storage_risk": "storage",
+    "trajectory_risk": "storage",
+    "disk_fill_risk": "disk_fill",
+    "os_degradation_risk": "os",
+    "network_risk": "network",
+}
+
+
 def _is_systemic(axes: dict, trends: dict) -> bool:
-    mechs = sum(
-        1
+    bad_axes = {
+        name
         for name in _AXIS_TO_DOMINANT
         if _ax(axes, name).get("value") is not None
         and _ax(axes, name).get("band") in ("watch", "bad")
-    )
-    return mechs >= 3 or len(_material_mechanisms(trends)) >= 3
+    }
+    mechs = {_AXIS_MECHANISM.get(a, a) for a in bad_axes} | _material_mechanisms(trends)
+    return len(mechs) >= 3
 
 
 def _dominant(axes: dict, trends: dict) -> tuple[Optional[str], bool]:
@@ -574,6 +588,8 @@ def _horizon(state: str, trends: dict) -> tuple[Optional[int], str]:
             eta_days = min(eta_days or 999, 30)
         elif eta <= 90:
             eta_days = min(eta_days or 999, 90)
+        elif eta <= 180:
+            eta_days = min(eta_days or 999, 180)
     # state-rules checked before ETA-rules; state wins ties.
     if state_days is not None and (eta_days is None or state_days <= eta_days):
         return state_days, _HORIZON_STATE_REASON[state]
@@ -730,11 +746,11 @@ def health_staleness(score_ts: str, now: datetime) -> Optional[str]:
     ts = _parse_dt(score_ts)
     if ts is None:
         return None
-    days = (now - ts).days
-    if days > 10:
+    age = now - ts
+    if age > timedelta(days=10):
         return _STALE_UNKNOWN_MSG
-    if days > 3:
-        return f"данные устарели ({days} дн.)"
+    if age > timedelta(days=3):
+        return f"данные устарели ({age.days} дн.)"
     return None
 
 

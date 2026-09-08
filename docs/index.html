@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SRP — инструмент инженера мониторинга: парк Windows-ПК, принтеры, сеть, прогноз отказов</title>
-<meta name="description" content="SRP — self-hosted рабочее место инженера, который отвечает за офисный парк: компьютеры, принтеры и сеть на одном экране, объяснимый риск отказа каждой машины, прогноз тонера и дисков, карта сети по SNMP. Демо без регистрации.">
+<meta name="description" content="SRP — self-hosted рабочее место инженера, который отвечает за офисный парк: компьютеры, принтеры и сеть на одном экране, объяснимый риск отказа каждой машины, прогноз тонера и дисков, карта сети по SNMP. Отдаёт прогноз отказа в Zabbix. Демо без регистрации.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="canonical" href="https://j-space.ru/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="SRP — инструмент инженера мониторинга офисного парка">
-<meta property="og:description" content="Компьютеры, принтеры и сеть на одном экране. Агент без зависимостей, сервер FastAPI + SQLite, риск с объяснением, прогноз тонера и дисков, карта сети по SNMP. Демо по ссылке.">
+<meta property="og:description" content="Компьютеры, принтеры и сеть на одном экране. Агент без зависимостей, сервер FastAPI + SQLite, риск с объяснением, прогноз тонера и дисков, карта сети по SNMP. Прогноз отказа уходит в Zabbix. Демо по ссылке.">
 <meta property="og:image" content="https://j-space.ru/img/og.png">
 <meta property="og:url" content="https://j-space.ru/">
 <meta name="twitter:card" content="summary_large_image">
@@ -19,84 +19,191 @@
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "SRP",
-  "alternateName": "Система раннего предупреждения отказов",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Windows 7+; сервер — Windows или Linux",
-  "softwareVersion": "0.3.0",
-  "datePublished": "2026-08-29",
-  "dateModified": "2026-09-02",
-  "license": "https://polyformproject.org/licenses/noncommercial/1.0.0/",
-  "url": "https://j-space.ru/",
-  "downloadUrl": "https://github.com/SergioTheFirst/srp/releases/latest",
-  "codeRepository": "https://github.com/SergioTheFirst/srp",
-  "programmingLanguage": ["Python", "PowerShell"],
-  "description": "Self-hosted рабочее место инженера мониторинга офисного парка: тонкий агент на стандартной библиотеке Python собирает SMART, журналы событий, BSOD, сетевую и печатную телеметрию с Windows-ПК; сервер на FastAPI и SQLite опрашивает принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины, прогнозирует ресурс дисков и тонера и строит карту сети по SNMP и LLDP.",
-  "featureList": [
-    "Компьютеры, принтеры и сеть офиса на одном экране",
-    "Три координаты здоровья машины вместо одного числа",
-    "Байесовский риск по классам отказа с объяснением каждого фактора",
-    "Прогноз ресурса SSD и заполнения диска по SMART",
-    "Прогноз исчерпания тонера по SNMP",
-    "Карта сети по SNMP и LLDP",
-    "Учёт печати по компьютерам и принтерам",
-    "Оценка доверия к каждому источнику данных"
-  ],
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "RUB",
-    "description": "Бесплатная версия: до 3 компьютеров, некоммерческое использование"
-  },
-  "author": { "@type": "Person", "name": "SergioTheFirst", "url": "https://github.com/SergioTheFirst", "email": "mss777@mail.ru" }
-}
-</script>
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
+  "@graph": [
     {
-      "@type": "Question",
-      "name": "Чем SRP отличается от обычного мониторинга вроде Zabbix?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Классический мониторинг отвечает на вопрос «что сломано сейчас» и срабатывает по порогам: диск заполнен на 90 процентов — авария. SRP отвечает на другой вопрос: «что сломается следующим и когда». Он копит историю по каждой машине, считает тренд и срок до выхода за границу, а вместо одного числа здоровья показывает три независимые координаты: накопленные повреждения, запас устойчивости и полноту данных. Отдельно оценивается доверие к каждому источнику: источник, который устарел или начал врать, не участвует в выводах." }
+      "@type": "WebSite",
+      "@id": "https://j-space.ru/#website",
+      "url": "https://j-space.ru/",
+      "name": "SRP — рабочее место инженера мониторинга офисного парка",
+      "inLanguage": "ru",
+      "about": {
+        "@id": "https://j-space.ru/#software"
+      },
+      "author": {
+        "@id": "https://j-space.ru/#author"
+      },
+      "dateModified": "2026-09-08"
     },
     {
-      "@type": "Question",
-      "name": "Что нужно, чтобы попробовать SRP?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Ничего — демо открывается в браузере без регистрации: десять вымышленных машин с 45 днями настоящей истории телеметрии. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой, агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется: телеметрия остаётся внутри вашей сети. Бесплатная версия принимает до трёх компьютеров." }
+      "@type": "Person",
+      "@id": "https://j-space.ru/#author",
+      "name": "SergioTheFirst",
+      "jobTitle": "Инженер, автор SRP: сам сопровождает парк офисных машин, для которого и написан инструмент",
+      "email": "mss777@mail.ru",
+      "url": "https://github.com/SergioTheFirst",
+      "sameAs": [
+        "https://github.com/SergioTheFirst",
+        "https://github.com/SergioTheFirst/srp"
+      ],
+      "knowsAbout": [
+        "мониторинг парка Windows-ПК",
+        "предиктивная диагностика отказов оборудования",
+        "SMART и ресурс накопителей",
+        "SNMP-опрос принтеров и сетевого оборудования",
+        "интеграция мониторинга с Zabbix"
+      ]
     },
     {
-      "@type": "Question",
-      "name": "Уходит ли собранная телеметрия наружу?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Нет. Сервер разворачивается у вас, и данные никуда не отправляются. Серийные номера дисков агент хеширует ещё до отправки, наружу уходит только хеш. Из сетевых адресов агент передаёт исключительно частные диапазоны локальной сети. Приватные ключи сертификатов не собираются в принципе — только метаданные срока действия." }
+      "@type": "SoftwareApplication",
+      "name": "SRP",
+      "alternateName": "Система раннего предупреждения отказов",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows 7+; сервер — Windows или Linux",
+      "softwareVersion": "0.3.0",
+      "datePublished": "2026-08-29",
+      "dateModified": "2026-09-08",
+      "license": "https://polyformproject.org/licenses/noncommercial/1.0.0/",
+      "url": "https://j-space.ru/",
+      "downloadUrl": "https://github.com/SergioTheFirst/srp/releases/latest",
+      "codeRepository": "https://github.com/SergioTheFirst/srp",
+      "programmingLanguage": [
+        "Python",
+        "PowerShell"
+      ],
+      "description": "Self-hosted рабочее место инженера мониторинга офисного парка: тонкий агент на стандартной библиотеке Python собирает SMART, журналы событий, BSOD, сетевую и печатную телеметрию с Windows-ПК; сервер на FastAPI и SQLite опрашивает принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины, прогнозирует ресурс дисков и тонера и строит карту сети по SNMP и LLDP. Прогноз отказа отдаётся во внешний Zabbix обычными элементами данных.",
+      "featureList": [
+        "Компьютеры, принтеры и сеть офиса на одном экране",
+        "Три координаты здоровья машины вместо одного числа",
+        "Байесовский риск по классам отказа с объяснением каждого фактора",
+        "Прогноз ресурса SSD и заполнения диска по SMART",
+        "Прогноз исчерпания тонера по SNMP",
+        "Карта сети по SNMP и LLDP",
+        "Учёт печати по компьютерам и принтерам",
+        "Оценка доверия к каждому источнику данных",
+        "Экспорт прогноза отказа во внешний Zabbix по протоколу траппера"
+      ],
+      "author": {
+        "@id": "https://j-space.ru/#author"
+      },
+      "@id": "https://j-space.ru/#software",
+      "isAccessibleForFree": true,
+      "mainEntityOfPage": {
+        "@id": "https://j-space.ru/#website"
+      }
     },
     {
-      "@type": "Question",
-      "name": "Работает ли это на русской Windows?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Да, и это проверено на живых машинах. Агент читает счётчики через CIM и разбирает только числа и английские имена перечислений — локализованный текст в расчёты не попадает. Установщик тоже не зависит от языка системы: права назначаются по идентификаторам, а не по именам групп." }
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Чем SRP отличается от обычного мониторинга вроде Zabbix?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Классический мониторинг отвечает на вопрос «что сломано сейчас» и срабатывает по порогам: диск заполнен на 90 процентов — авария. SRP отвечает на другой вопрос: «что сломается следующим и когда». Он копит историю по каждой машине, считает тренд и срок до выхода за границу, а вместо одного числа здоровья показывает три независимые координаты: накопленные повреждения, запас устойчивости и полноту данных. Отдельно оценивается доверие к каждому источнику: источник, который устарел или начал врать, не участвует в выводах."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Что нужно, чтобы попробовать SRP?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Ничего — демо открывается в браузере без регистрации: десять вымышленных машин с 45 днями настоящей истории телеметрии. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой, агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется: телеметрия остаётся внутри вашей сети."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Уходит ли собранная телеметрия наружу?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Нет. Сервер разворачивается у вас, и данные никуда не отправляются. Серийные номера дисков агент хеширует ещё до отправки, наружу уходит только хеш. Из сетевых адресов агент передаёт исключительно частные диапазоны локальной сети. Приватные ключи сертификатов не собираются в принципе — только метаданные срока действия."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Работает ли это на русской Windows?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Да, и это проверено на живых машинах. Агент читает счётчики через CIM и разбирает только числа и английские имена перечислений — локализованный текст в расчёты не попадает. Установщик тоже не зависит от языка системы: права назначаются по идентификаторам, а не по именам групп."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "У нас уже стоит Zabbix — зачем ещё один инструмент?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Это разные вопросы. Zabbix отвечает «что сломано сейчас» и срабатывает по порогам, SRP отвечает «что сломается следующим и когда» — по тренду и сроку до выхода за границу. Заменять Zabbix не нужно: SRP отдаёт ему свой вывод четырьмя значениями на компьютер (состояние, риск от 0 до 100, срок до ухудшения в сутках, главный фактор одной фразой) по протоколу траппера, и дальше работают привычные триггеры. Включается одной настройкой — адресом Zabbix в конфигурации сервера; готовые шаблоны для импорта лежат в репозитории. Наружу уходит только вывод: ни серийников, ни адресов, ни имён пользователей, ни сырой телеметрии."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Сколько это стоит?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Ограничений нет: сервер принимает весь парк, все возможности доступны сразу. Проект не продаётся — ни подписок, ни платных функций. Код открыт по лицензии PolyForm Noncommercial 1.0.0: пользоваться можно свободно, кроме перепродажи самого инструмента. Развитие поддерживается добровольными взносами через Boosty и CloudTips."
+          }
+        }
+      ],
+      "@id": "https://j-space.ru/#faq",
+      "about": {
+        "@id": "https://j-space.ru/#software"
+      },
+      "inLanguage": "ru"
     },
     {
-      "@type": "Question",
-      "name": "Сколько это стоит?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Бесплатная версия — до трёх компьютеров, некоммерческое использование по лицензии PolyForm Noncommercial. Полная версия снимает лимит и добавляет автообновление парка и разделение по организациям; о ней договариваемся отдельно — mss777@mail.ru." }
+      "@type": "HowTo",
+      "name": "Как установить SRP и открыть первый дашборд",
+      "description": "Три шага от архива до первого экрана с оценками машин: сервер, агент, дашборд.",
+      "totalTime": "PT15M",
+      "tool": [
+        {
+          "@type": "HowToTool",
+          "name": "Python 3.9 или новее на машине сервера"
+        }
+      ],
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Поднять сервер",
+          "text": "Скачайте srp-server-free.zip, распакуйте и запустите install-server.bat."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Поставить агент",
+          "text": "На каждой машине запустите srp-setup-free.exe от администратора и укажите адрес сервера."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Открыть дашборд",
+          "text": "Через несколько минут откройте http://адрес-сервера:8000 — появятся первые машины и их оценки."
+        }
+      ],
+      "@id": "https://j-space.ru/#howto",
+      "about": {
+        "@id": "https://j-space.ru/#software"
+      },
+      "inLanguage": "ru"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://j-space.ru/#breadcrumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "SRP",
+          "item": "https://j-space.ru/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Демо",
+          "item": "https://j-space.ru/demo/"
+        }
+      ]
     }
-  ]
-}
-</script>
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "HowTo",
-  "name": "Как установить SRP и открыть первый дашборд",
-  "description": "Три шага от архива до первого экрана с оценками машин: сервер, агент, дашборд.",
-  "totalTime": "PT15M",
-  "tool": [{ "@type": "HowToTool", "name": "Python 3.9 или новее на машине сервера" }],
-  "step": [
-    { "@type": "HowToStep", "position": 1, "name": "Поднять сервер", "text": "Скачайте srp-server-free.zip, распакуйте и запустите install-server.bat." },
-    { "@type": "HowToStep", "position": 2, "name": "Поставить агент", "text": "На каждой машине запустите srp-setup-free.exe от администратора и укажите адрес сервера." },
-    { "@type": "HowToStep", "position": 3, "name": "Открыть дашборд", "text": "Через несколько минут откройте http://адрес-сервера:8000 — появятся первые машины и их оценки." }
   ]
 }
 </script>
@@ -280,6 +387,15 @@ code{font-family:var(--mono); font-size:13px; background:var(--surface-strong); 
 .full-list b{color:var(--ink); font-weight:600}
 .contact{font-size:14px; color:var(--body); margin-top:16px}
 
+/* ── Поддержка: карточки способов, QR внутри ── */
+.support-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:20px; margin:32px 0 40px; max-width:60em}
+.support-card{background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:28px; display:flex; flex-direction:column; align-items:flex-start; gap:14px}
+.support-card p{color:var(--body); margin:0}
+.support-card .btn{margin-top:auto}
+.support-qr{width:220px; height:220px; border-radius:var(--r-lg); background:#fff; padding:8px}
+.support-note{font-size:14px}
+.support-alt-title{margin-top:8px}
+
 /* ── Вопросы ── */
 .faq{display:grid; gap:12px; margin-top:32px; max-width:60em}
 .faq details{border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--canvas); padding:0 24px}
@@ -319,6 +435,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
 }
 @media (max-width:1024px){
   h1{font-size:clamp(38px,6vw,56px)}
+  /* Семь пунктов меню в строку на 1024 не влезают и растягивают страницу
+     по горизонтали. Второстепенные скрываем — они есть в подвале и в тексте. */
+  .topnav a[href="#shots"],.topnav a[href="#how"]{display:none}
   .hero .wrap{grid-template-columns:1fr; gap:40px}
   .verdict{position:static; width:auto; transform:none; margin-top:16px; box-shadow:none}
   .grid-3{grid-template-columns:1fr}
@@ -360,8 +479,10 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       <a href="#demo">Демо</a>
       <a href="#shots">Экраны</a>
       <a href="#how">Как устроено</a>
+      <a href="#zabbix">Zabbix</a>
       <a href="#download">Скачать</a>
       <a href="#faq">Вопросы</a>
+      <a href="#support">Поддержать</a>
       <a href="https://github.com/SergioTheFirst/srp">GitHub</a>
     </nav>
     <a class="btn btn-primary" href="https://srp-private.vercel.app/">Live просмотр</a>
@@ -386,7 +507,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </p>
       <div class="cta-row">
         <a class="btn btn-primary btn-lg" href="demo/">Открыть демо</a>
-        <a class="btn btn-outline-dark btn-lg" href="#download">Скачать бесплатно</a>
+        <a class="btn btn-outline-dark btn-lg" href="#download">Поставить у себя</a>
       </div>
       <p class="hero-note">Демо — <b>10 машин</b>, <b>45 дней</b> настоящей истории телеметрии, без регистрации. Это тот же дашборд, что увидит инженер у себя.</p>
     </div>
@@ -603,6 +724,32 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </section>
 
+<section class="band" id="zabbix">
+  <div class="wrap">
+    <p class="eyebrow"><span class="badge">Уже есть Zabbix</span></p>
+    <h2>Если в организации уже стоит Zabbix</h2>
+    <p class="lead-def">
+      <b>SRP не заменяет Zabbix, а отдаёт ему то, чего у Zabbix нет, — прогноз отказа.</b>
+      Zabbix отвечает на вопрос «что сломано сейчас» и срабатывает по порогам; SRP считает,
+      что сломается следующим и когда, и присылает вывод в виде обычных значений элементов
+      данных. Дальше работают привычные триггеры, действия и эскалации — учиться новому
+      интерфейсу не нужно.
+    </p>
+    <ul class="full-list" role="list">
+      <li><b>Четыре значения на компьютер</b> — состояние (норма … предотказ), риск от 0 до 100, срок до ухудшения в сутках и главный фактор одной фразой.</li>
+      <li><b>Одна настройка</b> — адрес Zabbix в конфигурации сервера. Перезапуск не нужен,
+      готовые шаблоны для импорта лежат в репозитории.</li>
+      <li><b>Наружу уходит вывод, а не данные</b> — ни серийников, ни адресов, ни имён
+      пользователей, ни сырой телеметрии: всё, по чему получен вывод, остаётся в SRP.</li>
+      <li><b>Недоступный Zabbix ни на что не влияет</b> — у отправки жёсткие таймауты,
+      ошибка гасится в фоновом цикле и не касается ни сбора телеметрии, ни расчётов.</li>
+    </ul>
+    <div class="cta-row">
+      <a class="btn" href="https://github.com/SergioTheFirst/srp/blob/main/docs/zabbix-export.md">Как это настроить</a>
+    </div>
+  </div>
+</section>
+
 <section class="band band-soft" id="how">
   <div class="wrap">
     <p class="eyebrow"><span class="badge">Как устроено</span></p>
@@ -677,7 +824,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
 
 <section class="band" id="download">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Скачать бесплатно</span></p>
+    <p class="eyebrow"><span class="badge">Установка</span></p>
     <h2>Три шага до первого экрана</h2>
     <div class="dl">
       <ol class="steps" role="list">
@@ -704,8 +851,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         </li>
       </ol>
       <aside class="dl-aside">
-        <span class="badge">бесплатно · до 3 компьютеров</span>
-        <p style="margin-top:12px">Некоммерческое использование по лицензии PolyForm Noncommercial. Версия 0.3.0 от 29 августа 2026.</p>
+        <span class="badge">открытый код · весь парк</span>
+        <p style="margin-top:12px">Ограничения по числу машин нет: сервер принимает весь парк.
+        Лицензия PolyForm Noncommercial 1.0.0, версия 0.3.0 от 29 августа 2026.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать в Releases</a>
           <a class="btn" href="demo/">Сначала посмотреть демо</a>
@@ -715,21 +863,45 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </section>
 
-<section class="band band-soft" id="full">
+<section class="band band-soft" id="support">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Полная версия</span></p>
-    <h2>Когда парк больше трёх машин</h2>
-    <ul class="full-list" role="list">
-      <li><b>Без лимита машин</b> — весь парк на одном сервере.</li>
-      <li><b>Автообновление агентов</b> — новая версия расходится по парку сама, с откатом при неудаче.</li>
-      <li><b>Несколько организаций и подразделений</b> — свои площадки, свои списки, свои владельцы машин.</li>
-      <li><b>Поддержка внедрения</b> — установка, настройка сбора, разбор первых находок.</li>
-    </ul>
-    <div class="cta-row">
-      <a class="btn btn-primary" href="mailto:mss777@mail.ru?subject=SRP%20%E2%80%94%20%D0%BF%D0%BE%D0%BB%D0%BD%D0%B0%D1%8F%20%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F">Написать автору</a>
-      <a class="btn" href="https://github.com/SergioTheFirst/srp">Посмотреть код</a>
+    <p class="eyebrow"><span class="badge">Поддержать</span></p>
+    <h2>Проект живёт на добровольные взносы</h2>
+    <p class="lede">SRP развивается в свободное время и не продаётся: нет подписок,
+    нет платных функций, нет версии «для взрослых» за деньги — весь код и все
+    возможности доступны сразу. Если инструмент экономит вам вечер, поддержите
+    разработку добровольно.</p>
+
+    <div class="support-grid">
+      <div class="support-card">
+        <span class="badge">Boosty</span>
+        <p>Отсканируйте код или откройте ссылку. Любая сумма помогает продолжать.</p>
+        <img class="support-qr" src="img/boosty_qr.svg" alt="QR-код для перевода через Boosty"
+             width="220" height="220" loading="lazy" decoding="async">
+        <a class="btn btn-primary" href="https://boosty.to/personalbot/donate?qr=true"
+           rel="noopener">Поддержать через Boosty</a>
+      </div>
+      <div class="support-card">
+        <span class="badge">Картой или СБП</span>
+                <p class="support-note">Взносы идут в одно — во время: разбор присланных ошибок,
+        поддержка новых моделей принтеров и сетевого оборудования, проверка сборок
+        на живом парке перед выпуском.</p>
+        <a class="btn btn-primary" href="https://pay.cloudtips.ru/p/00d77c6a"
+           rel="noopener">Поддержать через CloudTips</a>
+      </div>
     </div>
-    <p class="contact">Почта автора: <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>. Отвечаю на вопросы о внедрении и на технические — тоже.</p>
+
+    <h3 class="support-alt-title">Помочь можно и не деньгами</h3>
+    <ul class="full-list" role="list">
+      <li><b>Звезда на GitHub</b> — проект становится заметнее, и его находят те, кому он нужен.
+      <a href="https://github.com/SergioTheFirst/srp">Поставить звезду</a>.</li>
+      <li><b>Сообщить об ошибке или предложить доработку</b> — это ценнее денег.
+      <a href="https://github.com/SergioTheFirst/srp/issues">Открыть issue</a>.</li>
+      <li><b>Рассказать коллеге</b>, который отвечает за парк офисных машин и до сих пор
+      узнаёт о сдохшем диске от пользователя.</li>
+    </ul>
+    <p class="contact">Вопросы о внедрении и технические — на почту
+    <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
   </div>
 </section>
 
@@ -751,7 +923,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         <summary>Что нужно, чтобы попробовать?</summary>
         <p>Ничего — <a href="demo/">демо</a> открывается в браузере без регистрации. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора
         на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой,
-        агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется. Бесплатная версия принимает до трёх компьютеров.</p>
+        агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется.</p>
       </details>
       <details>
         <summary>Уходит ли собранная телеметрия наружу?</summary>
@@ -766,10 +938,18 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         только числа и английские имена перечислений — локализованный текст в расчёты не попадает. Установщик тоже не зависит от языка системы: права назначаются по идентификаторам, а не по именам групп.</p>
       </details>
       <details>
+        <summary>У нас уже стоит Zabbix — зачем ещё один инструмент?</summary>
+        <p>Затем, что это разные вопросы. Zabbix отвечает «что сломано сейчас» и срабатывает
+        по порогам, SRP отвечает «что сломается следующим и когда» — по тренду и сроку до выхода
+        за границу. Заменять Zabbix не нужно: SRP отдаёт ему свой вывод четырьмя значениями
+        на компьютер (состояние, риск, срок до ухудшения, главный фактор) по протоколу траппера,
+        и дальше работают ваши привычные триггеры. Включается одной настройкой — адресом Zabbix;
+        готовые шаблоны для импорта лежат в репозитории. Наружу уходит только вывод: ни серийников,
+        ни адресов, ни имён пользователей, ни сырой телеметрии.</p>
+      </details>
+      <details>
         <summary>Сколько это стоит?</summary>
-        <p>Бесплатная версия — до трёх компьютеров, некоммерческое использование по лицензии
-        PolyForm Noncommercial. Полная версия снимает лимит и добавляет автообновление парка и разделение по организациям; о ней договариваемся отдельно —
-        <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
+        <p>Ограничений нет: сервер принимает весь парк, все возможности доступны сразу. Проект не продаётся — ни подписок, ни платных функций. Код открыт по лицензии <a href="https://polyformproject.org/licenses/noncommercial/1.0.0/">PolyForm Noncommercial 1.0.0</a>: пользоваться можно свободно, кроме перепродажи самого инструмента. Если он экономит вам время — <a href="#support">поддержите разработку</a>.</p>
       </details>
     </div>
   </div>
@@ -805,6 +985,14 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         </ul>
       </div>
       <div>
+        <h3>Поддержать</h3>
+        <ul role="list">
+          <li><a href="https://boosty.to/personalbot/donate?qr=true" rel="noopener">Boosty</a></li>
+          <li><a href="https://pay.cloudtips.ru/p/00d77c6a" rel="noopener">CloudTips</a></li>
+          <li><a href="https://github.com/SergioTheFirst/srp/issues">Сообщить об ошибке</a></li>
+        </ul>
+      </div>
+      <div>
         <h3>Автор</h3>
         <ul role="list">
           <li><a href="mailto:mss777@mail.ru">mss777@mail.ru</a></li>
@@ -813,7 +1001,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </div>
     </div>
     <div class="legal">
-      <span>© 2026 SRP · лицензия PolyForm Noncommercial 1.0.0 · версия 0.3.0 от 29 августа 2026</span>
+      <span>© 2026 SRP · лицензия PolyForm Noncommercial 1.0.0 · версия 0.3.0 от 29 августа 2026 · страница обновлена 8 сентября 2026</span>
       <span><a href="https://j-space.ru/">j-space.ru</a></span>
     </div>
   </div>

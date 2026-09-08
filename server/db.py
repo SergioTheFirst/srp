@@ -1133,6 +1133,20 @@ def _disk_key(disk: dict[str, Any], index: int) -> str:
 # real machine settles on a handful of physical disks after its first few
 # envelopes, so this ceiling is generous and inert for legitimate traffic.
 _MAX_DISK_KEYS_PER_DEVICE = 32
+_DISK_KEY_ACTIVE_DAYS = 90  # ключ «занят» только пока диск виден в этом окне
+
+
+def _evict_inactive_disk_keys(conn: sqlite3.Connection, device_id: str, active_since: str) -> None:
+    """Drop disk_keys whose newest reading is older than the activity window --
+    called only when a NEW key shows up, so a device's cardinality stays bounded
+    without a retired disk blocking every disk that replaces it forever
+    (KodSR L10, `[[retention-key-cardinality-unbounded]]`)."""
+    conn.execute(
+        "DELETE FROM disk_readings WHERE device_id=? AND disk_key IN ("
+        " SELECT disk_key FROM disk_readings WHERE device_id=?"
+        " GROUP BY disk_key HAVING MAX(received_at) < ?)",
+        (device_id, device_id, active_since),
+    )
 
 
 def store_disk_readings(
@@ -1157,31 +1171,42 @@ def store_disk_readings(
         rows.append((device_id, key, ts, received_at, disk.get("media_type"), _json_c(disk)))
     if not rows:
         return
+    active_since = (datetime.now(timezone.utc) - timedelta(days=_DISK_KEY_ACTIVE_DAYS)).isoformat()
     with _lock, _connect() as conn:
         existing_keys = {
             r[0]
             for r in conn.execute(
-                "SELECT DISTINCT disk_key FROM disk_readings WHERE device_id=?", (device_id,)
+                "SELECT DISTINCT disk_key FROM disk_readings"
+                " WHERE device_id=? AND received_at >= ?",
+                (device_id, active_since),
             )
         }
         new_keys = keys_in_call - existing_keys
         allowed_new = max(0, _MAX_DISK_KEYS_PER_DEVICE - len(existing_keys))
         blocked_keys = set(sorted(new_keys)[allowed_new:])
         filtered_rows = [r for r in rows if r[1] not in blocked_keys]
-        if not filtered_rows:
-            return
-        conn.executemany(
-            "INSERT INTO disk_readings (device_id, disk_key, ts, received_at, media_type, payload) "
-            "VALUES (?,?,?,?,?,?)",
-            filtered_rows,
-        )
-        for key in {r[1] for r in filtered_rows}:
-            conn.execute(
-                """DELETE FROM disk_readings WHERE device_id=? AND disk_key=? AND id NOT IN (
-                     SELECT id FROM disk_readings
-                     WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?)""",
-                (device_id, key, device_id, key, _retain_disk),
+        if filtered_rows:
+            conn.executemany(
+                "INSERT INTO disk_readings"
+                " (device_id, disk_key, ts, received_at, media_type, payload)"
+                " VALUES (?,?,?,?,?,?)",
+                filtered_rows,
             )
+            for key in {r[1] for r in filtered_rows}:
+                conn.execute(
+                    """DELETE FROM disk_readings WHERE device_id=? AND disk_key=? AND id NOT IN (
+                         SELECT id FROM disk_readings
+                         WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?)""",
+                    (device_id, key, device_id, key, _retain_disk),
+                )
+        if new_keys:
+            # security-review CRITICAL (fix-round-1): eviction must run AFTER the
+            # insert -- a fresh row for an in-call key lifts that key's own
+            # MAX(received_at) above active_since first, so a device silent
+            # >90d reporting its OWN still-present disk never has that disk's
+            # history wiped (it would have, had eviction run on the pre-insert
+            # snapshot where the same key still looked untouched-since-window).
+            _evict_inactive_disk_keys(conn, device_id, active_since)
 
 
 def get_disk_series(device_id: str, disk_key: str, limit: int = 200) -> list[dict[str, Any]]:
@@ -4201,7 +4226,8 @@ def get_printer_print_summary(days: int = 30) -> list[dict[str, Any]]:
     ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
     with _connect() as conn:
         name_rows = conn.execute(
-            "SELECT printer AS name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            "SELECT printer AS name, COALESCE(SUM(pages),0) AS pages,"  # nosec B608
+            " COUNT(job_id) AS jobs,"
             " COUNT(DISTINCT device_id) AS device_count, MAX(ts) AS last_ts"
             f" FROM print_jobs WHERE printer IS NOT NULL {ts_filter}"
             " GROUP BY printer ORDER BY pages DESC",
@@ -4467,7 +4493,7 @@ def _cohort_boot_p90(conn: sqlite3.Connection, model: str) -> Optional[float]:
           AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
         WHERE d.model = ?
           AND json_extract(h.payload, '$.avg_boot_ms') IS NOT NULL
-        ORDER BY d.device_id
+        ORDER BY h.id DESC
         LIMIT ?
         """,  # nosec B608
         (model, _COHORT_BOOT_CAP),
@@ -4633,7 +4659,7 @@ def get_cohort_slope_verdict(model: Optional[str], trajectory: dict[str, Any]) -
             JOIN scores s ON s.device_id = d.device_id
               AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
             WHERE d.model = ?
-            ORDER BY d.device_id
+            ORDER BY s.id DESC
             LIMIT ?
             """,  # literals only; model/cap are bound parameters -- no injection surface
             (model, _COHORT_BOOT_CAP),
@@ -4754,6 +4780,61 @@ def get_fleet_health(days: int = 7) -> list[dict]:
                 "network": r["ax_network"],
                 "trajectory": r["ax_trajectory"],
             },
+        }
+        for r in rows
+    ]
+
+
+def get_fleet_verdicts() -> list[dict]:
+    """Вердикт по каждому устройству для ВНЕШНЕГО потребителя (экспорт в Zabbix).
+
+    Отдельная функция, а не расширение ``get_fleet_health``, ровно потому, что она
+    выгружает данные НАРУЖУ: список полей здесь — первый рубеж приватности, и он
+    позитивный. Наружу уходит ВЫВОД, а не данные: состояние, риск, окно до
+    ухудшения и словарные подписи главного фактора — больше ничего. Ни владельца
+    ПК, ни комментариев, ни адресов, ни серийников, ни расшифрованных названий
+    организаций здесь нет и появиться не может: новое поле в таблице ``devices``
+    в эту выборку само не попадёт.
+
+    ``model``/``chassis`` нужны только чтобы построить ИМЯ узла при
+    ``host_field: display_name``; наружу они не уезжают. ``org_code`` — только
+    для отбора парка, в пакет он тоже не попадает.
+
+    Оконная форма — как у ``get_fleet_health``: ровно самая свежая строка scores
+    на устройство, одним проходом, без каскада запросов.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: только литералы; пользовательского ввода в запросе нет.
+            """
+            SELECT device_id, hostname, model, chassis, org_code, ts,
+                   json_extract(risk, '$.health.state') AS state,
+                   CAST(json_extract(risk, '$.health.damage.value') AS REAL) AS risk_value,
+                   CAST(json_extract(risk, '$.health.horizon_days') AS INTEGER) AS days_left,
+                   json_extract(risk, '$.health.dominant_label') AS dominant_label,
+                   json_extract(risk, '$.health.action') AS action
+            FROM (
+                SELECT s.device_id AS device_id, d.hostname AS hostname,
+                       d.model AS model, d.chassis AS chassis, d.org_code AS org_code,
+                       s.ts AS ts, s.risk AS risk
+                FROM scores s JOIN devices d ON d.device_id = s.device_id
+                WHERE s.id = (SELECT MAX(id) FROM scores WHERE device_id = s.device_id)
+            )
+            """,  # nosec B608
+        ).fetchall()
+    return [
+        {
+            "device_id": r["device_id"],
+            "hostname": r["hostname"],
+            "model": r["model"],
+            "chassis": r["chassis"],
+            "org_code": r["org_code"],
+            "score_ts": r["ts"],
+            "state": r["state"],
+            "risk": r["risk_value"],
+            "days_left": r["days_left"],
+            "dominant_label": r["dominant_label"],
+            "action": r["action"],
         }
         for r in rows
     ]
@@ -4933,7 +5014,7 @@ def upsert_source_trust(
     semantic_status: str,
     reason: str,
     ts: str,
-    evidence_seen_at: str,
+    evidence_seen_at: Optional[str],
 ) -> None:
     """Insert or replace the per-source trust row for a (device, source) pair.
 
@@ -4943,6 +5024,10 @@ def upsert_source_trust(
     which has no evidence_seen_at parameter at all: it cannot revive this clock,
     so a source that has actually gone silent cannot be kept perpetually fresh
     by its own staleness re-evaluation (the exact P1-4 trap, closed structurally).
+
+    None (KodSR H3: an "ok" collector with nothing to actually validate) never
+    overwrites a real prior stamp -- COALESCE keeps the existing value so an
+    empty-but-"ok" reading cannot look like fresh evidence either.
     """
     with _lock, _connect() as conn:
         conn.execute(
@@ -4958,7 +5043,7 @@ def upsert_source_trust(
               semantic_status  = excluded.semantic_status,
               reason           = excluded.reason,
               ts               = excluded.ts,
-              evidence_seen_at = excluded.evidence_seen_at
+              evidence_seen_at = COALESCE(excluded.evidence_seen_at, evidence_seen_at)
             """,
             (
                 device_id,
@@ -5422,16 +5507,61 @@ def get_print_summary(f: PrintFilter) -> dict[str, Any]:
     }
 
 
+# Потолок строк /by-device: агрегат по device_id, парк -- десятки-сотни машин,
+# но защита от OOM на потоке-CSV та же логика, что _EXPORT_ROW_MAX.
+_BY_DEVICE_ROW_MAX = 5000
+
+
+def get_print_by_device(f: PrintFilter) -> list[dict[str, Any]]:
+    """Страниц по компьютерам за период (вкладка печати: график + CSV).
+
+    ``jobs`` = COUNT(p.job_id): counter-строки (job_id NULL) — дельты страниц,
+    не задания. IP компьютера — тот же, что колонка IP на флоте (get_devices().local_ip).
+    ``hostname`` идёт через ``display_name`` -- пустой hostname никогда не
+    возвращается как пустая строка/device_id (тот же контракт, что get_devices).
+    """
+    where, params = _print_where(f)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT p.device_id AS device_id, d.hostname AS hostname,"  # nosec B608
+            " COALESCE(SUM(p.pages),0) AS pages, COUNT(p.job_id) AS jobs"
+            f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
+            " GROUP BY p.device_id ORDER BY pages DESC, hostname LIMIT ?",
+            [*params, _BY_DEVICE_ROW_MAX],
+        ).fetchall()
+    if not rows:
+        return []
+    # ponytail: один проход get_devices() вместо ещё одного join latest-historical;
+    # парк — десятки-сотни машин, флот делает то же каждые 12 с.
+    ips = {d["device_id"]: d.get("local_ip") for d in get_devices()}
+    return [
+        {
+            "device_id": r["device_id"],
+            "hostname": display_name(r["hostname"], device_id=r["device_id"], disambiguate=True),
+            "ip": ips.get(r["device_id"]),
+            "pages": int(r["pages"]),
+            "jobs": int(r["jobs"]),
+        }
+        for r in rows
+    ]
+
+
 # Bucket granularity for the print time-series: auto-scales with the span so the
 # hero chart stays readable from a single day (hourly) up to a year (monthly).
-# These strftime formats are fixed literals from a whitelist -- never user input --
+# These SQL expressions are fixed literals from a whitelist -- never user input --
 # so interpolating the chosen one into the grouped query is safe (all filter
-# VALUES stay bound parameters via _print_where).
-_GRAN_FMT = {
-    "hour": "%Y-%m-%d %H:00",
-    "day": "%Y-%m-%d",
-    "week": "%Y-%W",
-    "month": "%Y-%m",
+# VALUES stay bound parameters via _print_where). All four carry 'localtime':
+# p.ts is stored UTC, but the filter window/"today" cutoffs are local-day based
+# (_date_cutoff_utc/_local_day_start_utc) -- without it, jobs printed early
+# morning local time land in the previous day's/week's bucket (KodSR TZ find).
+_GRAN_EXPR = {
+    "hour": "strftime('%Y-%m-%d %H:00', p.ts, 'localtime')",
+    "day": "strftime('%Y-%m-%d', p.ts, 'localtime')",
+    # Monday of the week: back up to <=6 days, then forward to the nearest
+    # Monday (staying put if already on one) -- one bucket across a year
+    # boundary, unlike %W (which resets to 00 on Jan 1 mid-week).
+    "week": "date(p.ts, 'localtime', '-6 days', 'weekday 1')",
+    "month": "strftime('%Y-%m', p.ts, 'localtime')",
 }
 _SERIES_MAX = 50
 _OTHERS_LABEL = "прочее"
@@ -5533,7 +5663,7 @@ def get_print_series(
     """
     cap = min(max(int(max_series), 1), _SERIES_MAX)
     where, params = _print_where(f)
-    gran = granularity if granularity in _GRAN_FMT else ""
+    gran = granularity if granularity in _GRAN_EXPR else ""
     if not gran:
         df, dt = _normalize_dates(f.date_from, f.date_to)
         if not (df and dt):
@@ -5546,13 +5676,12 @@ def get_print_series(
             df = df or ((span_row["lo"] or "")[:10] or None)
             dt = dt or ((span_row["hi"] or "")[:10] or None)
         gran = _auto_granularity(df, dt)
-    fmt = _GRAN_FMT[gran]
     with _connect() as conn:
         rows = conn.execute(
             f"SELECT p.device_id AS device_id,"  # nosec B608
             f" d.hostname AS hostname,"
             f" COALESCE(p.printer, '') AS printer, MAX(m.ip) AS ip,"
-            f" strftime('{fmt}', p.ts) AS bucket,"
+            f" {_GRAN_EXPR[gran]} AS bucket,"
             f" COALESCE(SUM(p.pages),0) AS pages"
             f" FROM {_PRINT_BASE_FROM} WHERE 1=1 {where}"
             " GROUP BY p.device_id, p.printer, bucket"
@@ -5654,19 +5783,19 @@ def get_device_print(device_id: str, days: int = 30) -> dict[str, Any]:
     ts_params: tuple[Any, ...] = (_cutoff_iso(days=days),) if days > 0 else ()
     with _connect() as conn:
         total_row = conn.execute(
-            f"SELECT COUNT(*) AS jobs, COALESCE(SUM(pages),0) AS pages"  # nosec B608
+            f"SELECT COUNT(job_id) AS jobs, COALESCE(SUM(pages),0) AS pages"  # nosec B608
             f" FROM print_jobs WHERE device_id=? {ts_filter}",
             (device_id, *ts_params),
         ).fetchone()
         printer_rows = conn.execute(
-            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE device_id=? {ts_filter}"
             " GROUP BY printer ORDER BY pages DESC",
             (device_id, *ts_params),
         ).fetchall()
         daily_rows = conn.execute(
-            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
-            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f"SELECT strftime('%Y-%m-%d', ts, 'localtime') AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"
             f" FROM print_jobs WHERE device_id=? {ts_filter}"
             " GROUP BY date ORDER BY date",
             (device_id, *ts_params),
@@ -5729,13 +5858,13 @@ def get_fleet_print(days: int = 30, *, today: bool = False) -> dict[str, Any]:
         ts_f = pts_f = ""
     with _connect() as conn:
         total_row = conn.execute(
-            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE 1=1 {ts_f}",
             params,
         ).fetchone()
         device_rows = conn.execute(
             f"SELECT p.device_id, d.hostname AS hostname,"  # nosec B608
-            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs"
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(p.job_id) AS jobs"
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
             " GROUP BY p.device_id ORDER BY pages DESC",
@@ -5810,7 +5939,7 @@ def get_print_analytics(
         use_prev = days > 0
     with _connect() as conn:
         total_row = conn.execute(
-            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f"SELECT COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE 1=1 {ts_f}",
             rp,
         ).fetchone()
@@ -5818,21 +5947,21 @@ def get_print_analytics(
         _denom = total_pages if total_pages > 0 else 1
 
         daily_rows = conn.execute(
-            f"SELECT strftime('%Y-%m-%d', ts) AS date,"  # nosec B608
-            f" COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"
+            f"SELECT strftime('%Y-%m-%d', ts, 'localtime') AS date,"  # nosec B608
+            f" COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"
             f" FROM print_jobs WHERE 1=1 {ts_f}"
             " GROUP BY date ORDER BY date",
             rp,
         ).fetchall()
         printer_rows = conn.execute(
-            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs,"  # nosec B608
+            f"SELECT printer, COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs,"  # nosec B608
             f" COUNT(DISTINCT device_id) AS devices_count"
             f" FROM print_jobs WHERE 1=1 {ts_f}"
             " GROUP BY printer ORDER BY pages DESC",
             rp,
         ).fetchall()
         user_rows = conn.execute(
-            f"SELECT user_name, COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+            f"SELECT user_name, COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"  # nosec B608
             f" FROM print_jobs WHERE user_name IS NOT NULL AND user_name != '' {ts_f}"
             " GROUP BY user_name ORDER BY pages DESC LIMIT 20",
             rp,
@@ -5842,7 +5971,7 @@ def get_print_analytics(
         dept_rows = conn.execute(
             f"SELECT d.org_code AS org_code, d.dept_code AS dept_code,"  # nosec B608
             f" d.department AS department,"
-            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(*) AS jobs,"
+            f" COALESCE(SUM(p.pages),0) AS pages, COUNT(p.job_id) AS jobs,"
             f" COUNT(DISTINCT p.device_id) AS devices_count"
             f" FROM print_jobs p LEFT JOIN devices d ON d.device_id = p.device_id"
             f" WHERE 1=1 {pts_f}"
@@ -5851,7 +5980,7 @@ def get_print_analytics(
         ).fetchall()
         if use_prev:
             prev_row = conn.execute(
-                "SELECT COALESCE(SUM(pages),0) AS pages, COUNT(*) AS jobs"  # nosec B608
+                "SELECT COALESCE(SUM(pages),0) AS pages, COUNT(job_id) AS jobs"  # nosec B608
                 " FROM print_jobs"
                 " WHERE ts >= ? AND ts < ?",
                 (_cutoff_iso(days=days * 2), _cutoff_iso(days=days)),

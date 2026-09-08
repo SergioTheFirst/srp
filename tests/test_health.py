@@ -16,8 +16,12 @@ import pytest
 from server.analytics.health import (
     _ACTIONS,
     _BLIND_ACTION,
+    _STALE_UNKNOWN_MSG,
     Coordinate,
     HealthVerdict,
+    _dominant,
+    _horizon,
+    _is_systemic,
     _observability,
     _state,
     apply_health_staleness,
@@ -444,6 +448,26 @@ def test_systemic_needs_three_distinct_material_mechanisms() -> None:
     assert v.dominant == "storage"
 
 
+def test_systemic_counts_axis_mechanisms_not_axis_names() -> None:
+    # KodSR bug hunt 2026-09-02, HIGH: storage_risk + trajectory_risk bad is
+    # ONE dying disk (both carry the "storage" mechanism), not two -- with
+    # network_risk that is only 2 distinct mechanisms, never systemic.
+    one_disk_plus_network = {
+        "storage_risk": _axis(60, coords=_st_coords(damage=60)),
+        "trajectory_risk": _axis(60),
+        "network_risk": _axis(60),
+    }
+    assert _is_systemic(one_disk_plus_network, {}) is False
+    assert _dominant(one_disk_plus_network, {})[0] == "storage"
+    # three genuinely distinct mechanisms -> systemic
+    three_mechanisms = {
+        "storage_risk": _axis(60, coords=_st_coords(damage=60)),
+        "os_degradation_risk": _axis(60),
+        "network_risk": _axis(60),
+    }
+    assert _is_systemic(three_mechanisms, {}) is True
+
+
 def test_systemic_never_overrides_blind_zone() -> None:
     # >=3 watch/bad axes would normally floor state at h2, but K5 (blind device
     # can never read as healthier than "unknown") outranks the systemic floor.
@@ -471,6 +495,16 @@ def test_horizon_nvme_spare_eta_under_30() -> None:
     trends = {"nvme_spare": _trend(direction="worsening", n_points=8, eta_days=20)}
     v = _call(axes, trends=trends)
     assert v.horizon_days == 30
+
+
+def test_horizon_eta_within_180_days() -> None:
+    # KodSR L9: an ETA of 91-180 days used to fall through both buckets and
+    # come back as no horizon at all -- a resource dying this half-year with
+    # no state-level horizon (h1) must still surface a 180-day window.
+    trends = {"storage_wear": _trend(direction="worsening", n_points=8, eta_days=120)}
+    days, reason = _horizon("h1", trends)
+    assert days == 180
+    assert reason and _has_cyr(reason)
 
 
 def test_actions_cover_every_dominant_key() -> None:
@@ -651,6 +685,25 @@ def test_staleness_over_10_days_signals_unknown() -> None:
 
 def test_staleness_unparseable_is_none() -> None:
     assert health_staleness("not-a-date", datetime(2026, 7, 10)) is None
+
+
+def test_staleness_half_day_past_3_days_is_stale() -> None:
+    # KodSR M8: truncating age to whole days used to hide the crossing --
+    # 3d12h is past the 3-day boundary and must trigger the message.
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    msg = health_staleness((now - timedelta(days=3, hours=12)).isoformat(), now)
+    assert msg == "данные устарели (3 дн.)"
+
+
+def test_staleness_half_day_past_10_days_is_unknown() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    msg = health_staleness((now - timedelta(days=10, hours=12)).isoformat(), now)
+    assert msg == _STALE_UNKNOWN_MSG
+
+
+def test_staleness_exact_3_days_is_still_fresh() -> None:
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    assert health_staleness((now - timedelta(days=3)).isoformat(), now) is None
 
 
 # --------------------------------------------------------------------------- #

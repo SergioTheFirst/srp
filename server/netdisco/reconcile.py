@@ -388,7 +388,12 @@ def run_reachability_cycle(
                 unreachable += 1
         prior = {d.get("device_nid"): d.get("status") for d in devices}
         for nid in live_nids:  # a device that answers again recovers to up
-            if prior.get(nid) in (correlation.DOWN, correlation.UNREACHABLE, changes.MISSING):
+            if prior.get(nid) in (
+                correlation.DOWN,
+                correlation.UNREACHABLE,
+                changes.MISSING,
+                changes.ELIGIBLE_PURGE,
+            ):
                 set_status(nid, "up")
                 store_reading(nid, {"source": "reachability"}, status="up")
         METRICS.observe_cycle("reachability", down=down, unreachable=unreachable)

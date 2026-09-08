@@ -109,3 +109,24 @@ def test_device_age_from_bios_date_is_positive():
 def test_device_age_ignores_future_dates():
     """A clock-skewed future date yields a negative age and must be skipped."""
     assert device_age_years({"bios_release_date": "2099-01-01"}) is None
+
+
+# --------------------------------------------------------------------------- #
+# KodSR M2: day-1 wear/risk_exposure must ignore unvalidated disks (mirrors
+# tests/test_bayesian.py::test_storage_risk_ignores_unvalidated_disks_beyond_first)
+# --------------------------------------------------------------------------- #
+def test_day1_scores_ignore_unvalidated_disks_beyond_first():
+    hist = {
+        "storage": [
+            {"disk": "SSD0", "wear_pct": 5, "reallocated_sectors": 0, "power_on_hours": 100},
+            {
+                "disk": "HDD1",
+                "wear_pct": 100,
+                "reallocated_sectors": 999999,
+                "read_errors_total": 999999,
+            },  # unvalidated -- must be ignored by both wear and risk_exposure
+        ]
+    }
+    s = compute_day1_scores(None, hist, None)
+    assert s["wear"] >= 90.0  # only SSD0's wear_pct=5 should count
+    assert s["risk_exposure"] == 0.0  # HDD1's realloc/read-errors must not leak in

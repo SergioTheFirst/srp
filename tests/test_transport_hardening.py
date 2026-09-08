@@ -312,6 +312,29 @@ def test_rate_limited_device_returns_429(tmp_path, monkeypatch):
 
 
 @pytest.mark.integration
+def test_rate_limit_key_namespaced_away_from_endpoint_keys(tmp_path, monkeypatch):
+    """KodSR L4: a device_id crafted to collide with an internal 'endpoint:*'
+    rate-limit key must not exhaust (or be exhausted by) that endpoint's own
+    limit -- ingest and internal endpoint keys share one counting dict
+    (server/ingest_guards.py) and must live in disjoint namespaces."""
+    from server import ingest_guards
+    from server.ingest_guards import reset_guards
+
+    monkeypatch.setattr(ingest_guards, "_RATE_MAX_PER_WINDOW", 3)
+    reset_guards()
+    with TestClient(_app(tmp_path)) as c:
+        for i in range(4):  # one past the limit
+            env = envelope("endpoint:print_export", "heartbeat", healthy("heartbeat"))
+            env["idempotency_key"] = f"bbbb{i:028x}"
+            c.post("/api/v1/ingest", json=env)
+
+        # The export endpoint's OWN limit must be untouched by the device
+        # that merely shares its literal key text.
+        r = c.get("/api/v1/fleet/print/export.csv")
+        assert r.status_code == 200, r.text
+
+
+@pytest.mark.integration
 def test_oversized_body_returns_413(tmp_path):
     """A request body exceeding the server limit must be rejected with 413."""
     from server.ingest_guards import reset_guards
@@ -418,13 +441,18 @@ def test_chunked_oversized_body_aborts_before_full_buffering():
 
 def _throttle_transport(tmp_path, monkeypatch, code: int):
     """Транспорт, у которого urlopen всегда бросает HTTPError с данным кодом."""
+    import io
     import urllib.error
 
     import client.transport as tm
 
     def _boom(*_a, **_kw):
         raise urllib.error.HTTPError(
-            url="http://127.0.0.1:9/api/v1/ingest", code=code, msg="x", hdrs=None, fp=None
+            url="http://127.0.0.1:9/api/v1/ingest",
+            code=code,
+            msg="x",
+            hdrs=None,
+            fp=io.BytesIO(b""),
         )
 
     monkeypatch.setattr(tm.urllib.request, "urlopen", _boom)
@@ -556,6 +584,7 @@ def test_rate_limited_response_carries_retry_after(tmp_path, monkeypatch):
 def test_throttled_send_does_not_retry_in_process(tmp_path, monkeypatch):
     """Окно лимитера -- 60 с, а внутрипроцессный ретрай идёт через 1-3 с: он
     обречён и лишь удваивает поток отказов. На 429 конверт буферизуется сразу."""
+    import io
     import urllib.error
 
     import client.transport as tm
@@ -569,7 +598,7 @@ def test_throttled_send_does_not_retry_in_process(tmp_path, monkeypatch):
             code=429,
             msg="Too Many Requests",
             hdrs={"Retry-After": "60"},
-            fp=None,
+            fp=io.BytesIO(b""),
         )
 
     monkeypatch.setattr(tm.urllib.request, "urlopen", _throttled)
@@ -584,6 +613,7 @@ def test_throttled_send_does_not_retry_in_process(tmp_path, monkeypatch):
 def test_throttled_transport_skips_network_until_window_passes(tmp_path, monkeypatch):
     """Остальные конверты цикла не должны ходить в сеть, пока окно не истекло:
     в логе сервера это давало серию обречённых 429 на каждый тип сообщения."""
+    import io
     import urllib.error
 
     import client.transport as tm
@@ -597,7 +627,7 @@ def test_throttled_transport_skips_network_until_window_passes(tmp_path, monkeyp
             code=429,
             msg="Too Many Requests",
             hdrs={"Retry-After": "60"},
-            fp=None,
+            fp=io.BytesIO(b""),
         )
 
     monkeypatch.setattr(tm.urllib.request, "urlopen", _throttled)

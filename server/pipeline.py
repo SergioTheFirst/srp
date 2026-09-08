@@ -31,10 +31,12 @@ from server.scoring import (
     score_to_dict,
 )
 from server.trust import (
+    DOMAIN_GATING_SOURCES,
     DOMAIN_SOURCES,
     GATE_PASS,
     MATERIAL_SOURCES,
     CollectorStatus,
+    DomainTrustState,
     SemanticStatus,
     SourceState,
     SourceTrust,
@@ -208,6 +210,29 @@ def _extract_reading(source: str, payload: dict) -> dict:
     return {}
 
 
+def _reading_is_empty(reading: dict) -> bool:
+    """True when *reading* carries no real signal to validate.
+
+    Two shapes count as empty: the true {} _extract_reading returns when it
+    has nothing to slice out, and the {"value": None} wrapper the scalar
+    sources (free_space/throttle/reliability/boot_time) return when their
+    field is simply absent from the payload -- that dict is truthy, so a
+    plain `not reading` check misses it (security review MEDIUM-3).
+    """
+    if not reading:
+        return True
+    return set(reading) == {"value"} and reading["value"] is None
+
+
+# Coercing an "ok" collector status to EMPTY on an empty reading (KodSR H3)
+# only makes sense for sources that are BOTH domain-gating (a real reading is
+# expected every cycle) AND material (their reading is actually validated) --
+# disk_latency is domain-gating but non-material and always extracts {} by
+# design (no case in _extract_reading), so it must never be coerced (security
+# review HIGH-2).
+_EMPTY_COERCIBLE_SOURCES = DOMAIN_GATING_SOURCES & MATERIAL_SOURCES
+
+
 def _build_source_trust_map(device_id: str) -> dict[str, SourceTrust]:
     """Reconstruct SourceTrust objects from all accumulated DB rows."""
     rows = db.get_source_trusts(device_id)
@@ -227,6 +252,43 @@ def _build_source_trust_map(device_id: str) -> dict[str, SourceTrust]:
 # --------------------------------------------------------------------------- #
 # Trust evaluation
 # --------------------------------------------------------------------------- #
+
+
+def build_trust_blob(
+    source_map: dict[str, SourceTrust], have_last_good: set[str]
+) -> dict[str, Any]:
+    """Domains + sources shape stored via db.store_trust.
+
+    Single source of truth for both the ingest path (evaluate_trust below)
+    and the staleness cycle's rebuild (server/trust/staleness.py) -- a
+    silently-rebuilt blob must never drift from the shape a real ingest
+    produces (security review MEDIUM-4: the rebuilt blob used to omit
+    "regressed").
+    """
+    domains: dict[str, Any] = {}
+    for domain in DOMAIN_SOURCES:
+        dt = resolve_domain_trust(domain, source_map)
+        domains[domain] = {
+            "state": dt.state.value,
+            "weight": dt.weight,
+            "contributing": dt.contributing,
+            "dropped": dt.dropped,
+            "reason": dt.reason,
+        }
+    sources_out: dict[str, Any] = {
+        src: {
+            "collector_status": st.collector_status.value,
+            "semantic_status": st.semantic_status.value,
+            "state": st.state.value,
+            "weight": st.weight,
+            "reason": st.reason,
+            # 3e: a source that delivered before (has a last-good) but now fails is
+            # "newly-blocked" (regressed) -- distinct from a source never seen.
+            "regressed": st.collector_status in _COLLECTOR_FAIL and src in have_last_good,
+        }
+        for src, st in source_map.items()
+    }
+    return {"domains": domains, "sources": sources_out}
 
 
 def evaluate_trust(
@@ -253,6 +315,18 @@ def evaluate_trust(
             continue
         collector_status = CollectorStatus(health["status"])
         reading = _extract_reading(source, safe_payload)
+        # KodSR H3: a material, domain-gating collector reporting "ok" with
+        # nothing to actually validate must not read as a real observation --
+        # the same EMPTY the agent already uses for a genuine collector miss.
+        # Scoped to _EMPTY_COERCIBLE_SOURCES only (security review HIGH-2):
+        # disk_latency is domain-gating but non-material and always empty by
+        # design; certificates/print_jobs/events are legitimately empty too.
+        if (
+            collector_status == CollectorStatus.OK
+            and _reading_is_empty(reading)
+            and source in _EMPTY_COERCIBLE_SOURCES
+        ):
+            collector_status = CollectorStatus.EMPTY
         last_good = db.get_last_good(device_id, source)
 
         semantic_status, reason = validate_source(source, reading, last_good)
@@ -264,6 +338,13 @@ def evaluate_trust(
             stale_after_sec=None,
         )
         weight = compute_weight(state)
+        # evidence_seen_at tracks the collector's own (post-coercion) verdict,
+        # never the extracted reading -- identity/events/certificates/
+        # print_jobs/disk_latency always extract {} BY DESIGN (no case in
+        # _extract_reading), so gating evidence on `reading` truthiness froze
+        # their clock forever and made every device read untrusted within one
+        # staleness window (security review CRITICAL-1).
+        has_evidence = collector_status == CollectorStatus.OK
 
         db.upsert_source_trust(
             device_id,
@@ -274,44 +355,18 @@ def evaluate_trust(
             semantic_status.value,
             reason or "",
             ts,
-            received_at,
+            received_at if has_evidence else None,
         )
 
-        if collector_status == CollectorStatus.OK and reading:
+        if has_evidence and reading:
             db.set_last_good(device_id, source, reading, ts)
 
-    # Aggregate accumulated per-source rows into domain trust
+    # Aggregate accumulated per-source rows into domain trust. Один запрос на
+    # устройство вместо одного на источник: нужен только факт наличия
+    # last-good, а не сама запись (её уже прочитал цикл выше).
     source_map = _build_source_trust_map(device_id)
-
-    domains: dict[str, Any] = {}
-    for domain in DOMAIN_SOURCES:
-        dt = resolve_domain_trust(domain, source_map)
-        domains[domain] = {
-            "state": dt.state.value,
-            "weight": dt.weight,
-            "contributing": dt.contributing,
-            "dropped": dt.dropped,
-            "reason": dt.reason,
-        }
-
-    # Один запрос на устройство вместо одного на источник: нужен только факт
-    # наличия last-good, а не сама запись (её уже прочитал цикл выше).
     have_last_good = db.get_last_good_sources(device_id)
-    sources_out: dict[str, Any] = {
-        src: {
-            "collector_status": st.collector_status.value,
-            "semantic_status": st.semantic_status.value,
-            "state": st.state.value,
-            "weight": st.weight,
-            "reason": st.reason,
-            # 3e: a source that delivered before (has a last-good) but now fails is
-            # "newly-blocked" (regressed) -- distinct from a source never seen.
-            "regressed": st.collector_status in _COLLECTOR_FAIL and src in have_last_good,
-        }
-        for src, st in source_map.items()
-    }
-
-    result: dict[str, Any] = {"domains": domains, "sources": sources_out}
+    result = build_trust_blob(source_map, have_last_good)
     db.store_trust(device_id, ts, result)
     return result
 
@@ -583,6 +638,30 @@ def _device_trust(trust: dict) -> str:
     return "untrusted" if state not in GATE_PASS else "ok"
 
 
+# KodSR H2: a gate-failed domain must never leak its raw contribution into a
+# day-1 axis's number (bayesian already does this via _domain_gated,
+# bayesian.py:181). Maps each gated day-1 input to the domain that gates it.
+_DAY1_GATED_INPUTS = (("disk_fill", "hb", "free_space_pct"), ("storage", "hist", "storage"))
+
+
+def _blank_untrusted_inputs(
+    domains: dict[str, Any], hb: Optional[dict], hist: Optional[dict]
+) -> tuple[dict, dict]:
+    """Gate-failed домен не может дать число: обнуляем сырые входы день-1 осей
+    (bayesian делает то же через _domain_gated). UNKNOWN over false confidence.
+
+    NOT_APPLICABLE (security review LOW-6) is "датчика нет на этом железе",
+    not a failure -- excluded from blanking alongside TRUSTED, same as
+    score100.py's own required_na handling."""
+    hb2, hist2 = dict(hb or {}), dict(hist or {})
+    ok_states = (DomainTrustState.TRUSTED.value, DomainTrustState.NOT_APPLICABLE.value)
+    for domain, where, field in _DAY1_GATED_INPUTS:
+        state = (domains.get(domain) or {}).get("state")
+        if state is not None and state not in ok_states:
+            (hb2 if where == "hb" else hist2)[field] = None
+    return hb2, hist2
+
+
 def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     inv = db.get_inventory(device_id)
     hist = db.get_historical(device_id)
@@ -591,13 +670,14 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     if inv is None and hist is None and hb is None:
         return None
 
-    day1 = compute_day1_scores(inv, hist, hb)
-
     # 3c: gate the explainable risk by the per-domain trust computed on ingest.
     trust = db.get_trust(device_id)
     device_trust = "ok"
     if trust:
         device_trust = _device_trust(trust)
+
+    day1_hb, day1_hist = _blank_untrusted_inputs((trust or {}).get("domains", {}), hb, hist)
+    day1 = compute_day1_scores(inv, day1_hist, day1_hb)
 
     # P0-5 (stoperrors.md): compute_risk needs the REAL gate, not a postfactum
     # label -- a gate-failed domain must never produce a number in the first

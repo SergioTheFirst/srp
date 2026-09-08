@@ -63,14 +63,19 @@ def ingest(env: Envelope, request: Request) -> dict:
     if expected and not hmac.compare_digest(provided, expected):
         count_reject("auth")
         raise HTTPException(status_code=401, detail="invalid or missing ingest token")
-    if not check_rate_limit(env.device_id):
+    # KodSR L4: prefixed so a device_id crafted as "endpoint:xxx" can never
+    # collide with an internal endpoint's own rate-limit key -- they share one
+    # counting dict (server/ingest_guards.py) but must live in disjoint
+    # namespaces.
+    rate_key = f"device:{env.device_id}"
+    if not check_rate_limit(rate_key):
         count_reject("rate_limit")
         # Retry-After: клиент должен знать срок, иначе ретраит вслепую внутри
         # закрытого окна и множит обречённые запросы (см. client/transport.py).
         raise HTTPException(
             status_code=429,
             detail="rate limit exceeded",
-            headers={"Retry-After": str(retry_after_sec(env.device_id))},
+            headers={"Retry-After": str(retry_after_sec(rate_key))},
         )
     if has_seen(env.idempotency_key):
         count_reject("duplicate")
@@ -686,6 +691,45 @@ def fleet_print_export(
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers=headers)
 
 
+_BY_DEVICE_FIELDS = ["hostname", "ip", "device_id", "pages", "jobs"]
+
+
+@router.get("/fleet/print/by-device")
+def fleet_print_by_device(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> dict:
+    """Страниц по компьютерам за период (панель /print + CSV этой же таблицы)."""
+    return {"rows": db.get_print_by_device(_print_filter(date_from, date_to, device, printer, ip))}
+
+
+@router.get("/fleet/print/by-device/export.csv")
+def fleet_print_by_device_export(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    device: Optional[str] = None,
+    printer: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> StreamingResponse:
+    if not check_rate_limit("endpoint:print_export"):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    f = _print_filter(date_from, date_to, device, printer, ip)
+    rows = db.get_print_by_device(f)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_BY_DEVICE_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: _csv_safe(v) for k, v in row.items()})
+    name = f"print_by_device_{_filename_date(f.date_from)}_{_filename_date(f.date_to)}.csv"
+    headers = {"Content-Disposition": f"attachment; filename={name}"}
+    if len(rows) >= db._BY_DEVICE_ROW_MAX:
+        headers["X-SRP-Truncated"] = "1"
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers=headers)
+
+
 @router.get("/fleet/print")
 def fleet_print(days: int = 30, today: bool = False) -> dict:
     if today:
@@ -797,6 +841,52 @@ def poll_printers(request: Request) -> dict:
     # poll should be visible on the next map read, not after the graph TTL expires.
     _invalidate_network_map_cache(request)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Экспорт вердикта в Zabbix
+# ---------------------------------------------------------------------------
+def _zabbix_config(request: Request):
+    """Настройки экспорта: с диска, чтобы правка адреса не требовала перезапуска."""
+    from server.main import zabbix_config_for
+
+    cfg = getattr(request.app.state, "server_config", None)
+    if cfg is None:
+        from server.config import load_config
+
+        return load_config().zabbix_config()
+    from_disk = bool(getattr(request.app.state, "zabbix_from_disk", False))
+    return zabbix_config_for(cfg, from_disk=from_disk)
+
+
+@router.get("/zabbix/status")
+def zabbix_status() -> dict:
+    """Состояние экспорта в Zabbix: адрес, счётчики, последняя ошибка, отсрочки.
+
+    Счётчики живут в памяти процесса и обнуляются при перезапуске сервера
+    (``started_at`` говорит, с какого момента они считаются): историю
+    ``srp.export.*`` держит сам Zabbix, там она полнее.
+    """
+    from server.zabbix.export import status as zabbix_status_store
+
+    return zabbix_status_store.snapshot()
+
+
+@router.post("/zabbix/send")
+def zabbix_send_now(request: Request) -> dict:
+    """Отправить вердикт в Zabbix прямо сейчас (кнопка дашборда).
+
+    Ограничена по частоте (эндпоинт неаутентифицирован) и закрыта собственным
+    неблокирующим локом экспорта: параллельный вызов получает busy, а не второй
+    фан-аут. Сбрасывает отсрочку узлов -- исправил имя узла, нажал, увидел
+    результат сразу.
+    """
+    _demo_guard()
+    if not check_rate_limit("endpoint:zabbix_send"):
+        raise HTTPException(status_code=429, detail="zabbix send rate exceeded")
+    from server.zabbix.export import run_export_cycle
+
+    return run_export_cycle(_zabbix_config(request), force=True)
 
 
 # ---------------------------------------------------------------------------

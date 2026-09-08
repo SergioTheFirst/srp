@@ -28,12 +28,18 @@ from server.trust.states import CollectorStatus, SemanticStatus
 
 # Only sources that actually gate a domain (server.trust.domains.DOMAIN_SOURCES)
 # have a natural reporting cadence to go stale against. Event-driven sources
-# (print_jobs, events, identity, certificates) are excluded -- a device that
-# simply had nothing to report would otherwise false-flag STALE for "nothing
-# happened", not "gone silent" (design D1).
-_DOMAIN_GATING_SOURCES = frozenset(
+# (print_jobs, events, certificates) are excluded -- a device that simply had
+# nothing to report would otherwise false-flag STALE for "nothing happened",
+# not "gone silent" (design D1).
+DOMAIN_GATING_SOURCES = frozenset(
     src for spec in DOMAIN_SOURCES.values() for src in (*spec["required"], *spec["optional"])
 )
+
+# KodSR L3: identity gates no domain of its own, but the agent collects it
+# every inventory cycle (client/collectors/inventory.py:161) just like a
+# domain-gating source -- it has the same real reporting cadence, so silence
+# there means "gone silent" too, not "nothing happened".
+_STALENESS_SOURCES = DOMAIN_GATING_SOURCES | {"identity"}
 
 
 @dataclass(frozen=True)
@@ -89,7 +95,7 @@ def reevaluate_staleness(
     """
     updates: list[StaleUpdate] = []
     for row in rows:
-        if row.get("source") not in _DOMAIN_GATING_SOURCES:
+        if row.get("source") not in _STALENESS_SOURCES:
             continue
         evidence_seen_at = row.get("evidence_seen_at")
         age_sec = _age_sec(evidence_seen_at, now)
@@ -118,11 +124,33 @@ def reevaluate_staleness(
     return updates
 
 
+def _rebuild_domain_blob(device_id: str, ts: str) -> None:
+    """KodSR M1: recompute + persist just the domain-state blob (db.get_trust)
+    for one device, same shape pipeline.evaluate_trust writes -- a device that
+    goes fully silent must not stay "trusted" forever waiting for a real
+    ingest that may never come.
+
+    Shares pipeline.py's own blob-builder (security review MEDIUM-4: this
+    used to hand-roll the shape and drop "regressed"). Local import: pipeline
+    imports server.trust at module level, so a module-level import back here
+    would deadlock (mirrors db.py::_reject_counts_snapshot's own comment).
+
+    # ponytail: только блоб доменов; скор не пересчитываем -- его давность
+    # перекрывает apply_health_staleness (>3 дн устарел, >10 дн unknown).
+    """
+    from server.pipeline import _build_source_trust_map, build_trust_blob
+
+    source_map = _build_source_trust_map(device_id)
+    have_last_good = db.get_last_good_sources(device_id)
+    db.store_trust(device_id, ts, build_trust_blob(source_map, have_last_good))
+
+
 def run_staleness_cycle(
     stale_after_sec: float,
     *,
     get_rows: Callable[[], list[dict[str, Any]]] = db.get_source_trust_rows,
     write: Callable[[list[StaleUpdate]], int] = db.apply_source_staleness,
+    rebuild: Callable[[str, str], None] = _rebuild_domain_blob,
     now: Optional[datetime] = None,
 ) -> dict[str, int]:
     """Read every device_source_trust row, re-evaluate, persist only the changed
@@ -130,11 +158,15 @@ def run_staleness_cycle(
 
     *stale_after_sec* is floored (design D5): an operator misconfiguring 0 (or
     negative) must not flag every domain source in the fleet STALE on the very
-    next cycle.
+    next cycle. KodSR M1: *rebuild* re-persists the affected devices' domain
+    blob (db.get_trust) so a device that goes fully silent reads non-trusted
+    from this cycle alone, without waiting on a next real ingest.
     """
     moment = now or datetime.now(timezone.utc)
     floor_sec = max(60.0, stale_after_sec)
     rows = get_rows()
     updates = reevaluate_staleness(rows, moment, floor_sec)
     applied = write(updates) if updates else 0
+    for device_id in {u.device_id for u in updates}:
+        rebuild(device_id, moment.isoformat())
     return {"checked": len(rows), "updated": applied}

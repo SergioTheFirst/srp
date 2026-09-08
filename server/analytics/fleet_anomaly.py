@@ -6,18 +6,19 @@ bad Windows Update affecting 30 machines vs a single failing drive).
 
 Two fleet-level signals:
 
-  * **Bad patch / driver rollout (cohort BSOD rate):** When ≥30% of devices sharing
-    the same model report BSODs in 30 days, simultaneous hardware failure is far less
-    likely than a fleet-wide software event — a Windows Update, driver rollout, or
-    firmware change.  RSI degradation across the cohort is a weaker corroborating
-    signal (OS instability can also precede a patch).
+  * **Bad patch / driver rollout (cohort BSOD rate):** When ≥25% of devices sharing
+    the same model report BSODs in 30 days (moderate), and ≥40% (high), simultaneous
+    hardware failure is far less likely than a fleet-wide software event — a Windows
+    Update, driver rollout, or firmware change.  RSI degradation across the cohort is
+    a weaker corroborating signal (OS instability can also precede a patch).
 
   * **Site-wide KP41 cluster (site KP41 rate):** kernel_power_41_30d events cluster
     on devices at the same site because they share the same electrical infrastructure.
-    When ≥40% of devices at a site show elevated KP41 counts, the characteristic
-    pattern is a building power blip (UPS trip, generator test, transient brownout)
-    rather than N concurrent PSU failures.  Per cctodo D6 KP41 specificity is near
-    zero for INDIVIDUAL device attribution, but a SITE CLUSTER is a reliable signal.
+    When ≥30% of devices at a site show elevated KP41 counts (moderate), and ≥50%
+    (high), the characteristic pattern is a building power blip (UPS trip, generator
+    test, transient brownout) rather than N concurrent PSU failures.  Per cctodo D6
+    KP41 specificity is near zero for INDIVIDUAL device attribution, but a SITE
+    CLUSTER is a reliable signal.
 
 Cohort key: model (from devices table, stored on every inventory ingest).
 Site key: site_code (from devices table).

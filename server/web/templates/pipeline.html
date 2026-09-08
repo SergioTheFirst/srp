@@ -37,6 +37,11 @@
 .mc-val.accent { color: var(--accent); }
 .db-table { max-width: 480px; }
 .refresh-note { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+.zx-btn { font:600 13px/1 var(--mono); padding:6px 14px; border-radius:4px;
+  background:var(--accent-dim); border:1px solid rgba(14,165,233,.45);
+  color:var(--accent); cursor:pointer; }
+.zx-btn:hover { background:rgba(14,165,233,.2); }
+.zx-btn:disabled { opacity:.5; cursor:default; }
 
 /* ─── Meta theme overrides (pipeline) ─────────────────────────────────── */
 [data-theme="meta"] .mc-val { font: 700 17px/1 var(--font-body); }
@@ -235,6 +240,103 @@
     </div>
   </div>
 </div>
+
+{# ── Экспорт вердикта во внешний Zabbix ───────────────────────────────────── #}
+<div class="section-label">Экспорт в Zabbix</div>
+<div class="metrics-grid">
+  {% set zx = m.zabbix %}
+  <div class="metric-card {{ 'na' if not zx.configured else ('bad' if zx.last_error else 'good') }}">
+    <div class="mc-label">Отправка вердикта</div>
+    <div class="mc-rows">
+      {%- if not zx.configured %}
+      <div class="mc-row">
+        <span class="mc-key">состояние</span>
+        <span class="mc-val na" style="font-size:13px">выключен в конфигурации</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">чтобы включить</span>
+        <span class="mc-val na" style="font-size:13px">впишите адрес в zabbix.server</span>
+      </div>
+      {%- else %}
+      <div class="mc-row">
+        <span class="mc-key">адрес назначения</span>
+        <span class="mc-val accent" style="font-size:14px">{{ zx.target }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">машин в пакете</span>
+        <span class="mc-val accent">{{ zx.devices }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">отправлено / принято</span>
+        <span class="mc-val {{ 'warn' if zx.rejected else 'good' }}">{{ zx.sent }} / {{ zx.accepted }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">отвергнуто</span>
+        <span class="mc-val {{ 'bad' if zx.rejected else 'good' }}">{{ zx.rejected }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">пропущено машин</span>
+        <span class="mc-val {{ 'warn' if zx.skipped else 'na' }}">{{ zx.skipped }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">без вердикта (unknown)</span>
+        <span class="mc-val {{ 'warn' if zx.unknown else 'na' }}">{{ zx.unknown }}</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">последний успех</span>
+        <span class="mc-val na" style="font-size:13px">{{ zx.last_success_at[:19] or "—" }}</span>
+      </div>
+      {%- if zx.last_error %}
+      <div class="mc-row">
+        <span class="mc-key">последняя ошибка</span>
+        <span class="mc-val bad" style="font-size:13px">{{ zx.last_error }}</span>
+      </div>
+      {%- endif %}
+      {%- if zx.rejected_hosts %}
+      <div class="mc-row">
+        <span class="mc-key">Zabbix не знает узлы</span>
+        <span class="mc-val warn" style="font-size:13px">{{ zx.rejected_hosts | join(", ") }}</span>
+      </div>
+      {%- endif %}
+      {%- endif %}
+      <div class="mc-row">
+        <span class="mc-key">счётчики считаются</span>
+        <span class="mc-val na" style="font-size:13px">с запуска сервера {{ zx.started_at[:19] }}</span>
+      </div>
+      <div class="mc-row" style="margin-top:6px">
+        <button class="zx-btn" id="zx-btn" onclick="zabbixSendNow()"
+                {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>
+          ⟳ Отправить сейчас
+        </button>
+        <span id="zx-result" class="mc-val na" style="font-size:13px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Кнопка сбрасывает и отсрочку узлов: исправил имя узла в Zabbix -- нажал --
+// увидел результат сразу, а не через шесть часов.
+function zabbixSendNow() {
+  var btn = document.getElementById("zx-btn");
+  var out = document.getElementById("zx-result");
+  btn.disabled = true; out.textContent = "отправляю…";
+  fetch("/api/v1/zabbix/send", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.skipped) { out.textContent = "адрес Zabbix не задан"; btn.disabled = false; return; }
+      if (d.busy) { out.textContent = "отправка уже идёт"; btn.disabled = false; return; }
+      if (d.throttled) { out.textContent = "слишком часто, подождите полминуты"; btn.disabled = false; return; }
+      // textContent сам по себе безопасен; srpEsc здесь дал бы двойное
+      // экранирование, и оператор увидел бы «&lt;» буквально.
+      out.textContent = d.error
+        ? "ошибка: " + String(d.error)
+        : "принято " + d.accepted + " из " + d.sent + " · пропущено " + d.skipped;
+      setTimeout(function () { location.reload(); }, 1200);
+    })
+    .catch(function (e) { out.textContent = "ошибка: " + String(e); btn.disabled = false; });
+}
+</script>
 
 {# ── Парковое подтверждение правил (ssd3 Ф8) ──────────────────────────────── #}
 <div class="section-label">Парковое подтверждение правил</div>

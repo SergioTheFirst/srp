@@ -519,6 +519,11 @@ def trajectory_risk_score(
         if t is None or t.direction == "insufficient":
             missing.append(f"{name}: недостаточно истории")
             continue
+        if t.direction == "worsening" and t.eta_days is None:
+            # KodSR M9: ухудшение без порога -- ETA не оценить без него, это
+            # недостаток данных, а не "стабильно" (тот же формат, что insufficient).
+            missing.append(f"{name}: недостаточно истории")
+            continue
         have_any_trend = True
         best_points = max(best_points, t.n_points)
         if t.direction == "worsening" and t.eta_days is not None:

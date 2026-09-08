@@ -150,6 +150,15 @@
   <div class="chart-wrap" id="chart-hero" style="height:420px"><div class="loading">…</div></div>
 </div>
 
+{# By-device: pages per computer #}
+<div class="chart-panel" style="margin-bottom:22px">
+  <div class="ch-head" style="display:flex;justify-content:space-between;align-items:center">
+    <div class="ch-title">Страниц по компьютерам — за выбранный период</div>
+    <a class="csv-btn" id="csv-devices-link" href="/api/v1/fleet/print/by-device/export.csv" download>↓ CSV таблицы</a>
+  </div>
+  <div class="chart-wrap" id="chart-devices" style="height:360px"><div class="loading">…</div></div>
+</div>
+
 {# Detail table #}
 <div class="section-label">Детально по заданиям</div>
 <div class="chart-panel" style="margin-bottom:26px">
@@ -237,6 +246,7 @@
     var qs = filterQS();
     history.replaceState(null, "", qs ? "/print?" + qs : "/print");
     ctrl("csv-link").href = API + "/export.csv" + (qs ? "?" + qs : "");
+    ctrl("csv-devices-link").href = API + "/by-device/export.csv" + (qs ? "?" + qs : "");
   }
   function isoLocal(d) {
     var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
@@ -458,19 +468,24 @@
       yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "стр", font: { size: 11, color: "#7aa8c4" } } },
     }), { responsive: true, displayModeBar: false });
   }
-  function renderBar(elId, items, nameKey, color) {
+  function renderBar(elId, items, nameKey, color, vertical) {
     var el = ctrl(elId);
     if (!items || items.length === 0) { el.innerHTML = "<div class=\"no-data\">Нет данных</div>"; return; }
-    var top = items.slice(0, elId === "chart-users" ? 20 : 10);
-    Plotly.newPlot(el, [{
-      x: top.map(function (r) { return r.pages; }).reverse(),
-      y: top.map(function (r) { return srpEsc(r[nameKey]); }).reverse(),
-      type: "bar", orientation: "h", marker: { color: color, opacity: 0.85 },
-      hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>",
-    }], baseLayout({
-      margin: { t: 6, r: 14, b: 40, l: 160 },
-      xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } },
-    }), { responsive: true, displayModeBar: false });
+    var top = items.slice(0, elId === "chart-printers" ? 10 : 20);
+    var names = top.map(function (r) { return srpEsc(r[nameKey]); });
+    var pages = top.map(function (r) { return r.pages; });
+    var trace = vertical
+      ? { x: names, y: pages, type: "bar", marker: { color: color, opacity: 0.85 },
+          hovertemplate: "<b>%{x}</b><br>%{y} стр<extra></extra>" }
+      : { x: pages.slice().reverse(), y: names.slice().reverse(), type: "bar", orientation: "h",
+          marker: { color: color, opacity: 0.85 }, hovertemplate: "<b>%{y}</b><br>%{x} стр<extra></extra>" };
+    var layout = vertical
+      ? { margin: { t: 6, r: 14, b: 110, l: 54 },
+          xaxis: { tickangle: -35, tickfont: { size: 11 }, automargin: true },
+          yaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } } }
+      : { margin: { t: 6, r: 14, b: 40, l: 160 },
+          xaxis: { gridcolor: "#132030", tickfont: { size: 11 }, title: { text: "страниц", font: { size: 11, color: "#7aa8c4" } } } };
+    Plotly.newPlot(el, [trace], baseLayout(layout), { responsive: true, displayModeBar: false });
   }
   function renderPrinterTable(printers) {
     var el = ctrl("printer-summary-table");
@@ -513,9 +528,25 @@
     }).catch(function () {});
   }
 
+  // ---- by-device chart (pages per computer) ------------------------------- //
+  function loadDevices() {
+    fetch(API + "/by-device?" + filterQS()).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (d) {
+      var seen = {};
+      var items = (d.rows || []).map(function (r) {
+        var label = r.hostname + (r.ip ? " (" + r.ip + ")" : "");
+        seen[label] = (seen[label] || 0) + 1;
+        return { pages: r.pages, label: seen[label] > 1 ? label + " #" + seen[label] : label };
+      });
+      renderBar("chart-devices", items, "label", "#f59e0b", true);
+    }).catch(function () { ctrl("chart-devices").innerHTML = "<div class=\"no-data\">Ошибка загрузки</div>"; });
+  }
+
   // ---- orchestration ------------------------------------------------------ //
   function loadAllData() {
-    loadSummary(); loadSeries(); loadRecords(); loadLegacy();
+    loadSummary(); loadSeries(); loadRecords(); loadLegacy(); loadDevices();
   }
   function applyFilters() {
     rec.page = 1; markPreset(-1); syncURL();

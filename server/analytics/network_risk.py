@@ -30,15 +30,23 @@ from server.scoring.score100 import (
 
 _BLIND_SPOT = "видимость только с этой машины: путь за пределами шлюза не наблюдается"
 
-_GW_LOSS_FULL = 45.0
-_GW_LOSS_HEAVY = 30.0  # >= 20% loss
-_GW_LOSS_LIGHT = 15.0  # >= 5% loss
-_GW_LAT_HIGH = 15.0  # >= 100 ms
-_GW_LAT_WARN = 8.0  # >= 30 ms
+_GW_LOSS_FULL_PTS = 45.0
+_GW_LOSS_HEAVY_PTS = 30.0
+_GW_LOSS_LIGHT_PTS = 15.0
+_GW_LAT_HIGH_PTS = 15.0
+_GW_LAT_WARN_PTS = 8.0
 _DNS_PARTIAL = 8.0
 _APIPA = 35.0
 _WIFI_WEAK = 12.0  # < 30%
 _WIFI_LOW = 6.0  # < 50%
+
+# Thresholds the _PTS deltas above fire at (KodSR L8: kept separate from the
+# score weights themselves -- tuning the % boundary should not require also
+# touching the score, and vice versa).
+_GW_LOSS_HEAVY_PCT = 20.0
+_GW_LOSS_LIGHT_PCT = 5.0
+_GW_LAT_HIGH_MS = 100.0
+_GW_LAT_WARN_MS = 30.0
 
 
 def _f(v: Any) -> Optional[float]:
@@ -129,16 +137,16 @@ def compute_network_risk(
         lat = _f(worst_gw.get("latency_ms"))
         target = worst_gw.get("target")
         if loss >= 100.0:
-            hit(f"шлюз {target} не отвечает на ping (потери 100%)", _GW_LOSS_FULL)
+            hit(f"шлюз {target} не отвечает на ping (потери 100%)", _GW_LOSS_FULL_PTS)
         else:
-            if loss >= 20.0:
-                hit(f"потери до шлюза {target}: {loss:.0f}%", _GW_LOSS_HEAVY)
-            elif loss >= 5.0:
-                hit(f"потери до шлюза {target}: {loss:.0f}%", _GW_LOSS_LIGHT)
-            if lat is not None and lat >= 100.0:
-                hit(f"высокая задержка до шлюза: {lat:.0f} мс", _GW_LAT_HIGH)
-            elif lat is not None and lat >= 30.0:
-                hit(f"повышенная задержка до шлюза: {lat:.0f} мс", _GW_LAT_WARN)
+            if loss >= _GW_LOSS_HEAVY_PCT:
+                hit(f"потери до шлюза {target}: {loss:.0f}%", _GW_LOSS_HEAVY_PTS)
+            elif loss >= _GW_LOSS_LIGHT_PCT:
+                hit(f"потери до шлюза {target}: {loss:.0f}%", _GW_LOSS_LIGHT_PTS)
+            if lat is not None and lat >= _GW_LAT_HIGH_MS:
+                hit(f"высокая задержка до шлюза: {lat:.0f} мс", _GW_LAT_HIGH_PTS)
+            elif lat is not None and lat >= _GW_LAT_WARN_MS:
+                hit(f"повышенная задержка до шлюза: {lat:.0f} мс", _GW_LAT_WARN_PTS)
     elif not icmp_blocked:
         missing.append("нет измерений качества связи до шлюза")
 

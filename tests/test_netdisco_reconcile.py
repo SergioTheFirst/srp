@@ -336,6 +336,23 @@ def test_reachability_marks_recovered_device_up():
     assert statuses["R"] == "up"
 
 
+def test_reachability_revives_eligible_purge_device():
+    statuses: dict = {}
+    reconcile.run_reachability_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=lambda: [
+            {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "eligible_purge"}
+        ],
+        get_links=lambda: [],
+        is_alive=lambda ip, **k: True,  # back online
+        set_status=lambda nid, st: statuses.__setitem__(nid, st),
+        store_change=lambda *a, **k: None,
+        store_reading=lambda *a, **k: None,
+        touch_seen=lambda *a, **k: None,
+    )
+    assert statuses["R"] == "up"
+
+
 def test_reachability_probe_exception_leaves_status_untouched():
     """F1: a probe crash (fd/port exhaustion under the thread fan-out) is NOT the
     same fact as "host unreachable" -- it must never write "down" to the DB. R's

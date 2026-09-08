@@ -113,3 +113,100 @@ def test_no_source_health_low_confidence_score100(client):
     assert "source_health отсутствует" in rel["missing_evidence"]
     # legacy numeric still present for the dashboard
     assert sc["reliability"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# KodSR H2: gate-failed domain must not leak its raw contribution into a
+# day-1 axis's numeric value -- only disk_fill/storage are OPTIONAL for
+# risk_exposure (server/scoring/score100.py ~399), so a failed gate there
+# only used to lower confidence while the polluted number rode along.
+# --------------------------------------------------------------------------- #
+def test_disk_fill_gate_failure_blanks_risk_exposure_leak(client):
+    hb_bad = dict(healthy("heartbeat"), free_space_pct=-5.0)
+    sh = {"free_space": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-df-neg", "heartbeat", hb_bad, sh))
+    dev = client.get("/api/v1/devices/dev-df-neg").json()
+    assert dev["scores"]["risk"]["domains"]["disk_fill"]["state"] == "unknown"
+    # A clean heartbeat (no free-space penalty at all) scores risk_exposure 0.0;
+    # the gate-failed reading must match that, not leak its own +30.
+    assert dev["scores"]["risk_exposure"] == 0.0
+
+
+def test_disk_fill_gate_failure_out_of_range_high_blanks_too(client):
+    """free_space_pct=150 is implausible too -- must not be read as 'disk free'."""
+    hb_bad = dict(healthy("heartbeat"), free_space_pct=150.0)
+    sh = {"free_space": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-df-hi", "heartbeat", hb_bad, sh))
+    dev = client.get("/api/v1/devices/dev-df-hi").json()
+    assert dev["scores"]["risk"]["domains"]["disk_fill"]["state"] == "unknown"
+    assert dev["scores"]["risk_exposure"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# KodSR H3: "ok" collector status + an empty extracted reading at a domain-
+# gating source must not read as TRUSTED -- the collector said "fine" but
+# handed back nothing to actually validate.
+# --------------------------------------------------------------------------- #
+def test_empty_reading_at_gating_source_is_not_trusted(client):
+    hist = dict(healthy("historical"), storage=[])
+    sh = dict(_HIST_OK, storage_reliability=_sh("ok"))
+    client.post("/api/v1/ingest", json=_env("dev-empty-st", "historical", hist, sh))
+    dev = client.get("/api/v1/devices/dev-empty-st").json()
+    assert dev["scores"]["risk"]["domains"]["storage"]["state"] == "unknown"
+
+
+def test_empty_certificates_with_ok_status_stays_ok_regression(client):
+    """certificates is event-driven -- legitimately empty must NOT be reinterpreted
+    as EMPTY/gate-fail (only domain-gating sources get that treatment)."""
+    from server import db
+
+    sh = dict(_HIST_OK, certificates=_sh("ok"))
+    client.post(
+        "/api/v1/ingest", json=_env("dev-certs-empty", "historical", healthy("historical"), sh)
+    )
+    trust = db.get_trust("dev-certs-empty")
+    assert trust["sources"]["certificates"]["state"] == "ok"
+
+
+def test_disk_latency_stays_ok_with_its_normal_empty_reading(client):
+    """Security review HIGH-2: disk_latency is a domain-gating source but NOT
+    material (its _extract_reading always returns {} -- pipeline.py has no
+    case for it) -- an 'ok' collector report there must not be coerced to
+    EMPTY just because its reading is always empty by design."""
+    from server import db
+
+    sh = dict(_HIST_OK, disk_latency=_sh("ok"))
+    client.post("/api/v1/ingest", json=_env("dev-dl-ok", "historical", healthy("historical"), sh))
+    trust = db.get_trust("dev-dl-ok")
+    assert trust["sources"]["disk_latency"]["state"] == "ok"
+
+
+def test_free_space_none_with_ok_status_is_not_trusted_and_freezes_evidence(client):
+    """Security review MEDIUM-3: free_space's _extract_reading wraps a missing
+    value as {"value": None} -- truthy, so a plain `not reading` coercion
+    check never fires, and validate_scalar_range(None) returns PLAUSIBLE
+    ("absence is a collector concern, not semantic") -- an 'ok' collector with
+    nothing real to report must still gate-fail disk_fill and must never
+    advance evidence_seen_at."""
+    from server import db
+
+    hb_ok = dict(healthy("heartbeat"), free_space_pct=61.0)
+    sh = {"free_space": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-fs-none", "heartbeat", hb_ok, sh))
+    with db._connect() as conn:
+        before = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-fs-none", "free_space"),
+        ).fetchone()["evidence_seen_at"]
+
+    hb_none = dict(healthy("heartbeat"), free_space_pct=None)
+    client.post("/api/v1/ingest", json=_env("dev-fs-none", "heartbeat", hb_none, sh))
+    dev = client.get("/api/v1/devices/dev-fs-none").json()
+    assert dev["scores"]["risk"]["domains"]["disk_fill"]["state"] == "unknown"
+
+    with db._connect() as conn:
+        after = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-fs-none", "free_space"),
+        ).fetchone()["evidence_seen_at"]
+    assert after == before

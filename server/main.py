@@ -29,6 +29,8 @@ from server.netdisco.cache import GraphCache
 from server.printers import scheduler
 from server.trust import staleness as trust_staleness
 from server.web.dashboard import router as web_router
+from server.zabbix import export as zabbix_export
+from server.zabbix.config import ZabbixConfig
 
 # Reject ingest bodies larger than this to prevent a single agent from
 # consuming unbounded memory during synchronous pydantic parsing.
@@ -423,7 +425,57 @@ async def _netdisco_adapter_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec + random.uniform(0, nd.jitter_sec))  # nosec B311
 
 
+_zlog = logging.getLogger("srp.zabbix")
+
+
+def zabbix_config_for(cfg: ServerConfig, *, from_disk: bool) -> ZabbixConfig:
+    """Настройки экспорта на ЭТОТ цикл.
+
+    ``from_disk`` -- сервер поднят из server/config.json (боевой случай): блок
+    zabbix перечитывается с диска каждый цикл, поэтому правка адреса вступает
+    в силу без перезапуска сервера, к которому в этот момент стучится весь парк.
+    Битый файл не должен ломать цикл -- тогда работаем на прежних настройках.
+    """
+    if not from_disk:
+        return cfg.zabbix_config()
+    try:
+        return load_config().zabbix_config()
+    except Exception:  # noqa: BLE001 -- битый конфиг не должен убивать цикл
+        _zlog.exception("не удалось перечитать конфигурацию — беру прежние настройки")
+        return cfg.zabbix_config()
+
+
+def _run_zabbix_export(cfg: ServerConfig, *, from_disk: bool = False) -> None:
+    """Один цикл экспорта в Zabbix (блокирующий TCP; вызывается через to_thread).
+
+    Самозащита как у опроса принтеров: любая ошибка связи, конфигурации или БД
+    гасится здесь и никогда не всплывает в event loop -- это и есть требование
+    «недоступный Zabbix не влияет на работу SRP».
+    """
+    try:
+        zabbix_export.run_export_cycle(zabbix_config_for(cfg, from_disk=from_disk))
+    except Exception:  # never let a transient cycle error crash the caller
+        _zlog.exception("zabbix export cycle failed")
+
+
+async def _zabbix_export_loop(cfg: ServerConfig, *, from_disk: bool = False) -> None:
+    """Экспорт при старте, затем каждые interval_sec (+jitter), до отмены.
+
+    Петля живёт всегда (вне DEMO_MODE), даже если адрес не задан: цикл тогда
+    ничего не делает и пишет одну строку. Так включение экспорта -- это правка
+    одного поля в конфиге, а не правка плюс перезапуск.
+    """
+    while True:
+        await asyncio.to_thread(_run_zabbix_export, cfg, from_disk=from_disk)
+        interval_sec = max(60, zabbix_config_for(cfg, from_disk=from_disk).interval_sec)
+        # jitter de-phases this loop from the other poll loops (anti-thundering-herd)
+        await asyncio.sleep(interval_sec + random.uniform(0, 30))  # nosec B311
+
+
 def create_app(cfg: ServerConfig | None = None) -> FastAPI:
+    # Конфиг, поднятый с диска, можно перечитывать на ходу; переданный тестом --
+    # нет (иначе тест подхватил бы боевой server/config.json).
+    zabbix_from_disk = cfg is None
     cfg = cfg or load_config()
     db.set_stale_threshold(cfg.stale_after_sec)
 
@@ -483,6 +535,10 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
                 # optional adapters run only when the operator has configured at least one
                 if cfg.netdisco_config().optional_adapters:
                     tasks.append(asyncio.create_task(_netdisco_adapter_loop(cfg)))
+            # Экспорт вердикта в Zabbix. Петля стартует всегда: при пустом адресе
+            # цикл ничего не делает, зато вписанный позже адрес подхватывается
+            # без перезапуска сервера.
+            tasks.append(asyncio.create_task(_zabbix_export_loop(cfg, from_disk=zabbix_from_disk)))
         # W4.0: RescoreQueue is a threading.Thread worker, not an asyncio.Task --
         # it is started/stopped on its own lifecycle below, never added to `tasks`
         # (which the finally block cancels+awaits as asyncio tasks).
@@ -551,6 +607,10 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
         )
     app.state.updates_dir = cfg.resolved_updates_dir()  # agent auto-update package drop
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
+    # Для кнопки «Отправить сейчас» и /zabbix/status: сам ServerConfig, чтобы
+    # эндпоинт мог перечитать блок zabbix с диска ровно так же, как это делает цикл.
+    app.state.server_config = cfg
+    app.state.zabbix_from_disk = zabbix_from_disk
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
     # D1: lets /network-map/collect skip the printers phase gracefully when the
     # operator has printer polling off, mirroring the gate below that decides

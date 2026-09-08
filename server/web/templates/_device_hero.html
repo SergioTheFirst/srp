@@ -86,7 +86,7 @@
   {% endif %}
 
   {# 5. Чипы: каждое значение подписано, латиницы нет #}
-  {% set horizon_label = {7: "≤7 дней", 30: "≤30 дней", 90: "≤90 дней"}.get(health.horizon_days, "не прогнозируется") %}
+  {% set horizon_label = {7: "≤7 дней", 30: "≤30 дней", 90: "≤90 дней", 180: "≤180 дней"}.get(health.horizon_days, "не прогнозируется") %}
   {% set delta = health.delta_7d %}
   {% set delta_cls = "na" if delta is none or delta == 0 else ("good" if delta > 0 else "bad") %}
   {% set delta_arrow = "—" if delta is none else ("▲" if delta > 0 else ("▼" if delta < 0 else "→")) %}

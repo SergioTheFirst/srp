@@ -1,0 +1,221 @@
+zabbix_export:
+  version: '6.0'
+  date: '2026-09-08T00:00:00Z'
+  groups:
+    - uuid: 99845e0b9b8083da990a2888c4e39b99
+      name: Templates/SRP
+  templates:
+    # ----------------------------------------------------------------------- #
+    # Шаблон для хостов парка: ровно четыре элемента данных.
+    # ----------------------------------------------------------------------- #
+    - uuid: 2a31d83df9d7bb00d19fe42388e8645a
+      template: SRP predictive verdict
+      name: 'SRP: предиктивный вердикт'
+      description: |
+        Прогноз отказа от SRP для одного компьютера.
+
+        SRP не заменяет Zabbix: Zabbix отвечает на вопрос «что сломано сейчас»,
+        SRP — «что сломается следующим и когда». Наружу уходит только ВЫВОД:
+        состояние, риск, окно до ухудшения и одна фраза о причине. Все данные,
+        по которым этот вывод получен (SMART, журналы, тренды, оси доверия),
+        остаются в SRP — там их и смотрят.
+
+        Имя хоста в Zabbix должно посимвольно совпадать с тем, что шлёт SRP.
+        Готовый список даёт `python -m server.zabbix.check --list-hosts`.
+
+        Все элементы — типа «Zabbix trapper»: значения присылает SRP, Zabbix
+        сам ничего не опрашивает.
+      groups:
+        - name: Templates/SRP
+      items:
+        - uuid: 6a2886b5284ee312cc0c148d3e83ca54
+          name: 'SRP: состояние'
+          type: TRAPPER
+          key: srp.state
+          value_type: CHAR
+          valuemap:
+            name: Состояние SRP
+          description: |
+            Вердикт SRP. Шкала от лучшего к худшему: h0 — норма, h1 — ранняя
+            деградация, h2 — компенсация, h3 — ускоренная деградация,
+            h4 — предотказ. Значение unknown НЕ на этой шкале: оно означает,
+            что SRP не видит машину и вердикта у него нет.
+
+            Приходит ВСЕГДА, в том числе unknown, — чтобы ослепшая машина
+            не исчезала из мониторинга молча. Именно на этом элементе имеет
+            смысл строить nodata: у числовых разрывы штатны.
+          tags:
+            - tag: component
+              value: srp
+        - uuid: f35221cad41f5d01859fc6174548888b
+          name: 'SRP: риск'
+          type: TRAPPER
+          key: srp.risk
+          value_type: FLOAT
+          units: '%'
+          description: |
+            Оценка риска 0…100, БОЛЬШЕ = ХУЖЕ.
+
+            Число для графика и для собственных порогов. Вердикт SRP — это
+            srp.state; если два сигнала разойдутся, верить надо состоянию.
+
+            Разрывы в данных штатны: при state = unknown SRP намеренно
+            не отправляет число (ноль объявил бы слепую машину здоровой).
+            nodata на этот элемент вешать нельзя.
+          tags:
+            - tag: component
+              value: srp
+        - uuid: 1c3c7606eabd947e495e37b94c4f87f6
+          name: 'SRP: окно до ухудшения'
+          type: TRAPPER
+          key: srp.days_left
+          value_type: UNSIGNED
+          units: сут
+          description: |
+            Через сколько суток SRP ожидает ухудшение. Значение дискретное
+            (7 / 30 / 90 / 180), это корзина прогноза, а не точный срок.
+
+            Не приходит вовсе, когда прогноза нет (машина здорова) и когда
+            state = unknown. Разрывы штатны, nodata вешать нельзя.
+          tags:
+            - tag: component
+              value: srp
+        - uuid: 16da996422d180e27d6fb7ebe23672a1
+          name: 'SRP: причина'
+          type: TRAPPER
+          key: srp.reason
+          value_type: CHAR
+          description: |
+            Главный фактор одной короткой фразой по-русски: что именно
+            деградирует и что с этим делать. Без идентификаторов — ни имени
+            машины, ни модели диска, ни имени пользователя здесь не бывает
+            по построению.
+
+            Удобно подставлять в текст оповещения: {ITEM.LASTVALUE4}.
+          tags:
+            - tag: component
+              value: srp
+      triggers:
+        - uuid: bd63cd43a7548b5ca8fa08c0fd1f17b8
+          expression: 'last(/SRP predictive verdict/srp.state)="h4"'
+          name: 'SRP: предотказ — {HOST.NAME}'
+          priority: HIGH
+          description: |
+            SRP считает, что машина близка к отказу. Причина — в значении
+            элемента «SRP: причина», срок — в «SRP: окно до ухудшения».
+          url: '{$SRP.URL}'
+        - uuid: 61d299f5f107ff1e6e1bc9b87d05a281
+          expression: 'last(/SRP predictive verdict/srp.state)="h3"'
+          name: 'SRP: ускоренная деградация — {HOST.NAME}'
+          priority: AVERAGE
+          description: |
+            Деградация идёт быстрее обычного. Это ещё не авария: время
+            на плановую замену или обслуживание есть.
+          url: '{$SRP.URL}'
+        - uuid: 7645752e733fdc5c6994f05aef74c02d
+          expression: 'count(/SRP predictive verdict/srp.state,1d,"eq","unknown")>0 and
+            count(/SRP predictive verdict/srp.state,1d,"eq","unknown")=count(/SRP predictive
+            verdict/srp.state,1d)'
+          name: 'SRP: машина ослепла — вердикта нет сутки ({HOST.NAME})'
+          priority: WARNING
+          description: |
+            Сутки подряд SRP отвечает unknown: телеметрии с машины недостаточно
+            для вывода. Машина, о которой мониторинг ничего не знает, опаснее
+            машины с плохим вердиктом.
+          url: '{$SRP.URL}'
+        - uuid: 4b1d90f2c0a24e7d8f6153ab7c2e9d10
+          expression: 'nodata(/SRP predictive verdict/srp.state,2h)=1'
+          name: 'SRP: по машине не приходит вердикт ({HOST.NAME})'
+          priority: WARNING
+          description: |
+            Два часа не приходит даже состояние, хотя SRP шлёт раз в несколько
+            минут. Значит машина выпала из экспорта на стороне SRP: имя узла
+            не определилось, совпало с другой машиной (после переустановки
+            агента это бывает) или узел отложен после отказа Zabbix.
+
+            Что смотреть: карточку «Экспорт в Zabbix» на странице /pipeline
+            и `python -m server.zabbix.check --check-hosts`.
+
+            Вешать nodata можно ТОЛЬКО на этот элемент и на srp.last_run:
+            у числовых разрывы штатны.
+          url: '{$SRP.URL}'
+      macros:
+        - macro: '{$SRP.URL}'
+          value: ''
+          description: |
+            Адрес дашборда SRP, например http://10.0.0.10:8000 — подставляется
+            в поле URL триггеров, чтобы из оповещения можно было перейти
+            к разбору. Пусто = ссылки нет.
+      valuemaps:
+        - uuid: ac86fd6568325138e06fe1f3cf23a725
+          name: Состояние SRP
+          mappings:
+            - value: h0
+              newvalue: Норма
+            - value: h1
+              newvalue: Ранняя деградация
+            - value: h2
+              newvalue: Компенсация
+            - value: h3
+              newvalue: Ускоренная деградация
+            - value: h4
+              newvalue: Предотказ
+            - value: unknown
+              newvalue: Нет видимости
+
+    # ----------------------------------------------------------------------- #
+    # Шаблон для одного служебного хоста: жив ли сам SRP.
+    # ----------------------------------------------------------------------- #
+    - uuid: c94ce2da1961e1c0052d190892fda890
+      template: SRP server
+      name: 'SRP: сервер'
+      description: |
+        Привязывается к ОДНОМУ хосту, который представляет сам сервер SRP
+        (по умолчанию он называется SRP — см. настройку zabbix.export_host).
+
+        Заведите этот хост ПЕРВЫМ, до хостов парка: иначе первое же значение
+        будет отвергнуто, а триггер «SRP молчит» сработает ложно.
+
+        Счётчики отправлено/принято/отвергнуто/пропущено наружу не уходят —
+        это данные о самом SRP, а не вывод о парке; их видно в SRP
+        на странице /pipeline.
+      groups:
+        - name: Templates/SRP
+      items:
+        - uuid: 9f584b78a01f3bcb54fee19a5b760f3c
+          name: 'SRP: время последнего расчёта'
+          type: TRAPPER
+          key: srp.last_run
+          value_type: UNSIGNED
+          units: unixtime
+          description: |
+            Момент последнего цикла SRP. Нужен ровно для одного: увидеть,
+            что SRP жив и продолжает считать. Если значение перестало
+            обновляться — молчит либо сам SRP, либо канал до Zabbix.
+          tags:
+            - tag: component
+              value: srp
+      triggers:
+        - uuid: ee497fca75ee308c84bf91915927e18f
+          expression: 'nodata(/SRP server/srp.last_run,15m)=1'
+          name: 'SRP перестал слать данные в Zabbix'
+          priority: WARNING
+          description: |
+            За 15 минут не пришло ни одного значения от SRP. Проверьте:
+            сервер SRP запущен; в server/config.json задан адрес zabbix.server;
+            открыт исходящий TCP 10051; этот хост существует и включён.
+            Диагностика: python -m server.zabbix.check
+          url: '{$SRP.URL}'
+        - uuid: 3346265423f1887f98ebe2a01224bfd6
+          expression: 'fuzzytime(/SRP server/srp.last_run,1h)=0'
+          name: 'SRP давно не пересчитывал вердикт'
+          priority: INFORMATION
+          description: |
+            Значения приходят, но время последнего расчёта отстаёт больше чем
+            на час: SRP жив, а пересчёт не идёт. Возможен также перекос часов
+            между сервером SRP и сервером Zabbix.
+          url: '{$SRP.URL}'
+      macros:
+        - macro: '{$SRP.URL}'
+          value: ''
+          description: Адрес дашборда SRP для ссылки из оповещения. Пусто = ссылки нет.

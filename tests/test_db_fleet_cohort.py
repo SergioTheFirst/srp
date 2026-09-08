@@ -113,6 +113,35 @@ def test_cohort_slope_verdict_survives_a_malformed_cohort_row(db_init):
     assert verdict == {"storage_wear": True}  # the 3 good peers still decide it
 
 
+# --------------------------------------------------------------------------- #
+# security-review MEDIUM (fix-round-1, same shape as the boot-p90 fix above):
+# the cohort sample must be the freshest scores, not whichever 200 devices
+# sort first alphabetically by device_id.
+# --------------------------------------------------------------------------- #
+def test_cohort_slope_verdict_samples_freshest_peers_not_alphabetical_order(db_init):
+    # 101 "worse" peers (slope 1.0 < my 5.0) + 99 "not worse" peers (slope 10.0)
+    # + "zzz" (not worse, 10.0) = 201 total, cap 200. The FIRST-inserted (oldest
+    # by scores.id) peer is a WORSE one; "zzz" (not worse) sorts alphabetically
+    # last. This flips the >0.5 majority threshold between the two orderings.
+    _seed_trajectory(db_init, "peer-worse-000", "OptiPlex", {"storage_wear": _worsening(1.0)})
+    for i in range(1, 101):
+        _seed_trajectory(
+            db_init, f"peer-worse-{i:03d}", "OptiPlex", {"storage_wear": _worsening(1.0)}
+        )
+    for i in range(99):
+        _seed_trajectory(
+            db_init, f"peer-fast-{i:03d}", "OptiPlex", {"storage_wear": _worsening(10.0)}
+        )
+    _seed_trajectory(db_init, "zzz", "OptiPlex", {"storage_wear": _worsening(10.0)})
+
+    verdict = db_init.get_cohort_slope_verdict("OptiPlex", {"storage_wear": _worsening(5.0)})
+
+    # Alphabetical-200 (drops "zzz", a not-worse peer): 101/200 = 0.505 -> True
+    # (the old bug). Freshest-200 (drops the oldest insertion, a worse peer):
+    # 100/200 = 0.50, not > 0.5 -> {}.
+    assert verdict == {}
+
+
 def test_cohort_slope_verdict_no_model_is_empty(db_init):
     assert db_init.get_cohort_slope_verdict(None, {"storage_wear": _worsening(5.0)}) == {}
 
@@ -151,6 +180,28 @@ def test_rsi_low_pct_excludes_non_reporting_devices(db_init):
     stats = db_init.get_fleet_cohort_stats("OptiPlex", None)
 
     assert stats["cohort_rsi_low_pct"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# KodSR L14: _cohort_boot_p90 must sample the freshest readings, not whichever
+# 200 devices happen to sort first alphabetically by device_id.
+# --------------------------------------------------------------------------- #
+def test_cohort_boot_p90_samples_freshest_readings_not_alphabetical_order(db_init):
+    # 200 devices "dev-000".."dev-199" seeded FIRST (oldest by insertion/h.id),
+    # each with a distinct avg_boot_ms; "zzz" seeded LAST (freshest) sorts after
+    # all of them alphabetically, so an ORDER BY device_id LIMIT 200 always
+    # drops it regardless of how recently it reported.
+    for i in range(200):
+        _seed(db_init, f"dev-{i:03d}", "OptiPlex", "site-a", {"avg_boot_ms": (i + 1) * 100})
+    _seed(db_init, "zzz", "OptiPlex", "site-a", {"avg_boot_ms": 20100})
+
+    stats = db_init.get_fleet_cohort_stats("OptiPlex", None)
+
+    # Freshest-200 (excludes the oldest insertion "dev-000", keeps "zzz"):
+    # sorted values are 200..20000 (dev-001..dev-199) + 20100 (zzz); p90 (rank
+    # 180 of 200) lands on 18100. Alphabetical-200 (excludes "zzz" instead)
+    # would give 18000 -- the old, wrong answer.
+    assert stats["boot_p90_ms"] == 18100.0
 
 
 def test_mixed_reporting_and_non_reporting_devices(db_init):

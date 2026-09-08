@@ -31,6 +31,14 @@ def test_print_page_renders_shell(client: TestClient) -> None:
         assert marker in h, marker
 
 
+def test_print_page_has_by_device_panel(client: TestClient) -> None:
+    html = client.get("/print").text
+    assert 'id="chart-devices"' in html
+    assert 'id="csv-devices-link"' in html
+    assert "/fleet/print/by-device/export.csv" in html
+    assert "Страниц по компьютерам" in html
+
+
 def test_print_page_has_date_presets(client: TestClient) -> None:
     h = client.get("/print").text
     assert 'data-days="30"' in h

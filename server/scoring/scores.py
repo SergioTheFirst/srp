@@ -166,7 +166,7 @@ def _wear(inv: Optional[dict], hist: Optional[dict]) -> tuple[float, list[Factor
         val += delta
         factors.append({"label": label, "delta": round(delta, 1)})
 
-    storage = (hist or {}).get("storage") or []
+    storage = ((hist or {}).get("storage") or [])[:1]  # gate валидирует только первый диск (P2-1)
     max_wear = None
     max_realloc = None
     max_poh = None
@@ -238,7 +238,7 @@ def _risk_exposure(
     if dpc:
         hit(f"{int(dpc)} устройство(а) с ошибкой драйвера", _clamp(dpc * 5, 0, 20))
 
-    storage = (hist or {}).get("storage") or []
+    storage = ((hist or {}).get("storage") or [])[:1]  # gate валидирует только первый диск (P2-1)
     disk_errors = 0
     for s in storage:
         disk_errors += int(s.get("read_errors_total") or 0)

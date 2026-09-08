@@ -83,7 +83,7 @@ td.r,th.r{text-align:right;}
 <div class="panel">
   <div class="ch-title">Печать с компьютеров{% if d.period_days %} (за {{ d.period_days }} дн){% else %} (всё время){% endif %}</div>
   {% if d.software and d.software.devices %}
-  <p class="muted small" style="margin-bottom:10px">По журналам ПК: {{ "{:,}".format(d.software.pages).replace(",", " ") }} стр, {{ d.software.jobs }} заданий, {{ d.software.device_count }} ПК.</p>
+  <p class="muted small" style="margin-bottom:10px">По журналам ПК: {{ "{:,}".format(d.software.pages).replace(",", " ") }} стр, {% if d.software.jobs == 0 and d.software.pages > 0 %}—{% else %}{{ d.software.jobs }} заданий{% endif %}, {{ d.software.device_count }} ПК.</p>
   <table>
     <thead><tr><th>Компьютер</th><th class="r">Страниц</th><th>Последняя печать</th></tr></thead>
     <tbody>

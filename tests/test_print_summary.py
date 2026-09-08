@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from server import db
 
 from tests.conftest import envelope, healthy
 
@@ -135,3 +136,29 @@ def test_summary_filter_by_ip(client: TestClient) -> None:
     body = client.get("/api/v1/fleet/print/summary?ip=192.168.1.50").json()
     assert body["total_pages"] == 9  # only the HP queue resolves to that IP
     assert body["active_printers"] == 1
+
+
+def _hist_ip(ipv4: str) -> dict:
+    payload = healthy("historical")
+    payload["network_adapters"] = [{"ipv4": [ipv4]}]
+    return payload
+
+
+def test_print_by_device_groups_pages_and_resolves_ip(client: TestClient) -> None:
+    # dev-a: 2 события (3+4 стр) + 1 counter-строка (5 стр) -> pages 12, jobs 2
+    client.post("/api/v1/ingest", json=envelope("dev-a", "historical", _hist_ip("10.0.0.5")))
+    client.post(
+        "/api/v1/ingest",
+        json=_pj("dev-a", [_ev("HP", 3, 1), _ev("HP", 4, 2), _counter("HP", 5)]),
+    )
+    # dev-b: 1 событие 1 стр -> pages 1, jobs 1
+    client.post("/api/v1/ingest", json=_pj("dev-b", [_ev("HP", 1, 3)]))
+
+    rows = db.get_print_by_device(db.PrintFilter())
+    assert [r["device_id"] for r in rows] == ["dev-a", "dev-b"]
+    assert rows[0]["pages"] == 12 and rows[0]["jobs"] == 2
+    assert rows[0]["ip"] == "10.0.0.5"
+    assert rows[1]["ip"] is None
+
+    # фильтр по периоду: date_to в прошлом -> пусто
+    assert db.get_print_by_device(db.PrintFilter(date_to="2000-01-01")) == []

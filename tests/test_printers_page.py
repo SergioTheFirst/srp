@@ -123,6 +123,15 @@ def test_attach_printers_places_into_subnet_cluster():
     assert out["printers_unclustered"][0]["printer_id"] == "prn-sn-B"
 
 
+def test_printer_kpis_low_supply_matches_the_chip_threshold() -> None:
+    """KodSR L12: the "мало расходников" KPI must count the same printers the
+    dashboard's own supply chip marks warn/bad (<25%), not a stale <15% cut."""
+    from server.web.dashboard import _printer_kpis
+
+    kpis = _printer_kpis([{"low_supply_pct": 20}])  # warn per supply_color, not <15
+    assert kpis["low_supply"] == 1
+
+
 def test_printer_detail_escapes_hostile_strings(client):
     from server import db
 

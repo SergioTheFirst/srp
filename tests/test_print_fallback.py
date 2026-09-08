@@ -434,7 +434,8 @@ def test_counter_rows_with_null_job_id_are_not_deduped(client: TestClient) -> No
         assert r.status_code == 200
     stats = client.get("/api/v1/devices/dev-dedup/print?days=0").json()
     assert stats["total_pages"] == 6
-    assert stats["total_jobs"] == 2
+    # counter-mode rows (job_id NULL) are page deltas, not jobs (KodSR M4).
+    assert stats["total_jobs"] == 0
 
 
 # --------------------------------------------------------------------------- #

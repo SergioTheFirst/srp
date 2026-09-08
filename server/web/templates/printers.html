@@ -107,7 +107,7 @@ td.r, th.r { text-align:right; }
 <tr>
   <td>{{ s.name }}</td>
   <td class="r mono">{{ "{:,}".format(s.pages).replace(",", " ") }}</td>
-  <td class="r mono">{{ s.jobs }}</td>
+  <td class="r mono">{{ "—" if s.jobs == 0 and s.pages > 0 else s.jobs }}</td>
   <td class="r mono">{{ s.device_count }}</td>
   <td class="small muted">{{ s.last_ts[:16] if s.last_ts else "—" }}</td>
 </tr>

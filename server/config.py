@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from server.netdisco.config import NetdiscoConfig, load_netdisco_config
 from server.printers.config import PrinterConfig, load_printer_config
+from server.zabbix.config import ZabbixConfig, load_zabbix_config
 
 logger = logging.getLogger("srp.config")
 
@@ -106,6 +107,10 @@ class ServerConfig:
     # Agent auto-update package drop: the operator copies build.bat's
     # srp-agent-update-<ver>.zip + manifest.json here. Relative -> project root.
     updates_dir: str = "server/updates"
+    # Экспорт предиктивного вердикта во внешний Zabbix (протокол траппера).
+    # Отдельного enabled нет: непустой zabbix.server = включено. Блок парсится
+    # в ZabbixConfig через zabbix_config(), как printers/netdisco.
+    zabbix: Optional[dict[str, Any]] = None
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
@@ -126,6 +131,10 @@ class ServerConfig:
     def netdisco_config(self) -> NetdiscoConfig:
         """Parse the raw ``netdisco`` block into a validated NetdiscoConfig."""
         return load_netdisco_config(self.netdisco)
+
+    def zabbix_config(self) -> ZabbixConfig:
+        """Parse the raw ``zabbix`` block into a validated ZabbixConfig."""
+        return load_zabbix_config(self.zabbix)
 
 
 def load_config(path: Optional[Path] = None) -> ServerConfig:

@@ -22,7 +22,18 @@ from server.web import dashboard
 pytestmark = pytest.mark.unit
 
 
-def _dev(device_id, hostname, age, *, stale=None, site=None, org=None, dept=None, flags=None):
+def _dev(
+    device_id,
+    hostname,
+    age,
+    *,
+    stale=None,
+    site=None,
+    org=None,
+    dept=None,
+    flags=None,
+    first_seen_age=None,
+):
     """Мини-строка в форме обогащённого get_devices(): свёртке нужны эти поля."""
     return {
         "device_id": device_id,
@@ -33,6 +44,7 @@ def _dev(device_id, hostname, age, *, stale=None, site=None, org=None, dept=None
         "org_code": org,
         "dept_code": dept,
         "flags": flags or [],
+        "first_seen_age_sec": first_seen_age,
     }
 
 
@@ -125,13 +137,28 @@ def test_same_hostname_different_site_not_hidden():
     assert dupes == []
 
 
-def test_risky_stale_twin_never_hidden():
-    """Падающую машину (сигналит о проблеме) не прячем даже как тёзку-призрака."""
+def test_risky_stale_twin_hidden_when_live_successor():
+    """Флаги призрака описывают тот же ПК, который теперь репортит преемник -> прячем."""
     fresh = _dev("new", "PC-01", 20)
-    failing = _dev("old", "PC-01", 4000, flags=["at_risk"])
+    failing = _dev("old", "PC-01", 4000, flags=["at_risk", "unknown"])
     live, dupes = dashboard._split_duplicates([failing, fresh])
-    assert set(_ids(live)) == {"new", "old"}
-    assert dupes == []
+    assert _ids(live) == ["new"] and _ids(dupes) == ["old"]
+
+
+def test_predecessor_hidden_before_stale_when_successor_appeared_later():
+    """Замолчал 2 мин назад, преемник впервые виден 1 мин назад -> предшественник, прячем сразу."""
+    fresh = _dev("new", "PC-01", 10, first_seen_age=60)
+    ghost = _dev("old", "PC-01", 120)
+    live, dupes = dashboard._split_duplicates([ghost, fresh])
+    assert _ids(live) == ["new"] and _ids(dupes) == ["old"]
+
+
+def test_overlapping_live_twins_both_visible():
+    """Оба репортят после появления второго -> разные машины или переходный период, показываем обе."""
+    a = _dev("a", "PC-01", 30, first_seen_age=60)
+    b = _dev("b", "PC-01", 40)
+    live, dupes = dashboard._split_duplicates([a, b])
+    assert set(_ids(live)) == {"a", "b"} and dupes == []
 
 
 def test_input_order_preserved():

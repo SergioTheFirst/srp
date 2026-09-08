@@ -44,5 +44,16 @@
     "adapter_interval_sec": 900,
     "optional_adapters": [],
     "missing_after_sec": 21600
+  },
+  "zabbix": {
+    "server": "",
+    "port": 10051,
+    "interval_sec": 300,
+    "timeout_sec": 5,
+    "host_field": "hostname",
+    "host_suffix": "",
+    "export_host": "SRP",
+    "org_codes": [],
+    "host_map": {}
   }
 }

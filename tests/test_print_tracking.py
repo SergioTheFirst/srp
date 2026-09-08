@@ -111,6 +111,78 @@ def test_device_print_counts_pages(client: TestClient) -> None:
     assert len(body["printers"]) == 2
 
 
+def test_counter_rows_do_not_inflate_job_counts(client: TestClient) -> None:
+    """Counter-mode rows (job_id NULL) are page deltas, not jobs (KodSR M4):
+    they must count toward pages everywhere but never toward job counts."""
+    client.post("/api/v1/ingest", json=envelope("dev-m4", "inventory", {"hostname": "PC-M4"}))
+    jobs = [
+        {**_job(pages=2), "job_id": 1},
+        {**_job(pages=5), "job_id": None, "source": "counter"},
+        {**_job(pages=5), "job_id": None, "source": "counter"},
+    ]
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-m4", jobs))
+
+    dev = client.get("/api/v1/devices/dev-m4/print?days=0").json()
+    assert dev["total_pages"] == 12
+    assert dev["total_jobs"] == 1
+
+    fleet = client.get("/api/v1/fleet/print?days=30").json()
+    assert fleet["devices"][0]["jobs"] == 1
+
+    an = client.get("/api/v1/fleet/print/analytics?days=30").json()
+    assert an["total_jobs"] == 1
+
+
+def test_printer_summary_counter_rows_do_not_inflate_job_counts(client: TestClient) -> None:
+    """get_printer_print_summary (the /printers reconcile tab) has the same
+    counter-mode job-count bug as the per-device/fleet summaries (KodSR M4)."""
+    from server import db
+
+    client.post("/api/v1/ingest", json=envelope("dev-m4c", "inventory", {"hostname": "PC-M4C"}))
+    jobs = [
+        {**_job(pages=2), "job_id": 1},
+        {**_job(pages=5), "job_id": None, "source": "counter"},
+        {**_job(pages=5), "job_id": None, "source": "counter"},
+    ]
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-m4c", jobs))
+
+    summary = db.get_printer_print_summary(days=0)
+    row = next(r for r in summary if r["name"] == "HP LaserJet")
+    assert row["pages"] == 12
+    assert row["jobs"] == 1
+
+
+def test_daily_buckets_use_local_calendar_day_not_utc(client: TestClient) -> None:
+    """Device card «по дням» and analytics daily chart bucket by local
+    calendar day, not raw UTC (KodSR TZ finding) -- mirrors the hero-chart
+    series fix. A job at 00:30 local time must land in TODAY's local bucket."""
+    import inspect
+
+    from server import db
+
+    local_after_midnight = (
+        datetime.now().astimezone().replace(hour=0, minute=30, second=0, microsecond=0)
+    )
+    today = local_after_midnight.strftime("%Y-%m-%d")
+    ts = local_after_midnight.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    client.post("/api/v1/ingest", json=envelope("dev-tz", "inventory", {"hostname": "PC-TZ"}))
+    client.post(
+        "/api/v1/ingest", json=_pj_envelope("dev-tz", [{**_job(pages=3), "job_id": 9, "ts": ts}])
+    )
+
+    dev = client.get("/api/v1/devices/dev-tz/print?days=0").json()
+    assert dev["daily"] == [{"date": today, "pages": 3, "jobs": 1}]
+
+    an = client.get("/api/v1/fleet/print/analytics?days=0").json()
+    assert any(row["date"] == today for row in an["daily"])
+
+    # TZ-proof: on a UTC CI box the assertions above hold either way -- pin
+    # the SQL itself so a regression that drops 'localtime' is still caught.
+    assert "'localtime'" in inspect.getsource(db.get_device_print)
+    assert "'localtime'" in inspect.getsource(db.get_print_analytics)
+
+
 # ---------------------------------------------------------------------------
 # API: /api/v1/fleet/print
 # ---------------------------------------------------------------------------
@@ -212,6 +284,62 @@ def test_fleet_print_export_csv_empty_when_no_jobs(client: TestClient) -> None:
     assert r.status_code == 200
     lines = r.text.strip().splitlines()
     assert len(lines) == 1  # header only
+
+
+# ---------------------------------------------------------------------------
+# API: /api/v1/fleet/print/by-device (JSON) + /by-device/export.csv
+# ---------------------------------------------------------------------------
+
+
+def test_print_by_device_json_and_csv(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=envelope("dev-a", "inventory", {"hostname": "PC-A"}))
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-a", [_job(pages=2)]))
+    r = client.get("/api/v1/fleet/print/by-device")
+    assert r.status_code == 200
+    assert r.json()["rows"][0]["hostname"] == "PC-A" and r.json()["rows"][0]["pages"] == 2
+    c = client.get(
+        "/api/v1/fleet/print/by-device/export.csv?date_from=2026-01-01&date_to=2026-12-31"
+    )
+    assert c.status_code == 200
+    assert c.headers["content-type"].startswith("text/csv")
+    assert "print_by_device_20260101_20261231.csv" in c.headers["content-disposition"]
+    lines = c.text.strip().splitlines()
+    assert lines[0] == "hostname,ip,device_id,pages,jobs"
+    assert lines[1].startswith("PC-A,")
+
+
+def test_print_by_device_csv_escapes_formula(client: TestClient) -> None:
+    client.post("/api/v1/ingest", json=envelope("dev-b", "inventory", {"hostname": "=cmd()"}))
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-b", [_job(pages=1)]))
+    c = client.get("/api/v1/fleet/print/by-device/export.csv")
+    lines = c.text.strip().splitlines()
+    assert lines[1].startswith("'=cmd()")
+
+
+def test_print_by_device_no_hostname_uses_display_name(client: TestClient) -> None:
+    """No inventory ingested -> d.hostname is NULL; must never surface as empty
+    or as the raw device_id (KodSR round 1: display_name is the sole naming
+    contract, same as get_devices)."""
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-noname", [_job(pages=3)]))
+    r = client.get("/api/v1/fleet/print/by-device")
+    hostname = r.json()["rows"][0]["hostname"]
+    assert hostname and hostname != "dev-noname"
+    assert hostname.startswith("Без названия")
+    c = client.get("/api/v1/fleet/print/by-device/export.csv")
+    lines = c.text.strip().splitlines()
+    assert lines[1].split(",")[0] == hostname
+
+
+def test_print_by_device_row_cap_truncates(client: TestClient, monkeypatch) -> None:
+    from server import db
+
+    monkeypatch.setattr(db, "_BY_DEVICE_ROW_MAX", 1)
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-cap1", [_job(pages=5)]))
+    client.post("/api/v1/ingest", json=_pj_envelope("dev-cap2", [_job(pages=1)]))
+    r = client.get("/api/v1/fleet/print/by-device")
+    assert len(r.json()["rows"]) == 1
+    c = client.get("/api/v1/fleet/print/by-device/export.csv")
+    assert c.headers["x-srp-truncated"] == "1"
 
 
 # ---------------------------------------------------------------------------

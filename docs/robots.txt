@@ -1,9 +1,17 @@
 # Витрина SRP — j-space.ru
-# Поисковым ИИ читать разрешено: страница статическая, серверный рендер,
-# JavaScript для содержания не нужен.
+#
+# Страница статическая, серверный рендер, JavaScript для содержания не нужен —
+# читать её роботам можно и нужно. Content-Signal объявляет намерение отдельно
+# от Allow: поиск, ответы ИИ и обучение разрешены одинаково.
+#
+# Разрешение в этом файле — просьба, а не гарантия: хостинг может отдавать 403
+# даже разрешённому боту. Проверка: curl -A "GPTBot" -sI https://j-space.ru/
+
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 
+# OpenAI: обучение, поиск и переход по ссылке из ответа — три разных бота.
 User-agent: GPTBot
 Allow: /
 
@@ -13,13 +21,33 @@ Allow: /
 User-agent: ChatGPT-User
 Allow: /
 
+# Anthropic
 User-agent: ClaudeBot
 Allow: /
 
+User-agent: Claude-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+# Perplexity
 User-agent: PerplexityBot
 Allow: /
 
+User-agent: Perplexity-User
+Allow: /
+
+# Google: обычный обход разрешён по User-agent: * выше, Google-Extended —
+# отдельное согласие на использование в генеративных ответах.
 User-agent: Google-Extended
+Allow: /
+
+# Яндекс и Bing — источники Нейро и Copilot; им же уходит IndexNow.
+User-agent: YandexBot
+Allow: /
+
+User-agent: Bingbot
 Allow: /
 
 Sitemap: https://j-space.ru/sitemap.xml

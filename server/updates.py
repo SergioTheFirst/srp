@@ -1,10 +1,11 @@
 """PUBLIC STUB replacement for ``server/updates.py``.
 
-The private/commercial module validates and serves a fleet auto-update
-package (SHA-256 + HMAC checked against ``server/updates/manifest.json``)
--- fleet auto-update is a Full-edition feature, see the public README's
-«Ограничения бесплатной версии». The public/Free edition never offers an
-update package, so this stub always reports "nothing staged".
+The private module validates and serves a fleet auto-update package
+(SHA-256 + HMAC checked against ``server/updates/manifest.json``). That
+machinery is deployment plumbing for one specific network and is not part
+of the public tree -- see the public README's «Чего нет в этом срезе».
+The public build never has an update package staged, so this stub always
+reports "nothing staged".
 
 Every caller already treats that as a first-class, tested state, not an
 error: both ``/api/v1/agent/update*`` routes in ``server/api.py`` raise a

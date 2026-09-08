@@ -401,7 +401,7 @@ def _printer_kpis(printers: list) -> dict:
         "online": sum(1 for p in printers if p.get("online")),
         "pages": sum(p.get("total_pages") or 0 for p in printers),
         "low_supply": sum(
-            1 for p in printers if p.get("low_supply_pct") is not None and p["low_supply_pct"] < 15
+            1 for p in printers if supply_color(p.get("low_supply_pct")) in ("warn", "bad")
         ),
         "errors": sum(1 for p in printers if p.get("error_count")),
     }
@@ -522,20 +522,13 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
                 "health": health,
                 "version_outdated": bool(current is not None and ver is not None and ver < current),
                 "is_new": _is_recent(d.get("first_seen"), days=7),
+                "first_seen_age_sec": db.age_seconds(d.get("first_seen")),
             }
         )
     return enriched
 
 
 _DUPES_RENDER_CAP = 50  # ponytail: только предел рендера; поднять, если реальному парку мало
-
-# Флаги, при которых строку НЕ прячем: устройство сигналит о проблеме, а это
-# инструмент раннего предупреждения об отказах -- реальный сбой не должен
-# исчезать из списка/KPI под видом «дубля переустановки». stale здесь НЕТ
-# (это и есть повод для свёртки), outdated/update_pending/new -- тоже (не сбой).
-_DUPE_KEEP_VISIBLE_FLAGS = frozenset(
-    {"at_risk", "worsening", "regressed", "unknown", "untrusted", "expiring"}
-)
 
 
 def _dupe_key(d: dict) -> tuple:
@@ -565,10 +558,14 @@ def _split_duplicates(devices: list) -> tuple[list, list]:
       * есть ЖИВОЙ более свежий тёзка (keeper НЕ stale) -- доказательство, что
         машина сейчас на связи под новым id; все offline -> не прячем (не
         доказано, UNKNOWN over false confidence);
-      * сама строка stale и НЕ сигналит о проблеме (_DUPE_KEEP_VISIBLE_FLAGS) --
-        падающую машину не прячем никогда.
-    last_seen_age_sec is None (непарсибельно) -> строка вне сравнения. Порядок
-    входа сохраняется в обоих списках.
+      * строка stale ИЛИ является предшественником (замолчала до первого
+        появления keeper'а) -- флаги строки больше не спасают от скрытия:
+        молчащий призрак неизбежно набирает unknown/untrusted/regressed через
+        staleness и оставался бы на виду навсегда, хотя описывает тот же
+        физический ПК, что и keeper.
+    last_seen_age_sec is None (непарсибельно) -> строка вне сравнения. Скрытые
+    строки не удаляются -- остаются в блоке «Скрытые дубликаты имени» с ✕.
+    Порядок входа сохраняется в обоих списках.
     """
     groups: dict[tuple, list] = {}
     for d in devices:
@@ -582,12 +579,15 @@ def _split_duplicates(devices: list) -> tuple[list, list]:
         keeper = min(aged, key=lambda d: d["last_seen_age_sec"])
         if keeper.get("stale"):
             continue  # нет живого преемника -> не доказано, что это переустановка
+        k_first = keeper.get("first_seen_age_sec")
         for d in aged:
-            if d is keeper or not d.get("stale"):
+            if d is keeper:
                 continue
-            if _DUPE_KEEP_VISIBLE_FLAGS.intersection(d.get("flags") or ()):
-                continue  # машина сигналит о проблеме -> оставляем на виду
-            hidden.add(id(d))
+            # ponytail: предшественник = замолчал ДО первого конверта преемника;
+            # закрывает 10-минутное окно до STALE_AFTER_SEC сразу после переустановки.
+            predecessor = k_first is not None and d["last_seen_age_sec"] > k_first
+            if d.get("stale") or predecessor:
+                hidden.add(id(d))
     live = [d for d in devices if id(d) not in hidden]
     dupes = [d for d in devices if id(d) in hidden]
     return live, dupes
@@ -696,7 +696,13 @@ def fleet_fragment(request: Request):
 @router.get("/pipeline", response_class=HTMLResponse)
 def pipeline_health(request: Request):
     """§6 pipeline health page — ingest rate, source health, DB sizes."""
-    return _TEMPLATES.TemplateResponse(request, "pipeline.html", {"m": db.get_pipeline_metrics()})
+    from server.zabbix.export import status as zabbix_status
+
+    metrics = db.get_pipeline_metrics()
+    # Статус экспорта живёт в памяти процесса (netdisco/metrics.py-образец), а не
+    # в БД: историю srp.export.* держит сам Zabbix, там она полнее и старше.
+    metrics["zabbix"] = zabbix_status.snapshot()
+    return _TEMPLATES.TemplateResponse(request, "pipeline.html", {"m": metrics})
 
 
 def _device_health_context(
@@ -734,7 +740,11 @@ def device(request: Request, device_id: str):
         "update_checked_at_age_sec": db.age_seconds(d.get("update_checked_at")),
         "version_changed_at_age_sec": db.age_seconds(d.get("version_changed_at")),
         "display_name": db.display_name(
-            d.get("hostname"), model=d.get("model"), chassis=d.get("chassis")
+            d.get("hostname"),
+            model=d.get("model"),
+            chassis=d.get("chassis"),
+            device_id=d.get("device_id"),
+            disambiguate=True,
         ),
         **_identity_labels(d),
     }

@@ -57,11 +57,23 @@ def test_fresh_evidence_produces_no_update():
 
 
 def test_non_domain_source_never_goes_stale():
-    """print_jobs/events/identity/certificates have no reporting cadence -- an
-    old evidence timestamp there means "nothing happened", not "gone silent"
+    """print_jobs/events/certificates have no reporting cadence -- an old
+    evidence timestamp there means "nothing happened", not "gone silent"
     (design D1). Must never be flagged even with very old evidence."""
     row = _row(source="print_jobs", evidence_seen_at=(_NOW - timedelta(days=30)).isoformat())
     assert reevaluate_staleness([row], _NOW, _THRESHOLD) == []
+
+
+def test_identity_source_goes_stale_like_a_periodic_source():
+    """KodSR L3: identity is collected every inventory cycle (client/collectors/
+    inventory.py:161) even though it gates no domain of its own -- silence
+    there is real ('gone silent'), not 'nothing happened' like the true
+    event-driven sources above, so it must age the same way."""
+    row = _row(source="identity", evidence_seen_at=(_NOW - timedelta(hours=13)).isoformat())
+    updates = reevaluate_staleness([row], _NOW, _THRESHOLD)
+    assert len(updates) == 1
+    assert updates[0].source == "identity"
+    assert updates[0].state == "stale"
 
 
 @pytest.mark.parametrize("worse_state", ["unavailable", "suspect"])
@@ -119,15 +131,18 @@ def test_run_staleness_cycle_reports_checked_and_updated_counts():
         _row(source="reliability", evidence_seen_at=(_NOW - timedelta(hours=1)).isoformat()),
     ]
     written = []
+    rebuilt = []
     result = run_staleness_cycle(
         _THRESHOLD,
         get_rows=lambda: rows,
         write=lambda updates: written.append(updates) or len(updates),
+        rebuild=lambda device_id, ts: rebuilt.append((device_id, ts)),
         now=_NOW,
     )
     assert result == {"checked": 2, "updated": 1}
     assert len(written[0]) == 1
     assert written[0][0].source == "storage_reliability"
+    assert rebuilt == [("dev-1", _NOW.isoformat())]
 
 
 def test_run_staleness_cycle_skips_write_when_nothing_changed():
@@ -244,12 +259,38 @@ def test_apply_source_staleness_drops_write_when_evidence_moved(client):
 
 
 @pytest.mark.integration
-def test_staleness_cycle_end_to_end_then_domain_recovers_on_next_ingest(client):
-    """The scenario named in the P2-2 finding: a device keeps sending SOME
-    sources, one goes silent. Run the cycle with a far-future 'now' to force
-    staleness, then ingest a DIFFERENT source -- the domain must read UNKNOWN
-    on the very next ingest (design D6: the job marks rows only, domains
-    re-aggregate on the next real ingest, not inside the job itself)."""
+def test_empty_reading_does_not_advance_evidence_seen_at(client):
+    """KodSR H3: collector said ok but handed back nothing to validate --
+    evidence_seen_at must not advance (same predicate as set_last_good), or a
+    silently-empty source would look freshly-evidenced forever."""
+    from server import db
+
+    sh = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-h3", "historical", healthy("historical"), sh))
+    with db._connect() as conn:
+        before = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-h3", "storage_reliability"),
+        ).fetchone()["evidence_seen_at"]
+
+    empty_hist = dict(healthy("historical"), storage=[])
+    client.post("/api/v1/ingest", json=_env("dev-h3", "historical", empty_hist, sh))
+    with db._connect() as conn:
+        after = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-h3", "storage_reliability"),
+        ).fetchone()["evidence_seen_at"]
+    assert after == before
+
+
+@pytest.mark.integration
+def test_staleness_cycle_rebuilds_domain_blob_without_a_further_ingest(client):
+    """KodSR M1: the scenario named in the P2-2 finding -- a device goes fully
+    silent (no source ever ingests again). run_staleness_cycle must rebuild
+    db.get_trust's domain blob itself; a silenced device must not stay
+    'trusted' forever just because nothing re-aggregates it (the OLD design
+    D6 required a next real ingest to re-aggregate -- but a truly-silent
+    device never sends one, so it hung trusted indefinitely)."""
     from server import db
 
     sh = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
@@ -260,12 +301,7 @@ def test_staleness_cycle_end_to_end_then_domain_recovers_on_next_ingest(client):
     result = run_staleness_cycle(_THRESHOLD, now=far_future)
     assert result["updated"] >= 1
 
-    # Trigger domain re-aggregation via a DIFFERENT source's ingest (heartbeat
-    # owns thermal/disk_fill, not storage) -- evaluate_trust reads ALL stored
-    # source rows, including the freshly-marked stale one, on every call.
-    hb_sh = {"free_space": _sh("ok"), "throttle": _sh("ok"), "disk_latency": _sh("ok")}
-    client.post("/api/v1/ingest", json=_env("dev-e2e", "heartbeat", healthy("heartbeat"), hb_sh))
-
+    # No further ingest -- the cycle itself must already show the domain stale.
     trust = db.get_trust("dev-e2e")
     assert trust["sources"]["storage_reliability"]["state"] == "stale"
     assert trust["domains"]["storage"]["state"] == "unknown"
@@ -286,3 +322,51 @@ def test_get_source_trust_rows_is_fleet_wide(client):
         r for r in rows if r["device_id"] == "dev-a" and r["source"] == "storage_reliability"
     )
     assert row["evidence_seen_at"] is not None
+
+
+@pytest.mark.integration
+def test_identity_evidence_advances_and_stays_fresh_after_cycle(client):
+    """Security review CRITICAL-1: identity's _extract_reading always returns
+    {} (pipeline.py has no case for it) -- evidence_seen_at must still advance
+    on every inventory ingest (has_evidence tracks the collector's own
+    post-coercion verdict, never the extracted reading), so a freshly-ingested
+    device does not read STALE on the very next staleness cycle."""
+    from server import db
+
+    sh = {"identity": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-id", "inventory", healthy("inventory"), sh))
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id=? AND source=?",
+            ("dev-id", "identity"),
+        ).fetchone()
+    assert row["evidence_seen_at"] is not None
+
+    result = run_staleness_cycle(_THRESHOLD, now=datetime.now(timezone.utc))
+    assert result["updated"] == 0  # freshly-evidenced -- must not go stale immediately
+    trust = db.get_trust("dev-id")
+    assert trust["sources"]["identity"]["state"] == "ok"
+
+
+@pytest.mark.integration
+def test_rebuild_domain_blob_matches_ingest_shape_including_regressed(client):
+    """Security review MEDIUM-4: staleness._rebuild_domain_blob now shares one
+    blob-builder with pipeline.evaluate_trust -- a rebuild with no state change
+    since the last ingest must reproduce byte-identical domains+sources,
+    'regressed' included (previously omitted from the rebuilt blob)."""
+    from server import db
+    from server.trust.staleness import _rebuild_domain_blob
+
+    sh = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
+    client.post("/api/v1/ingest", json=_env("dev-regr", "historical", healthy("historical"), sh))
+    # storage_reliability regresses (was ok, now blocked) so "regressed" is real.
+    sh2 = dict(sh, storage_reliability=_sh("blocked"))
+    client.post("/api/v1/ingest", json=_env("dev-regr", "historical", healthy("historical"), sh2))
+
+    ingest_blob = db.get_trust("dev-regr")
+    assert ingest_blob["sources"]["storage_reliability"]["regressed"] is True
+
+    _rebuild_domain_blob("dev-regr", "2026-01-01T00:00:00+00:00")
+    rebuilt_blob = db.get_trust("dev-regr")
+    assert rebuilt_blob["domains"] == ingest_blob["domains"]
+    assert rebuilt_blob["sources"] == ingest_blob["sources"]

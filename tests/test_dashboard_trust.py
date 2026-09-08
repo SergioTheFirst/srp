@@ -59,3 +59,23 @@ def test_fleet_page_still_renders(client):
     }
     client.post("/api/v1/ingest", json=_env("df", "historical", healthy("historical"), sh))
     assert client.get("/").status_code == 200
+
+
+def test_device_page_neutral_name_has_same_suffix_as_fleet(client):
+    """Task 4b: безымянный ПК показывает один и тот же текст на /fleet и
+    /device/{id} -- device_id-суффикс различает несколько «Без названия» в
+    обоих местах одинаково (сейчас на карточке он голый, без суффикса)."""
+    from server import db
+
+    device_id = "a1b2c3d4e5"
+    ts = "2026-05-30T00:00:00+00:00"
+    risk = {"day1_factors": {"performance": [], "reliability": [], "wear": [], "risk_exposure": []}}
+    db.touch_device(device_id, ts, "0.1.0")
+    db.store_scores(device_id, ts, {"risk": risk})
+
+    expected = f"Без названия ({device_id[-6:]})"
+    assert expected in db.get_devices()[0]["display_name"]
+
+    resp = client.get(f"/device/{device_id}")
+    assert resp.status_code == 200
+    assert expected in resp.text
