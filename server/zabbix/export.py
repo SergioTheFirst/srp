@@ -37,8 +37,12 @@ status = StatusStore()
 backoff = BackoffStore(BACKOFF_SEC)
 
 _lock = threading.Lock()
-_last_diagnose_at = 0.0
-_last_force_at = 0.0
+# None = «ещё ни разу»: сразу после старта и разбор, и кнопка должны срабатывать.
+# Нулём это выражать нельзя — time.monotonic() отсчитывается от загрузки машины,
+# и на свежем сервере (или CI-раннере) с аптаймом меньше часа ноль оказывается
+# ВНУТРИ окна подавления, то есть первый же разбор молча не запускается.
+_last_diagnose_at: Optional[float] = None
+_last_force_at: Optional[float] = None
 
 _REJECT_REASONS = (
     "узла нет; узел отключён; имя отличается регистром или доменом; "
@@ -106,7 +110,7 @@ def _diagnose(cfg: ZabbixConfig, packet) -> list:
     """
     global _last_diagnose_at
     now = time.monotonic()
-    if now - _last_diagnose_at < DIAGNOSE_COOLDOWN_SEC:
+    if _last_diagnose_at is not None and now - _last_diagnose_at < DIAGNOSE_COOLDOWN_SEC:
         return []
     _last_diagnose_at = now
 
@@ -197,7 +201,7 @@ def _force_allowed() -> bool:
     """Не чаще раза в FORCE_MIN_INTERVAL_SEC — иначе кнопкой можно молотить парк."""
     global _last_force_at
     now = time.monotonic()
-    if now - _last_force_at < FORCE_MIN_INTERVAL_SEC:
+    if _last_force_at is not None and now - _last_force_at < FORCE_MIN_INTERVAL_SEC:
         return False
     _last_force_at = now
     return True
@@ -287,8 +291,8 @@ def _run(cfg: ZabbixConfig) -> dict:
 def reset_for_tests(cooldown_at: Optional[float] = None) -> None:
     """Сбросить модульное состояние между тестами (отсрочки, окно разбора, анонс)."""
     global _last_diagnose_at, _announced, _last_force_at
-    _last_diagnose_at = cooldown_at if cooldown_at is not None else 0.0
-    _last_force_at = 0.0
+    _last_diagnose_at = cooldown_at
+    _last_force_at = None
     _announced = None
     backoff.clear()
     status.reset()

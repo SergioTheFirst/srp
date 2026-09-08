@@ -296,3 +296,27 @@ def test_duration_reads_naturally_in_russian():
     assert zx._duration(45) == "45 с"
     assert zx._duration(12 * 60) == "12 мин"
     assert zx._duration(2 * 3600 + 5 * 60) == "2 ч 05 мин"
+
+
+def test_first_diagnosis_runs_even_on_a_freshly_booted_machine(monkeypatch):
+    """time.monotonic() отсчитывается от загрузки: на машине с аптаймом меньше
+    часа «ещё ни разу» нельзя выражать нулём — окно подавления проглотит
+    первый же разбор. Поймано на CI-раннере, локально не воспроизводилось."""
+    monkeypatch.setattr(
+        zx.db, "get_fleet_verdicts", lambda: [_row("dev-1", "GOOD"), _row("dev-2", "BAD")]
+    )
+    send, _calls = _fake_send(reject_host="BAD")
+    monkeypatch.setattr(zx, "_send", send)
+    monkeypatch.setattr(zx.time, "monotonic", lambda: 12.0)  # только что загрузились
+
+    zx.run_export_cycle(CFG)
+
+    assert "BAD" in zx.backoff.active(), "первый разбор должен пройти сразу после старта"
+
+
+def test_first_force_is_allowed_on_a_freshly_booted_machine(monkeypatch):
+    monkeypatch.setattr(zx.db, "get_fleet_verdicts", lambda: [])
+    monkeypatch.setattr(zx, "_send", lambda _cfg, _batch: zx.sender.SendResult())
+    monkeypatch.setattr(zx.time, "monotonic", lambda: 3.0)
+
+    assert "throttled" not in zx.run_export_cycle(CFG, force=True)
