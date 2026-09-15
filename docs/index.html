@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SRP — инструмент инженера мониторинга: парк Windows-ПК, принтеры, сеть, прогноз отказов</title>
-<meta name="description" content="SRP — self-hosted рабочее место инженера, который отвечает за офисный парк: компьютеры, принтеры и сеть на одном экране, объяснимый риск отказа каждой машины, прогноз тонера и дисков, карта сети по SNMP. Отдаёт прогноз отказа в Zabbix. Демо без регистрации.">
+<meta name="description" content="SRP — self-hosted рабочее место инженера, который отвечает за офисный парк: компьютеры, принтеры и сеть на одном экране, объяснимый риск отказа каждой машины, прогноз тонера и дисков, карта сети по SNMP. Отдаёт прогноз отказа в Zabbix. Рабочий стенд открыт без регистрации.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="canonical" href="https://j-space.ru/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="SRP — инструмент инженера мониторинга офисного парка">
-<meta property="og:description" content="Компьютеры, принтеры и сеть на одном экране. Агент без зависимостей, сервер FastAPI + SQLite, риск с объяснением, прогноз тонера и дисков, карта сети по SNMP. Прогноз отказа уходит в Zabbix. Демо по ссылке.">
+<meta property="og:description" content="Компьютеры, принтеры и сеть на одном экране. Агент без зависимостей, сервер FastAPI + SQLite, риск с объяснением, прогноз тонера и дисков, карта сети по SNMP. Прогноз отказа уходит в Zabbix. Рабочий стенд открыт по ссылке.">
 <meta property="og:image" content="https://j-space.ru/img/og.png">
 <meta property="og:url" content="https://j-space.ru/">
 <meta name="twitter:card" content="summary_large_image">
@@ -32,7 +32,7 @@
       "author": {
         "@id": "https://j-space.ru/#author"
       },
-      "dateModified": "2026-09-08"
+      "dateModified": "2026-09-15"
     },
     {
       "@type": "Person",
@@ -61,7 +61,7 @@
       "operatingSystem": "Windows 7+; сервер — Windows или Linux",
       "softwareVersion": "0.3.0",
       "datePublished": "2026-08-29",
-      "dateModified": "2026-09-08",
+      "dateModified": "2026-09-15",
       "license": "https://opensource.org/licenses/MIT",
       "url": "https://j-space.ru/",
       "downloadUrl": "https://github.com/SergioTheFirst/srp/releases/latest",
@@ -96,6 +96,14 @@
       "mainEntity": [
         {
           "@type": "Question",
+          "name": "Чем рабочий стенд отличается от снимка экранов?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Это две разные двери в один и тот же демо-парк. Рабочий стенд — запущенный сервер SRP по адресу srp-private.vercel.app: там всё нажимается, работают фильтры, сортировки, переходы между экранами и выгрузка CSV, а данные считает настоящий движок. Сервер бесплатный и засыпает без посетителей, поэтому первая страница открывается несколько секунд. Снимок экранов — 36 страниц того же дашборда, сохранённых как статические файлы на самом сайте j-space.ru: открываются мгновенно и работают всегда, но нажимать в них нечего. Оба показывают один парк: 10 вымышленных машин с 45 днями истории телеметрии, без регистрации."
+          }
+        },
+        {
+          "@type": "Question",
           "name": "Чем SRP отличается от обычного мониторинга вроде Zabbix?",
           "acceptedAnswer": {
             "@type": "Answer",
@@ -107,7 +115,7 @@
           "name": "Что нужно, чтобы попробовать SRP?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Ничего — демо открывается в браузере без регистрации: десять вымышленных машин с 45 днями настоящей истории телеметрии. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой, агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется: телеметрия остаётся внутри вашей сети."
+            "text": "Ничего — рабочий стенд открывается в браузере без регистрации: десять вымышленных машин с 45 днями настоящей истории телеметрии. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой, агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется: телеметрия остаётся внутри вашей сети."
           }
         },
         {
@@ -199,7 +207,7 @@
         {
           "@type": "ListItem",
           "position": 2,
-          "name": "Демо",
+          "name": "Снимок экранов",
           "item": "https://j-space.ru/demo/"
         }
       ]
@@ -208,25 +216,32 @@
 }
 </script>
 <style>
-/* ── Токены — из design-md/coinbase/DESIGN.md: белый холст, одна синяя «вольтовая»
-   краска для главных действий, тёмные редакционные полосы для героя и финального
-   призыва, пилюли для всего интерактивного, 24 px у карточек, один уровень тени.
-   Шрифт: Coinbase Display/Sans лицензионные; Inter на витрине запрещён
-   (правило владельца) — берём Golos Text с родной кириллицей, дисплей на 400,
-   как и в исходной системе. Числа — JetBrains Mono вместо Coinbase Mono.       ── */
+/* ── Направление: «инженерный журнал». Светлая бумага на всю страницу — тёмных
+   полос нет нигде (решение владельца 2026-09-15). Глубина берётся слоями
+   поверхностей и волосяными линиями, а не тенями и не чёрным фоном.
+   Одна вольтовая синяя краска — только для действия. Красный — только
+   состояние «предотказ», нигде как украшение.
+   Шрифт: Inter на витрине запрещён (правило владельца) — Golos Text с родной
+   кириллицей, дисплей на 400. Числа и приборные метки — JetBrains Mono.
+   Шкала радиусов вместо «капсула на всё»: кнопки 12, карточки 16, крупные
+   поверхности 24, капсула осталась только бейджам-статусам.               ── */
 :root{
   --primary:#0052ff; --primary-active:#003ecc;
-  --ink:#0a0b0d; --body:#5b616e; --muted:#7c828a; --muted-soft:#a8acb3;
+  --ink:#0a0b0d; --body:#4e545f; --muted:#676d76;
   --hairline:#dee1e6; --hairline-soft:#eef0f3;
-  --canvas:#ffffff; --surface-soft:#f7f7f7; --surface-strong:#eef0f3;
-  --surface-dark:#0a0b0d; --surface-dark-elevated:#16181c;
-  --on-dark:#ffffff; --on-dark-soft:#a8acb3;
+  --canvas:#ffffff; --surface-soft:#f6f7f8; --surface-strong:#eef0f3;
   --up:#05b169; --down:#cf202f; --yellow:#f4b000;
   --sans:"Golos Text","Golos Fallback",-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --mono:"JetBrains Mono","Mono Fallback",Consolas,monospace;
-  --r-md:12px; --r-lg:16px; --r-xl:24px; --pill:100px;
-  --shadow:0 4px 12px rgba(0,0,0,.04);
-  --wrap:1200px; --section:clamp(64px,8vw,96px);
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:24px; --pill:100px;
+  --outline:0 0 0 1px rgba(0,0,0,.09);
+  --lift:0 1px 2px rgba(0,0,0,.04), 0 8px 24px -12px rgba(0,0,0,.18);
+  /* Шкала отступов: всё вертикальное и горизонтальное берётся отсюда. */
+  --s-4:4px; --s-8:8px; --s-12:12px; --s-16:16px; --s-24:24px; --s-32:32px;
+  --s-40:40px; --s-56:56px;
+  /* Три уровня плотности секций — иначе страница читается одним списком. */
+  --band-lg:clamp(72px,9vw,112px); --band:clamp(56px,7vw,88px);
+  --wrap:1200px;
 }
 /* Запасные шрифты подогнаны по ширине под Golos / JetBrains (замерено в браузере):
    поздняя подмена веб-шрифта не переупаковывает строки, CLS остаётся около нуля. */
@@ -235,235 +250,264 @@
 
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0; background:var(--canvas); color:var(--ink); font-family:var(--sans); font-size:16px; line-height:1.5; -webkit-font-smoothing:antialiased}
+body{margin:0; background:var(--canvas); color:var(--ink); font-family:var(--sans); font-size:16px; line-height:1.55; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale}
 img{max-width:100%; display:block; height:auto}
 a{color:var(--primary); text-decoration:none}
-p{margin:0 0 16px}
-p a,.tour-more a{text-decoration:underline; text-underline-offset:3px}
-:focus-visible{outline:2px solid var(--primary); outline-offset:3px; border-radius:4px}
-.dark :focus-visible{outline-color:var(--on-dark)}
+p{margin:0 0 var(--s-16)}
+p a,.tour-more a{text-decoration:underline; text-underline-position:from-font; text-decoration-thickness:from-font; text-underline-offset:2px}
+:focus-visible{outline:2px solid var(--primary); outline-offset:3px; border-radius:var(--r-sm)}
+.door:focus-visible,.frame:focus-visible,.tour .card:focus-visible{border-radius:inherit}
 .wrap{width:min(var(--wrap),calc(100% - 48px)); margin-inline:auto}
 [id]{scroll-margin-top:80px}
 .skip{position:absolute; left:-9999px; min-height:44px; display:inline-flex; align-items:center}
-.skip:focus{left:16px; top:10px; z-index:40; background:var(--canvas); padding:12px 20px; border-radius:var(--pill); border:1px solid var(--primary)}
+.skip:focus{left:16px; top:10px; z-index:40; background:var(--canvas); padding:12px 20px; border-radius:var(--r-md); border:1px solid var(--primary)}
 
 /* ── Типографика: дисплей на 400 с отрицательным трекингом, тело 400/600,
-   числа — моноширинные. Жирного дисплея нет нигде.                            ── */
-h1,h2,h3,h4{margin:0; font-weight:400}
-h1{font-size:clamp(38px,5.4vw,64px); line-height:1.02; letter-spacing:-.025em}
-h2{font-size:clamp(32px,4vw,52px); line-height:1.04; letter-spacing:-.025em; margin-bottom:20px}
-h3{font-size:18px; font-weight:600; line-height:1.33}
-.display-md{font-size:clamp(30px,3.6vw,44px); line-height:1.09; letter-spacing:-.022em}
-.lede{font-size:18px; color:var(--body); max-width:38em}
+   числа — моноширинные. Жирного дисплея нет нигде.                       ── */
+h1,h2,h3,h4{margin:0; font-weight:400; text-wrap:balance}
+h1{font-size:clamp(38px,5.2vw,62px); line-height:1.03; letter-spacing:-.025em}
+h2{font-size:clamp(30px,3.7vw,46px); line-height:1.06; letter-spacing:-.024em; margin-bottom:var(--s-16)}
+h3{font-size:18px; font-weight:600; line-height:1.35}
+.display-md{font-size:clamp(28px,3.4vw,40px); line-height:1.1; letter-spacing:-.022em}
+.lede{font-size:18px; line-height:1.55; color:var(--body); max-width:36em; text-wrap:pretty}
 .body{color:var(--body)}
 .num{font-family:var(--mono); font-weight:500; font-variant-numeric:tabular-nums}
-.badge{display:inline-flex; align-items:center; height:24px; padding:0 12px; border-radius:var(--pill); background:var(--surface-strong); color:var(--ink); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em}
-.badge-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:24px}
-.eyebrow{margin:0 0 16px}
-.band{padding:var(--section) 0}
+/* Приборная метка: моноширинная подпись над блоком — она же нумерует раздел. */
+.meta{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 var(--s-12)}
+.badge{display:inline-flex; align-items:center; height:24px; padding:0 12px; border-radius:var(--pill); background:var(--surface-strong); color:var(--ink); font-size:12px; font-weight:600; letter-spacing:.01em; white-space:nowrap}
+.badge-row{display:flex; flex-wrap:wrap; gap:var(--s-8); margin-bottom:var(--s-24)}
+.band{padding:var(--band) 0}
+.band-lg{padding:var(--band-lg) 0}
 .band-soft{background:var(--surface-soft)}
-.dark{background:var(--surface-dark); color:var(--on-dark)}
-.dark .body,.dark .lede{color:var(--on-dark-soft)}
-.dark .badge{background:var(--surface-dark-elevated); color:var(--on-dark-soft)}
+.band-rule{border-top:1px solid var(--hairline)}
 
-/* ── Кнопки: всё интерактивное — пилюля 44 px; главный призыв в герое — 56 px ── */
-.btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:12px 20px; border-radius:var(--pill); font:600 16px/1.15 var(--sans); color:var(--ink); background:var(--surface-strong); border:1px solid transparent; white-space:nowrap}
+/* ── Кнопки: умеренный радиус, капсула осталась бейджам. Нажатие — 0.96. ── */
+.btn{display:inline-flex; align-items:center; justify-content:center; gap:var(--s-8); min-height:44px; padding:12px 20px; border-radius:var(--r-md); font:600 16px/1.15 var(--sans); color:var(--ink); background:var(--surface-strong); border:1px solid transparent; white-space:nowrap; transition-property:background-color,scale; transition-duration:140ms; transition-timing-function:cubic-bezier(.2,0,0,1)}
+.btn:active{scale:.96}
 .btn-primary{background:var(--primary); color:#fff}
 .btn-primary:active{background:var(--primary-active)}
-.btn-outline-dark{background:transparent; color:var(--on-dark); border-color:var(--on-dark)}
-.btn-secondary-dark{background:var(--surface-dark-elevated); color:var(--on-dark)}
-.btn-lg{min-height:56px; padding:16px 32px}
+.btn-outline{background:var(--canvas); border-color:var(--hairline); color:var(--ink)}
+.btn-lg{min-height:56px; padding:16px 28px}
 .link-cta{font-weight:600; color:var(--primary); display:inline-block; padding:10px 0; line-height:1.5}
 .link-cta::after{content:"→"; margin-left:6px}
-.cta-row{display:flex; flex-wrap:wrap; gap:12px; align-items:center}
+.cta-row{display:flex; flex-wrap:wrap; gap:var(--s-12); align-items:center}
 
-/* ── Шапка: белая, липкая, призыв «Открыть демо» не уходит с экрана никогда ── */
+/* ── Шапка: белая, липкая, дверь в стенд не уходит с экрана никогда ── */
 .topbar{position:sticky; top:0; z-index:20; background:var(--canvas); border-bottom:1px solid var(--hairline)}
-.topbar .wrap{display:flex; align-items:center; gap:24px; height:64px}
-.brand{display:inline-flex; align-items:center; gap:8px; color:var(--ink); font-weight:600; font-size:18px; letter-spacing:-.01em; min-height:44px}
+.topbar .wrap{display:flex; align-items:center; gap:var(--s-24); height:64px}
+.brand{display:inline-flex; align-items:center; gap:var(--s-8); color:var(--ink); font-weight:600; font-size:18px; letter-spacing:-.01em; min-height:44px}
 .brand i{width:12px; height:12px; border-radius:50%; background:var(--primary)}
-.topnav{display:flex; gap:4px; margin-left:8px}
-.topnav a{color:var(--ink); font-size:14px; font-weight:500; padding:12px 12px; min-height:44px; display:flex; align-items:center; border-radius:var(--pill)}
+.topnav{display:flex; gap:var(--s-4); margin-left:var(--s-8)}
+.topnav a{color:var(--ink); font-size:14px; font-weight:500; padding:12px; min-height:44px; display:flex; align-items:center; border-radius:var(--r-sm)}
 .topbar .btn{margin-left:auto}
 
-/* ── Герой: тёмная редакционная полоса, слева тезис, справа стопка карточек
-   продукта — большой кадр флота и поверх него карточка вердикта из демо.    ── */
-.hero{padding:clamp(56px,7vw,96px) 0 0; overflow:hidden}
-.hero .wrap{display:grid; grid-template-columns:minmax(0,.95fr) minmax(0,1.15fr); gap:56px; align-items:center; padding-bottom:clamp(72px,8vw,120px)}
-.hero h1{margin-bottom:24px}
-.hero .lede{margin-bottom:32px}
-.hero-note{font-size:13px; color:var(--on-dark-soft); margin:16px 0 0}
-.hero-note b{color:var(--on-dark); font-weight:500}
-.stack{position:relative; display:block; color:inherit}
-.card-dark{background:var(--surface-dark-elevated); border-radius:var(--r-xl); padding:16px}
-.card-dark img{border-radius:var(--r-md)}
-.verdict{position:absolute; right:-16px; bottom:-40px; width:min(320px,80%); background:var(--canvas); color:var(--ink); border-radius:var(--r-xl); padding:24px; transform:rotate(-2deg); box-shadow:var(--shadow)}
-.verdict-head{display:flex; justify-content:space-between; align-items:baseline; gap:12px; font-size:13px; color:var(--body); margin-bottom:8px}
-.verdict-head .num{color:var(--ink); font-size:14px}
-.verdict-state{font-size:32px; line-height:1.1; letter-spacing:-.02em; color:var(--down); margin-bottom:16px}
-.verdict dl{margin:0; display:grid; grid-template-columns:1fr auto; row-gap:6px; column-gap:16px; font-size:13px; color:var(--body); border-top:1px solid var(--hairline-soft); padding-top:12px}
+/* ── Герой: светлая бумажная полоса. Композиция намеренно несимметрична:
+   заголовок держит всю ширину, ниже — две двери разного веса.            ── */
+.hero{background:var(--surface-soft); border-bottom:1px solid var(--hairline); padding:clamp(48px,6vw,80px) 0 clamp(56px,7vw,88px)}
+.hero-top{display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,.52fr); gap:var(--s-56); align-items:end}
+/* Ширину заголовка держит колонка сетки, а не `ch`: ch — единица шрифта,
+   и на подмене Golos точка переноса уезжала, сдвигая всё ниже (CLS 0,056). */
+.hero h1{margin-bottom:var(--s-24)}
+.hero .lede{margin-bottom:var(--s-8)}
+.hero-note{font-size:14px; color:var(--muted); margin:0; max-width:52em}
+.hero-note b{color:var(--ink); font-weight:500}
+/* Паспорт демо-парка: не выдуманные метрики, а состав той базы, которая
+   стоит за обеими дверями. Заодно правая колонка перестаёт быть пустой. */
+.spec{margin:0; border-top:1px solid var(--hairline)}
+.spec>div{display:flex; justify-content:space-between; align-items:baseline; gap:var(--s-16); padding:10px 0; border-bottom:1px solid var(--hairline)}
+.spec dt{font-family:var(--mono); font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted)}
+.spec dd{margin:0; font-size:15px; color:var(--ink); text-align:right}
+.spec-title{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 var(--s-12)}
+
+/* ── Две двери: одна и та же демо-база, два разных способа её открыть.
+   Веса намеренно разные — стенд крупнее и с кадром, снимок тише.        ── */
+.doors{display:grid; grid-template-columns:minmax(0,1.32fr) minmax(0,.85fr); gap:var(--s-24); align-items:start; margin-top:var(--s-40)}
+.door{display:flex; flex-direction:column; border-radius:var(--r-xl); padding:var(--s-24); color:var(--ink)}
+.door-live{background:var(--canvas); box-shadow:var(--lift); border:1px solid var(--hairline-soft)}
+.door-static{background:transparent; border:1px solid var(--hairline)}
+.door-kind{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 var(--s-8)}
+.door-live .door-kind{color:var(--primary)}
+.door h2{font-size:clamp(24px,2.4vw,30px); line-height:1.12; letter-spacing:-.02em; margin-bottom:var(--s-12)}
+.door-static h2{font-size:22px}
+.door p{color:var(--body); margin:0 0 var(--s-16)}
+.door-facts{list-style:none; margin:0 0 var(--s-24); padding:0; display:grid; gap:var(--s-8); font-size:15px; color:var(--body)}
+.door-facts li{padding-left:22px; position:relative}
+.door-facts li::before{content:"·"; position:absolute; left:6px; top:-1px; color:var(--muted); font-weight:600}
+.door .btn{align-self:flex-start; margin-top:auto}
+.door-note{font-size:13px; color:var(--muted); margin:var(--s-12) 0 0}
+/* Кадр стенда: скриншот в рамке, поверх — карточка вердикта из того же демо.
+   Сдвиг и наклон ломают симметрию «текст слева, виджет справа». */
+.door-shot{position:relative; margin:0 0 var(--s-24)}
+.door-shot img{border-radius:var(--r-md); box-shadow:var(--outline)}
+.verdict{position:absolute; left:-12px; bottom:-28px; width:min(300px,78%); background:var(--canvas); border-radius:var(--r-lg); padding:var(--s-16) var(--s-16) var(--s-12); transform:rotate(-1.5deg); box-shadow:var(--lift); border:1px solid var(--hairline-soft)}
+.verdict-head{display:flex; justify-content:space-between; align-items:baseline; gap:var(--s-12); font-size:12px; color:var(--muted); margin-bottom:var(--s-4)}
+.verdict-head .num{color:var(--ink); font-size:13px}
+.verdict-state{font-size:26px; line-height:1.15; letter-spacing:-.02em; color:var(--down); margin-bottom:var(--s-12)}
+.verdict dl{margin:0; display:grid; grid-template-columns:1fr auto; row-gap:var(--s-4); column-gap:var(--s-16); font-size:12px; color:var(--body); border-top:1px solid var(--hairline-soft); padding-top:var(--s-8)}
 .verdict dd{margin:0; text-align:right; color:var(--ink)}
 .verdict dd.down{color:var(--down)}
-.verdict-why{font-size:13px; color:var(--body); margin:14px 0 0; padding-top:12px; border-top:1px solid var(--hairline-soft)}
+.door-shot-pad{padding-bottom:var(--s-24)}
 
 /* ── Сигнатура: лестница состояний. Единственная анимация на странице — она
    несёт смысл продукта: машина не ломается вдруг, она проходит состояния.  ── */
-.ladder{border-bottom:1px solid var(--hairline); padding:28px 0}
-.ladder-note{font-size:14px; color:var(--body); margin:0 0 18px}
-.ladder-line{position:relative; height:2px; margin:0 0 12px; background:linear-gradient(90deg,var(--up),var(--yellow),var(--down)); container-type:inline-size; border-radius:2px}
+.ladder{border-bottom:1px solid var(--hairline); padding:var(--s-24) 0}
+.ladder-note{font-size:14px; color:var(--body); margin:0 0 var(--s-16)}
+.ladder-line{position:relative; height:2px; margin:0 0 var(--s-12); background:linear-gradient(90deg,var(--up),var(--yellow),var(--down)); container-type:inline-size; border-radius:2px}
 .ladder-dot{position:absolute; top:50%; left:1%; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%; background:var(--down); box-shadow:0 0 0 5px rgba(207,32,47,.14); animation:slide 9s cubic-bezier(.6,0,.4,1) infinite alternate}
 @keyframes slide{from{transform:translateX(0)}to{transform:translateX(98cqw)}}
-.ladder-stops{display:flex; justify-content:space-between; gap:8px; font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--body)}
+.ladder-stops{display:flex; justify-content:space-between; gap:var(--s-8); font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
 
-/* ── Четыре вопроса инженера: 2×2 карточки, каждая ведёт в свой экран демо ── */
-.lead-def{font-size:18px; max-width:48em; color:var(--body)}
+/* ── Четыре вопроса инженера: 2×2 карточки, каждая ведёт в свой экран ── */
+.lead-def{font-size:18px; line-height:1.55; max-width:46em; color:var(--body); text-wrap:pretty}
 .lead-def b{color:var(--ink); font-weight:600}
-.grid-2{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px}
-.grid-3{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px}
-.card{background:var(--canvas); color:var(--ink); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:32px; display:flex; flex-direction:column; gap:12px}
-.card h3{font-size:22px; line-height:1.2; letter-spacing:-.01em; font-weight:400}
+.grid-2{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--s-24)}
+.grid-3{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s-24)}
+.card{background:var(--canvas); color:var(--ink); border:1px solid var(--hairline); border-radius:var(--r-lg); padding:var(--s-32); display:flex; flex-direction:column; gap:var(--s-12)}
+.card h3{font-size:21px; line-height:1.2; letter-spacing:-.01em; font-weight:400}
 .card p{color:var(--body); margin:0}
 .card .link-cta{margin-top:auto}
-.card-featured{grid-column:1 / -1; background:var(--surface-dark); color:var(--on-dark); border-color:transparent; flex-direction:row; align-items:center; gap:48px}
-.card-featured p{color:var(--on-dark-soft)}
-.card-featured h3{flex:0 0 38%}
-.card-featured .link-cta{color:var(--on-dark); margin:0}
-.questions{margin-top:48px}
+/* Пятая карточка — не «тёмная», а шире и на бумаге: вес даёт ширина и рамка. */
+.card-featured{grid-column:1 / -1; background:var(--surface-soft); border-color:var(--hairline); flex-direction:row; align-items:flex-start; gap:var(--s-40)}
+.card-featured h3{flex:0 0 34%; font-size:24px}
+.card-featured .link-cta{margin:0}
+.questions{margin-top:var(--s-40)}
 
-/* ── Демо за три минуты: сценарий настоящий, поэтому шаги нумерованные ── */
-.tour{counter-reset:step; list-style:none; margin:40px 0 0; padding:0}
+/* ── Что посмотреть: сценарий настоящий, поэтому шаги нумерованные ── */
+.tour{counter-reset:step; list-style:none; margin:var(--s-32) 0 0; padding:0}
 .tour li{counter-increment:step; display:flex}
-.tour .card{border-color:transparent; padding:0; overflow:hidden; flex:1}
+.tour .card{border-color:var(--hairline); padding:0; overflow:hidden; flex:1}
 .tour img{border-bottom:1px solid var(--hairline-soft)}
-.tour-body{padding:24px 28px 28px; display:flex; flex-direction:column; gap:10px; flex:1}
-.tour-body::before{content:counter(step) " · " attr(data-time); font-family:var(--mono); font-size:12px; color:var(--body); letter-spacing:.04em}
-.tour h3{font-size:20px; font-weight:600}
-.tour-more{margin-top:32px; font-size:14px; color:var(--body)}
-.tour-more a{margin-right:14px; min-height:auto; display:inline}
-.demo-cta{margin-top:40px; align-items:center}
-.demo-cta .body{font-size:14px}
+.tour-body{padding:var(--s-24); display:flex; flex-direction:column; gap:var(--s-8); flex:1}
+.tour-body::before{content:counter(step) " · " attr(data-time); font-family:var(--mono); font-size:12px; color:var(--muted); letter-spacing:.04em}
+.tour h3{font-size:19px; font-weight:600}
+.tour-more{margin-top:var(--s-24); font-size:14px; color:var(--body)}
+.tour-more a{margin-right:14px; display:inline}
+.demo-cta{margin-top:var(--s-32); align-items:center}
+.demo-cta .body{font-size:14px; max-width:34em}
 
 /* ── Витрина: кадр слева, разбор справа, чередование ── */
-.row{display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,.8fr); gap:56px; align-items:center; margin-top:56px}
-.row:first-of-type{margin-top:48px}
+.row{display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,.8fr); gap:var(--s-56); align-items:center; margin-top:var(--s-56)}
+.row:first-of-type{margin-top:var(--s-40)}
 .row.flip{grid-template-columns:minmax(0,.8fr) minmax(0,1.5fr)}
 .row.flip .row-copy{order:-1}
-.row-copy h3{font-size:28px; font-weight:400; line-height:1.15; letter-spacing:-.02em; margin:12px 0 12px}
+.row-copy h3{font-size:26px; font-weight:400; line-height:1.15; letter-spacing:-.02em; margin:var(--s-12) 0}
 .row-copy p{color:var(--body)}
-.row-copy .badge.down{color:var(--down); background:var(--canvas); border:1px solid var(--hairline)}
-.frame{margin:0; display:block; background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:12px; color:var(--ink)}
+.row-copy .badge.down{color:var(--down); background:var(--canvas); border:1px solid var(--down)}
+.frame{margin:0; display:block; background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:var(--s-12); color:var(--ink)}
 .frame figure{margin:0}
-.frame img{border-radius:var(--r-md)}
-.frame figcaption{font-size:13px; color:var(--body); padding:12px 8px 2px}
+.frame img{border-radius:var(--r-md); box-shadow:var(--outline)}
+.frame figcaption{font-size:13px; color:var(--muted); padding:var(--s-12) var(--s-8) 2px}
 
 /* ── Как устроено ── */
-.pipeline{margin:40px 0 8px; width:100%; height:auto}
+.pipeline{margin:var(--s-32) 0 var(--s-8); width:100%; height:auto}
 .ledger{margin:0; border-top:1px solid var(--hairline)}
-.ledger>div{display:grid; grid-template-columns:200px minmax(0,1fr); gap:24px; padding:24px 0; border-bottom:1px solid var(--hairline)}
-.ledger dt{font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--primary); padding-top:4px}
+.ledger>div{display:grid; grid-template-columns:200px minmax(0,1fr); gap:var(--s-24); padding:var(--s-24) 0; border-bottom:1px solid var(--hairline)}
+.ledger dt{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--primary); padding-top:4px}
 .ledger dd{margin:0}
-.ledger dd p{color:var(--body); margin:6px 0 0; max-width:56em}
-.cmp-wrap{overflow-x:auto; margin-top:32px; background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-lg)}
+.ledger dd p{color:var(--body); margin:6px 0 0; max-width:54em}
+.cmp-wrap{overflow-x:auto; margin-top:var(--s-32); background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-lg)}
 table.cmp{width:100%; border-collapse:collapse; font-size:15px; min-width:640px}
 table.cmp th,table.cmp td{padding:14px 20px; text-align:left; border-bottom:1px solid var(--hairline); vertical-align:top}
-table.cmp thead th{font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--body)}
+table.cmp thead th{font-family:var(--mono); font-size:12px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
 table.cmp tbody tr:last-child td{border-bottom:none}
 table.cmp td:first-child{color:var(--body)}
 table.cmp td:last-child{font-weight:500}
 
 /* ── Скачать ── */
-.dl{display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr); gap:56px; align-items:start; margin-top:16px}
+.dl{display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr); gap:var(--s-56); align-items:start; margin-top:var(--s-16)}
 ol.steps{list-style:none; counter-reset:s; margin:0; padding:0; border-top:1px solid var(--hairline)}
-ol.steps li{counter-increment:s; display:grid; grid-template-columns:48px minmax(0,1fr); gap:16px; padding:24px 0; border-bottom:1px solid var(--hairline)}
-ol.steps li::before{content:counter(s); font-family:var(--mono); font-size:28px; line-height:1; color:var(--primary)}
+ol.steps li{counter-increment:s; display:grid; grid-template-columns:48px minmax(0,1fr); gap:var(--s-16); padding:var(--s-24) 0; border-bottom:1px solid var(--hairline)}
+ol.steps li::before{content:counter(s); font-family:var(--mono); font-size:26px; line-height:1; color:var(--primary)}
 ol.steps p{color:var(--body); margin:4px 0 0}
-.dl-aside{position:sticky; top:88px; background:var(--surface-soft); border-radius:var(--r-xl); padding:32px}
-.dl-aside .cta-row{flex-direction:column; align-items:stretch; margin-top:20px}
+.dl-aside{position:sticky; top:88px; background:var(--surface-soft); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:var(--s-32)}
+.dl-aside .cta-row{flex-direction:column; align-items:stretch; margin-top:var(--s-16)}
 .dl-aside p{color:var(--body); font-size:14px}
-code{font-family:var(--mono); font-size:13px; background:var(--surface-strong); border-radius:4px; padding:2px 6px; color:var(--ink)}
-.full-list{list-style:none; padding:0; margin:0 0 32px; display:grid; gap:14px; max-width:60em}
+code{font-family:var(--mono); font-size:13px; background:var(--surface-strong); border-radius:var(--r-sm); padding:2px 6px; color:var(--ink)}
+.full-list{list-style:none; padding:0; margin:0 0 var(--s-32); display:grid; gap:14px; max-width:58em}
 .full-list li{padding-left:28px; position:relative; color:var(--body)}
 .full-list li::before{content:"+"; position:absolute; left:0; color:var(--primary); font-family:var(--mono); font-weight:500}
 .full-list b{color:var(--ink); font-weight:600}
-.contact{font-size:14px; color:var(--body); margin-top:16px}
+.contact{font-size:14px; color:var(--body); margin-top:var(--s-16)}
 
 /* ── Поддержка: карточки способов, QR внутри ── */
-.support-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:20px; margin:32px 0 40px; max-width:60em}
-.support-card{background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-xl); padding:28px; display:flex; flex-direction:column; align-items:flex-start; gap:14px}
+.support-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:var(--s-24); margin:var(--s-32) 0 var(--s-40); max-width:58em}
+.support-card{background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-lg); padding:var(--s-24); display:flex; flex-direction:column; align-items:flex-start; gap:14px}
 .support-card p{color:var(--body); margin:0}
 .support-card .btn{margin-top:auto}
-.support-qr{width:220px; height:220px; border-radius:var(--r-lg); background:#fff; padding:8px}
+.support-qr{width:220px; height:220px; border-radius:var(--r-md); background:#fff; padding:8px; box-shadow:var(--outline)}
 .support-note{font-size:14px}
-.support-alt-title{margin-top:8px}
+.support-alt-title{margin-top:var(--s-8)}
 
 /* ── Вопросы ── */
-.faq{display:grid; gap:12px; margin-top:32px; max-width:60em}
-.faq details{border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--canvas); padding:0 24px}
-.faq summary{cursor:pointer; padding:16px 0; font-weight:600; list-style:none; display:flex; gap:12px; align-items:center; min-height:56px}
+.faq{display:grid; gap:var(--s-12); margin-top:var(--s-32); max-width:58em}
+.faq details{border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--canvas); padding:0 var(--s-24)}
+.faq summary{cursor:pointer; padding:var(--s-16) 0; font-weight:600; list-style:none; display:flex; gap:var(--s-12); align-items:center; min-height:56px}
 .faq summary::-webkit-details-marker{display:none}
 .faq summary::after{content:"+"; margin-left:auto; font-family:var(--mono); color:var(--primary); font-size:20px}
 .faq details[open] summary::after{content:"–"}
 .faq details[open] summary{border-bottom:1px solid var(--hairline-soft)}
-.faq p{color:var(--body); margin:16px 0 20px}
+.faq p{color:var(--body); margin:var(--s-16) 0 20px}
 
 /* ── Финальный призыв и подвал ── */
-.cta-band{text-align:center}
-.cta-band .display-md{max-width:20em; margin:0 auto 16px}
-.cta-band .lede{margin:0 auto 32px}
-.cta-band .cta-row{justify-content:center}
-footer{padding:64px 0 32px; color:var(--body); font-size:14px}
-.foot-grid{display:grid; grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,.7fr)); gap:32px; padding-bottom:40px; border-bottom:1px solid var(--hairline)}
+.cta-band .display-md{max-width:22em; margin-bottom:var(--s-16)}
+.cta-band .lede{margin-bottom:var(--s-24)}
+.cta-band .hero-note{margin-top:var(--s-16)}
+footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; border-top:1px solid var(--hairline)}
+.foot-grid{display:grid; grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,.7fr)); gap:var(--s-32); padding-bottom:var(--s-40); border-bottom:1px solid var(--hairline)}
 .foot-grid p{max-width:32em}
-.foot-grid h3{font-size:14px; font-weight:600; color:var(--ink); margin-bottom:12px}
+.foot-grid h3{font-size:14px; font-weight:600; color:var(--ink); margin-bottom:var(--s-12)}
 .foot-grid ul{list-style:none; margin:0; padding:0; display:grid; gap:10px}
 .foot-grid a{color:var(--body)}
-.legal{display:flex; flex-wrap:wrap; justify-content:space-between; gap:12px; padding-top:24px; font-size:13px; color:var(--body)}
+.legal{display:flex; flex-wrap:wrap; justify-content:space-between; gap:var(--s-12); padding-top:var(--s-24); font-size:13px; color:var(--muted)}
 .legal a{color:var(--body)}
 
 /* Наведение — только там, где есть настоящий курсор: на тач-экране :hover
-   залипает. Один уровень тени, никаких подъёмов и подсветок. */
-@media (hover:hover){
+   залипает после тапа и врёт про интерактивность. Подсветка только у того,
+   что действительно нажимается. */
+@media (hover:hover) and (pointer:fine){
   a:hover{text-decoration:underline}
-  .btn:hover,.brand:hover,.topnav a:hover,.stack:hover,.frame:hover,.card:hover{text-decoration:none}
+  .btn:hover,.brand:hover,.topnav a:hover,.door:hover,.frame:hover,.tour .card:hover{text-decoration:none}
   .btn-primary:hover{background:var(--primary-active)}
-  .btn:hover:not(.btn-primary):not(.btn-outline-dark){background:var(--hairline)}
-  .btn-outline-dark:hover{background:var(--surface-dark-elevated)}
+  .btn:hover:not(.btn-primary){background:var(--hairline)}
+  .btn-outline:hover{background:var(--surface-soft)}
   .topnav a:hover{background:var(--surface-strong)}
-  .card:hover,.frame:hover{box-shadow:var(--shadow)}
-  .tour .card{transition:box-shadow .2s ease}
-  .frame{transition:box-shadow .2s ease}
+  .door-live:hover,.frame:hover,.tour .card:hover{border-color:var(--primary)}
+  .door-static:hover{border-color:var(--ink)}
+  .door,.frame,.tour .card{transition:border-color 140ms cubic-bezier(.2,0,0,1)}
 }
-@media (max-width:1024px){
-  h1{font-size:clamp(38px,6vw,56px)}
-  /* Семь пунктов меню в строку на 1024 не влезают и растягивают страницу
-     по горизонтали. Второстепенные скрываем — они есть в подвале и в тексте. */
+@media (max-width:1100px){
+  /* Семь пунктов меню в строку не влезают и растягивают страницу по
+     горизонтали. Второстепенные скрываем — они есть в подвале и в тексте. */
   .topnav a[href="#shots"],.topnav a[href="#how"]{display:none}
-  .hero .wrap{grid-template-columns:1fr; gap:40px}
-  .verdict{position:static; width:auto; transform:none; margin-top:16px; box-shadow:none}
+  .hero-top{grid-template-columns:1fr; gap:var(--s-32)}
+  .doors{grid-template-columns:1fr; gap:var(--s-32)}
+  .verdict{position:static; width:auto; transform:none; margin-top:var(--s-12); box-shadow:none; border-color:var(--hairline); padding-left:0; padding-right:0; border-left:0; border-right:0; border-bottom:0; border-radius:0}
+  .door-shot-pad{padding-bottom:0}
   .grid-3{grid-template-columns:1fr}
-  .card-featured{flex-direction:column; align-items:flex-start; gap:12px}
+  .card-featured{flex-direction:column; gap:var(--s-12)}
   .card-featured h3{flex:none}
-  .row,.row.flip{grid-template-columns:1fr; gap:24px}
+  .row,.row.flip{grid-template-columns:1fr; gap:var(--s-24)}
   .row.flip .row-copy{order:0}
-  .dl{grid-template-columns:1fr; gap:32px}
+  .dl{grid-template-columns:1fr; gap:var(--s-32)}
   .dl-aside{position:static}
   .foot-grid{grid-template-columns:1fr 1fr}
 }
-@media (max-width:768px){
+@media (max-width:820px){
   .topnav{display:none}
   .grid-2{grid-template-columns:1fr}
-  .ledger>div{grid-template-columns:1fr; gap:4px}
-  .ladder-stops{font-size:10px; letter-spacing:.02em}
+  .ledger>div{grid-template-columns:1fr; gap:var(--s-4)}
   .foot-grid{grid-template-columns:1fr}
-  .card{padding:24px}
+  .card{padding:var(--s-24)}
 }
 @media (max-width:480px){
   .ladder-stops span:nth-child(2),.ladder-stops span:nth-child(4){display:none}
   .btn-lg{width:100%}
+  .door .btn{align-self:stretch}
 }
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   *,*::before,*::after{animation:none !important; transition:none !important}
+  .btn:active{scale:1}
 }
 </style>
 </head>
@@ -476,58 +520,90 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
     <a class="brand" href="#top"><i aria-hidden="true"></i>SRP</a>
     <nav class="topnav" aria-label="Разделы">
       <a href="#what">Что это</a>
-      <a href="#demo">Демо</a>
+      <a href="#demo">Что посмотреть</a>
       <a href="#shots">Экраны</a>
       <a href="#how">Как устроено</a>
       <a href="#zabbix">Zabbix</a>
-      <a href="#download">Скачать</a>
+      <a href="#download">Поставить у себя</a>
       <a href="#faq">Вопросы</a>
       <a href="#support">Поддержать</a>
       <a href="https://github.com/SergioTheFirst/srp">GitHub</a>
     </nav>
-    <a class="btn btn-primary" href="https://srp-private.vercel.app/">Live просмотр</a>
+    <a class="btn btn-primary" href="https://srp-private.vercel.app/">Открыть стенд</a>
   </div>
 </header>
 
 <main id="top" tabindex="-1">
 
-<section class="hero dark">
+<section class="hero">
   <div class="wrap">
-    <div class="hero-copy">
-      <div class="badge-row">
-        <span class="badge">рабочее место инженера</span>
-        <span class="badge">self-hosted</span>
-        <span class="badge">открытый код</span>
+    <div class="hero-top">
+      <div>
+        <div class="badge-row">
+          <span class="badge">рабочее место инженера</span>
+          <span class="badge">self-hosted</span>
+          <span class="badge">открытый код</span>
+        </div>
+        <h1>Весь офисный парк на одном экране.</h1>
+        <p class="lede">
+          SRP — инструмент инженера, который отвечает за компьютеры, принтеры и сеть офиса.
+          Агент без единой зависимости собирает телеметрию с Windows-ПК, сервер опрашивает
+          принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины и говорит, что делать.
+        </p>
       </div>
-      <h1>Весь офисный парк на одном экране.</h1>
-      <p class="lede">
-        SRP — инструмент инженера, который отвечает за компьютеры, принтеры и сеть офиса.
-        Агент без единой зависимости собирает телеметрию с Windows-ПК, сервер опрашивает
-        принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины и говорит, что делать.
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-primary btn-lg" href="demo/">Открыть демо</a>
-        <a class="btn btn-outline-dark btn-lg" href="#download">Поставить у себя</a>
-      </div>
-      <p class="hero-note">Демо — <b>10 машин</b>, <b>45 дней</b> настоящей истории телеметрии, без регистрации. Это тот же дашборд, что увидит инженер у себя.</p>
-    </div>
-    <a class="stack" href="demo/" aria-label="Открыть демо: список парка и карточка машины BUH-02 в состоянии «предотказ»">
-      <div class="card-dark">
-        <img src="img/fleet.png" width="1600" height="900" fetchpriority="high" decoding="async"
-          alt="Список парка: состояние, срок до ухудшения и главный фактор риска по каждой машине">
-      </div>
-      <div class="verdict" aria-hidden="true">
-        <div class="verdict-head"><span class="num">BUH-02</span><span>финансовый отдел · HDD 1 ТБ</span></div>
-        <div class="verdict-state">предотказ</div>
-        <dl>
-          <dt>окно до ухудшения</dt><dd class="num down">≤ 7 дней</dd>
-          <dt>повреждения</dt><dd class="num">100 / 100</dd>
-          <dt>устойчивость</dt><dd class="num">0 / 100</dd>
-          <dt>наблюдаемость</dt><dd class="num">75 / 100</dd>
+      <div>
+        <p class="spec-title">что стоит за обеими дверями</p>
+        <dl class="spec">
+          <div><dt>компьютеры</dt><dd class="num">10</dd></div>
+          <div><dt>история</dt><dd><span class="num">45</span> дней</dd></div>
+          <div><dt>принтеры</dt><dd class="num">3</dd></div>
+          <div><dt>узлы сети</dt><dd><span class="num">16</span>, связей <span class="num">25</span></dd></div>
+          <div><dt>регистрация</dt><dd>не нужна</dd></div>
+          <div><dt>машины</dt><dd>вымышленные</dd></div>
         </dl>
-        <p class="verdict-why">124 переназначенных сектора, 18 в ожидании, прошивка предсказывает отказ диска.</p>
       </div>
-    </a>
+    </div>
+    <p class="hero-note">Парк один, способа посмотреть два — и они разные по сути, а не по названию.</p>
+
+    <div class="doors">
+      <a class="door door-live" href="https://srp-private.vercel.app/"
+         aria-label="Открыть рабочий стенд — запущенный сервер SRP с демо-парком">
+        <p class="door-kind">дверь первая · рабочий стенд</p>
+        <h2>Сесть за настоящий сервер</h2>
+        <p>Запущенный SRP, тот же, что встанет у вас. Считает живой движок: нажимается всё —
+        фильтры, сортировки, переход в карточку машины, карта сети, выгрузка в CSV.</p>
+        <div class="door-shot door-shot-pad">
+          <img src="img/fleet.png" width="1600" height="900" fetchpriority="high" decoding="async"
+            alt="Экран стенда: список парка с состоянием, сроком до ухудшения и главным фактором риска по каждой машине">
+          <div class="verdict">
+            <div class="verdict-head"><span class="num">BUH-02</span><span>финансовый отдел · HDD 1 ТБ</span></div>
+            <div class="verdict-state">предотказ</div>
+            <dl>
+              <dt>окно до ухудшения</dt><dd class="num down">≤ 7 дней</dd>
+              <dt>повреждения</dt><dd class="num">100 / 100</dd>
+              <dt>устойчивость</dt><dd class="num">0 / 100</dd>
+              <dt>наблюдаемость</dt><dd class="num">75 / 100</dd>
+            </dl>
+          </div>
+        </div>
+        <span class="btn btn-primary btn-lg">Открыть рабочий стенд</span>
+        <p class="door-note">Отдельный адрес, srp-private.vercel.app. Сервер бесплатный и без посетителей засыпает — первая страница просыпается несколько секунд, дальше быстро.
+        Только чтение: сломать там нечего.</p>
+      </a>
+
+      <div class="door door-static">
+        <p class="door-kind">дверь вторая · снимок экранов</p>
+        <h2>Просто полистать</h2>
+        <p>36 страниц того же дашборда, сохранённых как есть и лежащих на этом сайте.
+        Открываются мгновенно и работают всегда — но это фотографии: нажимать в них нечего.</p>
+        <ul class="door-facts">
+          <li>тот же парк и те же цифры, что на стенде</li>
+          <li>ничего не ждёт и не просыпается</li>
+          <li>из любой страницы снимка есть переход на стенд</li>
+        </ul>
+        <a class="btn btn-outline" href="demo/">Посмотреть снимок экранов</a>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -542,9 +618,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </div>
 
-<section class="band" id="what">
+<section class="band-lg" id="what">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Что это</span></p>
+    <p class="meta">01 · что это</p>
     <h2>Рабочее место инженера, который отвечает за офисный парк</h2>
     <p class="lead-def">
       <b>SRP — self-hosted система, в которой компьютеры, принтеры и сеть офиса видны на одном
@@ -560,45 +636,45 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         <h3>Что сломается следующим?</h3>
         <p>Весь парк по риску: у каждой машины состояние, окно до ухудшения и главный
         фактор словами. Не «диск на 90 %», а «предотказ, ≤ 7 дней, 124 переназначенных сектора».</p>
-        <a class="link-cta" href="demo/">Смотреть флот в демо</a>
+        <a class="link-cta" href="demo/">Открыть экран флота</a>
       </article>
       <article class="card" role="listitem">
         <h3>Что кончится раньше, чем я вспомню?</h3>
         <p>Тонер по SNMP, место на диске, ресурс SSD — с датой, когда закончится. Там, где
         физической границы отказа нет, SRP показывает только направление и не выдумывает дату.</p>
-        <a class="link-cta" href="demo/printers.html">Смотреть принтеры в демо</a>
+        <a class="link-cta" href="demo/printers.html">Открыть экран принтеров</a>
       </article>
       <article class="card" role="listitem">
         <h3>Что к чему подключено?</h3>
         <p>Роутер, коммутатор, точки доступа, компьютеры и принтеры — граф собирается из SNMP,
         LLDP и наблюдений самих агентов. Проводное отличается от беспроводного, у каждой связи
         своя уверенность.</p>
-        <a class="link-cta" href="demo/netmap.html">Смотреть карту сети в демо</a>
+        <a class="link-cta" href="demo/netmap.html">Открыть карту сети</a>
       </article>
       <article class="card" role="listitem">
         <h3>Кто сколько печатает?</h3>
         <p>Компьютер → принтер → страницы: серии по дням, журнал записей, фильтры по отделам,
         выгрузка в CSV. Аппаратные принтеры сами сопоставляются с очередями печати на машинах.</p>
-        <a class="link-cta" href="demo/print.html">Смотреть учёт печати в демо</a>
+        <a class="link-cta" href="demo/print.html">Открыть учёт печати</a>
       </article>
       <article class="card card-featured" role="listitem">
         <h3>И пятый вопрос: можно ли верить этим данным?</h3>
         <div>
           <p>У каждого источника телеметрии своя судьба: он может устареть, начать врать или замолчать. Тогда он не участвует в выводах, и на экране это видно. SRP скорее скажет
           «неизвестно», чем нарисует уверенный ноль.</p>
-          <a class="link-cta" href="demo/pipeline.html">Смотреть внутренности сервера</a>
+          <a class="link-cta" href="demo/pipeline.html">Открыть внутренности сервера</a>
         </div>
       </article>
     </div>
   </div>
 </section>
 
-<section class="band band-soft" id="demo">
+<section class="band band-soft band-rule" id="demo">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Демо</span></p>
-    <h2>Три минуты в демо — и понятно, как это работает</h2>
-    <p class="lede">Порядок неслучайный: сначала польза, потом инженерия. Каждый шаг открывает
-    настоящий экран дашборда на вымышленном парке.</p>
+    <p class="meta">02 · что посмотреть</p>
+    <h2>Три минуты — и понятно, как это работает</h2>
+    <p class="lede">Порядок неслучайный: сначала польза, потом инженерия. Ссылки ниже открывают
+    снимок экранов — он мгновенный. Покликать по-настоящему можно на стенде.</p>
 
     <ol class="tour grid-3" role="list">
       <li>
@@ -608,7 +684,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
             <h3>Флот по риску</h3>
             <p>Десять машин, отсортированы по риску. Одна — в предотказе со сроком ≤ 7 дней:
             не «диск на 90 %», а состояние и срок.</p>
-            <span class="link-cta">Открыть флот</span>
+            <span class="link-cta">Открыть экран флота</span>
           </div>
         </a>
       </li>
@@ -619,7 +695,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
             <h3>Умирающий диск</h3>
             <p>Карточка BUH-02: повреждения 100, устойчивость 0, наблюдаемость 75. Причина словами,
             прогноз с датой там, где есть физическая граница, — и только направление там, где её нет.</p>
-            <span class="link-cta">Открыть карточку</span>
+            <span class="link-cta">Открыть карточку BUH-02</span>
           </div>
         </a>
       </li>
@@ -630,31 +706,31 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
             <h3>Карта сети</h3>
             <p>Роутер — коммутатор — точка доступа, машины и принтеры. Беспроводная связь нарисована
             иначе, чем проводная, у каждой — своя уверенность.</p>
-            <span class="link-cta">Открыть карту</span>
+            <span class="link-cta">Открыть карту сети</span>
           </div>
         </a>
       </li>
     </ol>
 
-    <p class="tour-more">Ещё в демо:
+    <p class="tour-more">Ещё в снимке:
       <a href="demo/health.html">здоровье парка</a>
       <a href="demo/printers.html">принтеры</a>
       <a href="demo/print.html">учёт печати</a>
       <a href="demo/pipeline.html">внутренности сервера</a>
     </p>
     <div class="cta-row demo-cta">
-      <a class="btn btn-primary btn-lg" href="demo/">Открыть демо целиком</a>
-      <span class="body">Статичная копия на этом сайте открывается мгновенно. Есть и <a href="https://srp-private.vercel.app/">живой сервер</a> — тот же парк, только чтение.</span>
+      <a class="btn btn-primary btn-lg" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a>
+      <span class="body">Разница одна: на стенде вы сами сортируете флот, проваливаетесь в машину и выгружаете CSV, а снимок это уже показал картинками.</span>
     </div>
   </div>
 </section>
 
-<section class="band" id="shots">
+<section class="band-lg" id="shots">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Экраны</span></p>
+    <p class="meta">03 · экраны</p>
     <h2>Что инженер видит на экране</h2>
     <p class="lede">Кадры сняты с демо-парка: десять вымышленных машин с настоящей историей
-    телеметрии. Каждый кадр открывает тот же экран в демо.</p>
+    телеметрии. Каждый кадр открывает тот же экран в снимке.</p>
 
     <div class="row">
       <a class="frame" href="demo/device/demo-buh-02.html">
@@ -724,9 +800,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </section>
 
-<section class="band" id="zabbix">
+<section class="band band-soft band-rule" id="zabbix">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Уже есть Zabbix</span></p>
+    <p class="meta">04 · уже есть Zabbix</p>
     <h2>Если в организации уже стоит Zabbix</h2>
     <p class="lead-def">
       <b>SRP не заменяет Zabbix, а отдаёт ему то, чего у Zabbix нет, — прогноз отказа.</b>
@@ -745,33 +821,33 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       ошибка гасится в фоновом цикле и не касается ни сбора телеметрии, ни расчётов.</li>
     </ul>
     <div class="cta-row">
-      <a class="btn" href="https://github.com/SergioTheFirst/srp/blob/main/docs/zabbix-export.md">Как это настроить</a>
+      <a class="btn btn-outline" href="https://github.com/SergioTheFirst/srp/blob/main/docs/zabbix-export.md">Читать инструкцию по Zabbix</a>
     </div>
   </div>
 </section>
 
-<section class="band band-soft" id="how">
+<section class="band-lg" id="how">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Как устроено</span></p>
+    <p class="meta">05 · как устроено</p>
     <h2>Три части, ни одной лишней</h2>
 
     <svg class="pipeline" viewBox="0 0 900 96" role="img" width="900" height="96"
          aria-label="Агент на Windows отправляет телеметрию серверу, сервер отдаёт дашборд в браузер">
       <defs>
         <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
-          <path d="M0 0 L9 4.5 L0 9 z" fill="#7c828a"/>
+          <path d="M0 0 L9 4.5 L0 9 z" fill="#676d76"/>
         </marker>
       </defs>
-      <g font-family="Golos Text, Segoe UI, sans-serif" font-size="14" fill="#5b616e">
-        <rect x="1" y="24" width="230" height="48" rx="24" fill="#ffffff" stroke="#dee1e6"/>
+      <g font-family="Golos Text, Segoe UI, sans-serif" font-size="14" fill="#4e545f">
+        <rect x="1" y="24" width="230" height="48" rx="12" fill="#ffffff" stroke="#dee1e6"/>
         <text x="116" y="53" text-anchor="middle" fill="#0a0b0d">агент · Windows</text>
-        <line x1="240" y1="48" x2="325" y2="48" stroke="#7c828a" stroke-width="1.5" marker-end="url(#ar)"/>
+        <line x1="240" y1="48" x2="325" y2="48" stroke="#676d76" stroke-width="1.5" marker-end="url(#ar)"/>
         <text x="282" y="36" text-anchor="middle" font-size="12">HTTP</text>
-        <rect x="335" y="24" width="230" height="48" rx="24" fill="#ffffff" stroke="#dee1e6"/>
+        <rect x="335" y="24" width="230" height="48" rx="12" fill="#ffffff" stroke="#dee1e6"/>
         <text x="450" y="53" text-anchor="middle" fill="#0a0b0d">сервер · FastAPI</text>
-        <line x1="574" y1="48" x2="659" y2="48" stroke="#7c828a" stroke-width="1.5" marker-end="url(#ar)"/>
+        <line x1="574" y1="48" x2="659" y2="48" stroke="#676d76" stroke-width="1.5" marker-end="url(#ar)"/>
         <text x="616" y="36" text-anchor="middle" font-size="12">HTML</text>
-        <rect x="669" y="24" width="230" height="48" rx="24" fill="#0052ff"/>
+        <rect x="669" y="24" width="230" height="48" rx="12" fill="#0052ff"/>
         <text x="784" y="53" text-anchor="middle" fill="#ffffff">дашборд · браузер</text>
       </g>
     </svg>
@@ -822,9 +898,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </section>
 
-<section class="band" id="download">
+<section class="band band-soft band-rule" id="download">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Установка</span></p>
+    <p class="meta">06 · установка</p>
     <h2>Три шага до первого экрана</h2>
     <div class="dl">
       <ol class="steps" role="list">
@@ -851,21 +927,21 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
         </li>
       </ol>
       <aside class="dl-aside">
-        <span class="badge">открытый код · весь парк</span>
-        <p style="margin-top:12px">Ограничения по числу машин нет: сервер принимает весь парк.
+        <span class="badge">открытый код · весь парк</span>
+        <p style="margin-top:12px">Ограничения по числу машин нет: сервер принимает весь парк.
         Лицензия MIT, версия 0.3.0 от 29 августа 2026.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать в Releases</a>
-          <a class="btn" href="demo/">Сначала посмотреть демо</a>
+          <a class="btn btn-outline" href="https://srp-private.vercel.app/">Открыть стенд</a>
         </div>
       </aside>
     </div>
   </div>
 </section>
 
-<section class="band band-soft" id="support">
+<section class="band-lg" id="support">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Поддержать</span></p>
+    <p class="meta">07 · поддержать</p>
     <h2>Проект живёт на добровольные взносы</h2>
     <p class="lede">SRP развивается в свободное время и не продаётся: нет подписок,
     нет платных функций, нет версии «для взрослых» за деньги — весь код и все
@@ -883,7 +959,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </div>
       <div class="support-card">
         <span class="badge">Картой или СБП</span>
-                <p class="support-note">Взносы идут в одно — во время: разбор присланных ошибок,
+        <p class="support-note">Взносы идут в одно — во время: разбор присланных ошибок,
         поддержка новых моделей принтеров и сетевого оборудования, проверка сборок
         на живом парке перед выпуском.</p>
         <a class="btn btn-primary" href="https://pay.cloudtips.ru/p/00d77c6a"
@@ -894,9 +970,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
     <h3 class="support-alt-title">Помочь можно и не деньгами</h3>
     <ul class="full-list" role="list">
       <li><b>Звезда на GitHub</b> — проект становится заметнее, и его находят те, кому он нужен.
-      <a href="https://github.com/SergioTheFirst/srp">Поставить звезду</a>.</li>
+      <a href="https://github.com/SergioTheFirst/srp">Поставить звезду на GitHub</a>.</li>
       <li><b>Сообщить об ошибке или предложить доработку</b> — это ценнее денег.
-      <a href="https://github.com/SergioTheFirst/srp/issues">Открыть issue</a>.</li>
+      <a href="https://github.com/SergioTheFirst/srp/issues">Открыть issue на GitHub</a>.</li>
       <li><b>Рассказать коллеге</b>, который отвечает за парк офисных машин и до сих пор
       узнаёт о сдохшем диске от пользователя.</li>
     </ul>
@@ -905,12 +981,22 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
   </div>
 </section>
 
-<section class="band" id="faq">
+<section class="band band-soft band-rule" id="faq">
   <div class="wrap">
-    <p class="eyebrow"><span class="badge">Вопросы и ответы</span></p>
+    <p class="meta">08 · вопросы и ответы</p>
     <h2>Что обычно спрашивают</h2>
     <div class="faq">
       <details open>
+        <summary>Чем рабочий стенд отличается от снимка экранов?</summary>
+        <p>Это две двери в один и тот же демо-парк. <b>Рабочий стенд</b> — запущенный сервер SRP
+        на отдельном адресе: там всё нажимается, работают фильтры, сортировки, переходы между
+        экранами и выгрузка CSV, а цифры считает настоящий движок. Сервер бесплатный и без посетителей засыпает, поэтому первая страница открывается несколько секунд.
+        <b>Снимок экранов</b> — 36 страниц того же дашборда, сохранённых как обычные файлы на этом сайте: открываются мгновенно и работают всегда, но нажимать в них нечего.
+        Парк один и тот же: 10 вымышленных машин с 45 днями истории, без регистрации.
+        <a href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> ·
+        <a href="demo/">посмотреть снимок экранов</a>.</p>
+      </details>
+      <details>
         <summary>Чем SRP отличается от обычного мониторинга вроде Zabbix?</summary>
         <p>Классический мониторинг отвечает на вопрос «что сломано сейчас» и срабатывает
         по порогам: диск заполнен на 90 % — авария. SRP отвечает на другой вопрос: «что сломается следующим и когда». Он копит историю по каждой машине, считает тренд и срок
@@ -921,7 +1007,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </details>
       <details>
         <summary>Что нужно, чтобы попробовать?</summary>
-        <p>Ничего — <a href="demo/">демо</a> открывается в браузере без регистрации. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора
+        <p>Ничего — <a href="https://srp-private.vercel.app/">стенд</a> открывается в браузере без регистрации. Для установки у себя нужен Python 3.9 или новее на машине сервера и права администратора
         на компьютерах, куда ставится агент. Сервер разворачивается из архива одной командой,
         агент — установщиком, который спрашивает только адрес сервера. Ничего облачного не требуется.</p>
       </details>
@@ -949,20 +1035,23 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </details>
       <details>
         <summary>Сколько это стоит?</summary>
-        <p>Денег — нисколько. Открытая демо-версия принимает до 3 компьютеров и показывает все возможности продукта. Проект не продаётся — ни подписок, ни платных функций. Код открыт по лицензии <a href="https://opensource.org/licenses/MIT">MIT</a>: пользоваться, менять и распространять можно свободно, в том числе коммерчески. Если он экономит вам время — <a href="#support">поддержите разработку</a>.</p>
+        <p>Денег — нисколько. Открытая демо-версия принимает до 3 компьютеров и показывает все возможности продукта. Проект не продаётся — ни подписок, ни платных функций. Код открыт по лицензии <a href="https://opensource.org/licenses/MIT">MIT</a>: пользоваться, менять и распространять можно свободно, в том числе коммерчески. Если он экономит вам время — <a href="#support">поддержите разработку</a>.</p>
       </details>
     </div>
   </div>
 </section>
 
-<section class="band dark cta-band">
+<section class="band band-rule cta-band">
   <div class="wrap">
-    <h2 class="display-md">Откройте демо. Десять машин, 45 дней истории, ни одной регистрации.</h2>
-    <p class="lede">Тот же дашборд, что увидит инженер у себя: флот по риску, карточка умирающего диска, принтеры, карта сети.</p>
+    <h2 class="display-md">Десять машин, 45 дней истории, ни одной регистрации.</h2>
+    <p class="lede">Стенд — это тот же дашборд, что увидит инженер у себя, и в нём всё нажимается.
+    Снимок — те же экраны картинками, если нажимать не хочется.</p>
     <div class="cta-row">
-      <a class="btn btn-primary btn-lg" href="demo/">Открыть демо</a>
-      <a class="btn btn-outline-dark btn-lg" href="https://github.com/SergioTheFirst/srp">Код на GitHub</a>
+      <a class="btn btn-primary btn-lg" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a>
+      <a class="btn btn-outline btn-lg" href="demo/">Посмотреть снимок экранов</a>
     </div>
+    <p class="hero-note">Стенд просыпается несколько секунд — сервер бесплатный.
+    Снимок открывается мгновенно и лежит на этом же сайте.</p>
   </div>
 </section>
 
@@ -978,9 +1067,9 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       <div>
         <h3>Продукт</h3>
         <ul role="list">
-          <li><a href="demo/">Демо</a></li>
-          <li><a href="https://srp-private.vercel.app/">Живой сервер</a></li>
-          <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать</a></li>
+          <li><a href="https://srp-private.vercel.app/">Рабочий стенд</a></li>
+          <li><a href="demo/">Снимок экранов</a></li>
+          <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать сборки</a></li>
           <li><a href="https://github.com/SergioTheFirst/srp">Код на GitHub</a></li>
         </ul>
       </div>
@@ -1001,7 +1090,7 @@ footer{padding:64px 0 32px; color:var(--body); font-size:14px}
       </div>
     </div>
     <div class="legal">
-      <span>© 2026 SRP · лицензия MIT · версия 0.3.0 от 29 августа 2026 · страница обновлена 8 сентября 2026</span>
+      <span>© 2026 SRP · лицензия MIT · версия 0.3.0 от 29 августа 2026 · страница обновлена 15 сентября 2026</span>
       <span><a href="https://j-space.ru/">j-space.ru</a></span>
     </div>
   </div>
