@@ -304,11 +304,13 @@ h3{font-size:18px; font-weight:600; line-height:1.35}
 /* ── Герой: светлая бумажная полоса. Композиция намеренно несимметрична:
    заголовок держит всю ширину, ниже — две двери разного веса.            ── */
 .hero{background:var(--surface-soft); border-bottom:1px solid var(--hairline); padding:clamp(48px,6vw,80px) 0 clamp(56px,7vw,88px)}
-.hero-top{display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,.52fr); gap:var(--s-56); align-items:end}
+.hero-top{display:grid; grid-template-columns:minmax(0,1.18fr) minmax(0,.62fr); gap:var(--s-32) var(--s-40); align-items:stretch}
+.hero-col{display:flex; flex-direction:column; gap:var(--s-32)}
+.hero-col>.spec{flex:1; display:flex; flex-direction:column; justify-content:space-between}
 /* Ширину заголовка держит колонка сетки, а не `ch`: ch — единица шрифта,
    и на подмене Golos точка переноса уезжала, сдвигая всё ниже (CLS 0,056). */
 .hero h1{margin-bottom:var(--s-24)}
-.hero .lede{margin-bottom:var(--s-8)}
+.hero .lede{margin-bottom:0}
 .hero-note{font-size:14px; color:var(--muted); margin:0; max-width:52em}
 .hero-note b{color:var(--ink); font-weight:500}
 /* Паспорт демо-парка: не выдуманные метрики, а состав той базы, которая
@@ -321,7 +323,6 @@ h3{font-size:18px; font-weight:600; line-height:1.35}
 
 /* ── Две двери: одна и та же демо-база, два разных способа её открыть.
    Веса намеренно разные — стенд крупнее и с кадром, снимок тише.        ── */
-.doors{display:grid; grid-template-columns:minmax(0,1.32fr) minmax(0,.85fr); gap:var(--s-24); align-items:start; margin-top:var(--s-40)}
 .door{display:flex; flex-direction:column; border-radius:var(--r-xl); padding:var(--s-24); color:var(--ink)}
 .door-live{background:var(--canvas); box-shadow:var(--lift); border:1px solid var(--hairline-soft)}
 .door-static{background:transparent; border:1px solid var(--hairline)}
@@ -480,7 +481,6 @@ footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; bor
      горизонтали. Второстепенные скрываем — они есть в подвале и в тексте. */
   .topnav a[href="#shots"],.topnav a[href="#how"]{display:none}
   .hero-top{grid-template-columns:1fr; gap:var(--s-32)}
-  .doors{grid-template-columns:1fr; gap:var(--s-32)}
   .verdict{position:static; width:auto; transform:none; margin-top:var(--s-12); box-shadow:none; border-color:var(--hairline); padding-left:0; padding-right:0; border-left:0; border-right:0; border-bottom:0; border-radius:0}
   .door-shot-pad{padding-bottom:0}
   .grid-3{grid-template-columns:1fr}
@@ -538,70 +538,67 @@ footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; bor
 <section class="hero">
   <div class="wrap">
     <div class="hero-top">
-      <div>
-        <div class="badge-row">
-          <span class="badge">рабочее место инженера</span>
-          <span class="badge">self-hosted</span>
-          <span class="badge">открытый код</span>
-        </div>
-        <h1>Весь офисный парк на одном экране.</h1>
-        <p class="lede">
-          SRP — инструмент инженера, который отвечает за компьютеры, принтеры и сеть офиса.
-          Агент без единой зависимости собирает телеметрию с Windows-ПК, сервер опрашивает
-          принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины и говорит, что делать.
-        </p>
-      </div>
-      <div>
-        <p class="spec-title">что стоит за обеими дверями</p>
-        <dl class="spec">
-          <div><dt>компьютеры</dt><dd class="num">10</dd></div>
-          <div><dt>история</dt><dd><span class="num">45</span> дней</dd></div>
-          <div><dt>принтеры</dt><dd class="num">3</dd></div>
-          <div><dt>узлы сети</dt><dd><span class="num">16</span>, связей <span class="num">25</span></dd></div>
-          <div><dt>регистрация</dt><dd>не нужна</dd></div>
-          <div><dt>машины</dt><dd>вымышленные</dd></div>
-        </dl>
-      </div>
-    </div>
-    <p class="hero-note">Парк один, способа посмотреть два — и они разные по сути, а не по названию.</p>
-
-    <div class="doors">
-      <a class="door door-live" href="https://srp-private.vercel.app/"
-         aria-label="Открыть рабочий стенд — запущенный сервер SRP с демо-парком">
-        <p class="door-kind">дверь первая · рабочий стенд</p>
-        <h2>Увидеть в работе настоящий сервер</h2>
-        <p>Запущенный SRP, тот же, что встанет у вас. Считает живой движок: нажимается всё —
-        фильтры, сортировки, переход в карточку машины, карта сети, выгрузка в CSV.</p>
-        <div class="door-shot door-shot-pad">
-          <img src="img/fleet.png" width="1600" height="900" fetchpriority="high" decoding="async"
-            alt="Экран стенда: список парка с состоянием, сроком до ухудшения и главным фактором риска по каждой машине">
-          <div class="verdict">
-            <div class="verdict-head"><span class="num">BUH-02</span><span>финансовый отдел · HDD 1 ТБ</span></div>
-            <div class="verdict-state">предотказ</div>
-            <dl>
-              <dt>окно до ухудшения</dt><dd class="num down">≤ 7 дней</dd>
-              <dt>повреждения</dt><dd class="num">100 / 100</dd>
-              <dt>устойчивость</dt><dd class="num">0 / 100</dd>
-              <dt>наблюдаемость</dt><dd class="num">75 / 100</dd>
-            </dl>
+      <div class="hero-col">
+          <div class="badge-row">
+            <span class="badge">рабочее место инженера</span>
+            <span class="badge">self-hosted</span>
+            <span class="badge">открытый код</span>
           </div>
-        </div>
-        <span class="btn btn-primary btn-lg">Открыть рабочий стенд</span>
-        <p class="door-note">Отдельный адрес, srp-private.vercel.app. Сервер бесплатный и без посетителей засыпает — первая страница просыпается несколько секунд, дальше быстро.
-        Только чтение: сломать там нечего.</p>
-      </a>
+          <h1>Весь офисный парк на одном экране.</h1>
+          <p class="lede">
+            SRP — инструмент инженера, который отвечает за компьютеры, принтеры и сеть офиса.
+            Агент без единой зависимости собирает телеметрию с Windows-ПК, сервер опрашивает
+            принтеры и сеть по SNMP, считает объяснимый риск отказа каждой машины и говорит, что делать.
+          </p>
 
-      <div class="door door-static">
-        <p class="door-kind">дверь вторая · снимок экранов</p>
-        <h2>Просто полистать</h2>
-        <p>36 страниц того же дашборда, сохранённых как есть и лежащих на этом сайте.
-        Открываются мгновенно и работают всегда — но это фотографии: нажимать в них нечего.</p>
-        <ul class="door-facts">
-          <li>тот же парк и те же цифры, что на стенде</li>
-          <li>ничего не ждёт и не просыпается</li>
-          <li>из любой страницы снимка есть переход на стенд</li>
-        </ul>
-        <a class="btn btn-outline" href="demo/">Посмотреть снимок экранов</a>
+        <a class="door door-live" href="https://srp-private.vercel.app/"
+           aria-label="Открыть рабочий стенд — запущенный сервер SRP с демо-парком">
+          <p class="door-kind">дверь первая · рабочий стенд</p>
+          <h2>Увидеть в работе настоящий сервер</h2>
+          <p>Запущенный SRP, тот же, что встанет у вас. Считает живой движок: нажимается всё —
+          фильтры, сортировки, переход в карточку машины, карта сети, выгрузка в CSV.</p>
+          <div class="door-shot door-shot-pad">
+            <img src="img/fleet.png" width="1600" height="900" fetchpriority="high" decoding="async"
+              alt="Экран стенда: список парка с состоянием, сроком до ухудшения и главным фактором риска по каждой машине">
+            <div class="verdict">
+              <div class="verdict-head"><span class="num">BUH-02</span><span>финансовый отдел · HDD 1 ТБ</span></div>
+              <div class="verdict-state">предотказ</div>
+              <dl>
+                <dt>окно до ухудшения</dt><dd class="num down">≤ 7 дней</dd>
+                <dt>повреждения</dt><dd class="num">100 / 100</dd>
+                <dt>устойчивость</dt><dd class="num">0 / 100</dd>
+                <dt>наблюдаемость</dt><dd class="num">75 / 100</dd>
+              </dl>
+            </div>
+          </div>
+          <span class="btn btn-primary btn-lg">Открыть рабочий стенд</span>
+          <p class="door-note">Отдельный адрес, srp-private.vercel.app. Сервер бесплатный и без посетителей засыпает — первая страница просыпается несколько секунд, дальше быстро.
+          Только чтение: сломать там нечего.</p>
+        </a>
+      </div>
+      <div class="hero-col">
+          <p class="spec-title">что стоит за обеими дверями</p>
+          <dl class="spec">
+            <div><dt>компьютеры</dt><dd class="num">10</dd></div>
+            <div><dt>история</dt><dd><span class="num">45</span> дней</dd></div>
+            <div><dt>принтеры</dt><dd class="num">3</dd></div>
+            <div><dt>узлы сети</dt><dd><span class="num">16</span>, связей <span class="num">25</span></dd></div>
+            <div><dt>регистрация</dt><dd>не нужна</dd></div>
+            <div><dt>машины</dt><dd>вымышленные</dd></div>
+          </dl>
+
+        <div class="door door-static">
+          <p class="door-kind">дверь вторая · снимок экранов</p>
+          <h2>Просто полистать</h2>
+          <p>36 страниц того же дашборда, сохранённых как есть и лежащих на этом сайте.
+          Открываются мгновенно и работают всегда — но это фотографии: нажимать в них нечего.</p>
+          <ul class="door-facts">
+            <li>тот же парк и те же цифры, что на стенде</li>
+            <li>ничего не ждёт и не просыпается</li>
+            <li>из любой страницы снимка есть переход на стенд</li>
+          </ul>
+          <a class="btn btn-outline" href="demo/">Посмотреть снимок экранов</a>
+        </div>
       </div>
     </div>
   </div>
