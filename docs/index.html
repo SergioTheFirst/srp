@@ -306,19 +306,20 @@ h3{font-size:18px; font-weight:600; line-height:1.35}
 .hero{background:var(--surface-soft); border-bottom:1px solid var(--hairline); padding:clamp(48px,6vw,80px) 0 clamp(56px,7vw,88px)}
 .hero-top{display:grid; grid-template-columns:minmax(0,1.18fr) minmax(0,.62fr); gap:var(--s-32) var(--s-40); align-items:stretch}
 .hero-col{display:flex; flex-direction:column; gap:var(--s-32)}
-.hero-col>.spec{flex:1; display:flex; flex-direction:column; justify-content:space-between}
+.hero-col>.feats{flex:0 0 auto}
 /* Ширину заголовка держит колонка сетки, а не `ch`: ch — единица шрифта,
    и на подмене Golos точка переноса уезжала, сдвигая всё ниже (CLS 0,056). */
 .hero h1{margin-bottom:var(--s-24)}
 .hero .lede{margin-bottom:0}
 .hero-note{font-size:14px; color:var(--muted); margin:0; max-width:52em}
 .hero-note b{color:var(--ink); font-weight:500}
-/* Паспорт демо-парка: не выдуманные метрики, а состав той базы, которая
-   стоит за обеими дверями. Заодно правая колонка перестаёт быть пустой. */
-.spec{margin:0; border-top:1px solid var(--hairline)}
-.spec>div{display:flex; justify-content:space-between; align-items:baseline; gap:var(--s-16); padding:10px 0; border-bottom:1px solid var(--hairline)}
-.spec dt{font-family:var(--mono); font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted)}
-.spec dd{margin:0; font-size:15px; color:var(--ink); text-align:right}
+/* Список возможностей: тезисы в одну строку, плотный интервал; сильные
+   пункты выделены весом и акцентным маркером, остальные — точкой. */
+.feats{list-style:none; margin:0; padding:0; border-top:1px solid var(--hairline)}
+.feats li{font-size:14px; line-height:1.25; color:var(--body); padding:3px 0 3px 14px; position:relative}
+.feats li::before{content:"·"; position:absolute; left:2px; color:var(--muted)}
+.feats li.key{color:var(--ink); font-weight:600}
+.feats li.key::before{content:"—"; color:var(--primary); font-weight:600; font-size:12px}
 .spec-title{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 var(--s-12)}
 
 /* ── Две двери: одна и та же демо-база, два разных способа её открыть.
@@ -577,15 +578,32 @@ footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; bor
         </a>
       </div>
       <div class="hero-col">
-          <p class="spec-title">что стоит за обеими дверями</p>
-          <dl class="spec">
-            <div><dt>компьютеры</dt><dd class="num">10</dd></div>
-            <div><dt>история</dt><dd><span class="num">45</span> дней</dd></div>
-            <div><dt>принтеры</dt><dd class="num">3</dd></div>
-            <div><dt>узлы сети</dt><dd><span class="num">16</span>, связей <span class="num">25</span></dd></div>
-            <div><dt>регистрация</dt><dd>не нужна</dd></div>
-            <div><dt>машины</dt><dd>вымышленные</dd></div>
-          </dl>
+          <p class="spec-title">что умеет система</p>
+          <ul class="feats">
+            <li class="key">Срок до отказа по каждой машине</li>
+            <li class="key">Причина словами, а не график</li>
+            <li class="key">Три координаты: повреждения, устойчивость, наблюдаемость</li>
+            <li class="key">Весь парк на одном экране</li>
+            <li>SMART дисков: рост ошибок и переназначений</li>
+            <li>BSOD и внезапные перезагрузки (KP41)</li>
+            <li>Журналы событий без привязки к языку Windows</li>
+            <li>Память, диск, температура, автозагрузка</li>
+            <li>Истёкшие и истекающие сертификаты</li>
+            <li class="key">Принтеры по SNMP: тонер, барабан, счётчики</li>
+            <li>Кто и сколько печатает — страницы, а не задания</li>
+            <li class="key">Карта сети: узлы, связи, узкие места</li>
+            <li>Коммутаторы, точки доступа, неопознанные узлы</li>
+            <li>Агент без единой зависимости, ставится за минуту</li>
+            <li>Обновление агентов на всём парке — само</li>
+            <li class="key">Всё внутри: self-hosted, один файл базы</li>
+            <li>Ни облака, ни регистрации, ни лицензий</li>
+            <li>Серийники хешируются, ключи не покидают машину</li>
+            <li>Фильтры, сортировки, выгрузка в CSV</li>
+            <li>История 45 дней: тренд, а не мгновенный снимок</li>
+            <li>«Неизвестно» вместо выдуманной уверенности</li>
+            <li>Выгрузка метрик в Zabbix</li>
+            <li>Открытый код, читается и правится</li>
+          </ul>
 
         <div class="door door-static">
           <p class="door-kind">дверь вторая · снимок экранов</p>
