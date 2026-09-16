@@ -1,4 +1,4 @@
-# SRP server runtime dependencies (Python 3.9+).
+# J-Space server runtime dependencies (Python 3.9+).
 #
 # The agent (client/) deliberately needs NONE of these -- it is pure Python
 # standard library (urllib, subprocess, json, winreg), so it drops onto a

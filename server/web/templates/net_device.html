@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ d.hostname or d.device_nid }} · топология · SRP{% endblock %}
+{% block title %}{{ d.hostname or d.device_nid }} · топология · J-Space{% endblock %}
 {% block subtitle %}{{ net_type_ru(d.dev_type) }}{% if d.model %} · {{ d.model }}{% endif %}{% endblock %}
 
 {% set st = net_status_ru(d.status) %}

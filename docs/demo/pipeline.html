@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Пайплайн · SRP</title>
+<title>Пайплайн · J-Space</title>
 
 <style>
 .metrics-grid {
@@ -39,6 +39,11 @@
 .mc-val.accent { color: var(--accent); }
 .db-table { max-width: 480px; }
 .refresh-note { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+.zx-btn { font:600 13px/1 var(--mono); padding:6px 14px; border-radius:4px;
+  background:var(--accent-dim); border:1px solid rgba(14,165,233,.45);
+  color:var(--accent); cursor:pointer; }
+.zx-btn:hover { background:rgba(14,165,233,.2); }
+.zx-btn:disabled { opacity:.5; cursor:default; }
 
 /* ─── Meta theme overrides (pipeline) ─────────────────────────────────── */
 [data-theme="meta"] .mc-val { font: 700 17px/1 var(--font-body); }
@@ -650,7 +655,7 @@ window.srpEsc = function (s) {
 </script>
 </head>
 <body>
-<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-09-02 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a></div>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-09-16 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a></div>
 <script id="mirror-data" type="application/json">{}</script>
 <script>
 (function () {
@@ -671,7 +676,7 @@ window.srpEsc = function (s) {
 })();
 </script>
 <header class="top">
-  <div class="brand">SRP <em>//</em> раннее предупреждение</div>
+  <div class="brand">J-Space <em>//</em> раннее предупреждение</div>
   <div class="sub">здоровье сервера</div>
   <nav>
     <a href="./index.html">флот</a>
@@ -708,7 +713,7 @@ window.srpEsc = function (s) {
 
 
 <p class="refresh-note mono">
-  снимок 2026-09-02T10:47:22Z · авто-обновление 15с
+  снимок 2026-09-16T16:25:34Z · авто-обновление 15с
 </p>
 
 
@@ -748,7 +753,7 @@ window.srpEsc = function (s) {
       </div>
       <div class="mc-row">
         <span class="mc-key">ts</span>
-        <span class="mc-val na" style="font-size:13px">2026-09-02T10:47:19</span>
+        <span class="mc-val na" style="font-size:13px">2026-09-16T16:25:32</span>
       </div>
     </div>
   </div>
@@ -762,11 +767,11 @@ window.srpEsc = function (s) {
     <div class="mc-rows">
       <div class="mc-row">
         <span class="mc-key">heartbeats за 5м</span>
-        <span class="mc-val accent">59</span>
+        <span class="mc-val accent">50</span>
       </div>
       <div class="mc-row">
         <span class="mc-key">heartbeats за 1ч</span>
-        <span class="mc-val accent">60</span>
+        <span class="mc-val accent">50</span>
       </div>
       <div class="mc-row">
         <span class="mc-key">historical за 5м</span>
@@ -817,11 +822,11 @@ window.srpEsc = function (s) {
     <div class="mc-rows">
       <div class="mc-row">
         <span class="mc-key">размер файла</span>
-        <span class="mc-val accent">15.1 MB</span>
+        <span class="mc-val accent">15.2 MB</span>
       </div>
       <div class="mc-row">
         <span class="mc-key">последний rollup-день</span>
-        <span class="mc-val na">2026-09-02</span>
+        <span class="mc-val na">2026-09-16</span>
       </div>
       <div class="mc-row">
         <span class="mc-key">последнее обслуживание</span>
@@ -872,6 +877,60 @@ window.srpEsc = function (s) {
     </div>
   </div>
 </div>
+
+
+<div class="section-label">Экспорт в Zabbix</div>
+<div class="metrics-grid">
+  
+  <div class="metric-card na">
+    <div class="mc-label">Отправка вердикта</div>
+    <div class="mc-rows">
+      <div class="mc-row">
+        <span class="mc-key">состояние</span>
+        <span class="mc-val na" style="font-size:13px">выключен в конфигурации</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">чтобы включить</span>
+        <span class="mc-val na" style="font-size:13px">впишите адрес в zabbix.server</span>
+      </div>
+      <div class="mc-row">
+        <span class="mc-key">счётчики считаются</span>
+        <span class="mc-val na" style="font-size:13px">с запуска сервера 2026-09-16T16:25:33</span>
+      </div>
+      <div class="mc-row" style="margin-top:6px">
+        <button class="zx-btn" id="zx-btn" onclick="zabbixSendNow()"
+                disabled title="демо: только чтение">
+          ⟳ Отправить сейчас
+        </button>
+        <span id="zx-result" class="mc-val na" style="font-size:13px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Кнопка сбрасывает и отсрочку узлов: исправил имя узла в Zabbix -- нажал --
+// увидел результат сразу, а не через шесть часов.
+function zabbixSendNow() {
+  var btn = document.getElementById("zx-btn");
+  var out = document.getElementById("zx-result");
+  btn.disabled = true; out.textContent = "отправляю…";
+  fetch("/api/v1/zabbix/send", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.skipped) { out.textContent = "адрес Zabbix не задан"; btn.disabled = false; return; }
+      if (d.busy) { out.textContent = "отправка уже идёт"; btn.disabled = false; return; }
+      if (d.throttled) { out.textContent = "слишком часто, подождите полминуты"; btn.disabled = false; return; }
+      // textContent сам по себе безопасен; srpEsc здесь дал бы двойное
+      // экранирование, и оператор увидел бы «&lt;» буквально.
+      out.textContent = d.error
+        ? "ошибка: " + String(d.error)
+        : "принято " + d.accepted + " из " + d.sent + " · пропущено " + d.skipped;
+      setTimeout(function () { location.reload(); }, 1200);
+    })
+    .catch(function (e) { out.textContent = "ошибка: " + String(e); btn.disabled = false; });
+}
+</script>
 
 
 <div class="section-label">Парковое подтверждение правил</div>
@@ -938,7 +997,7 @@ window.srpEsc = function (s) {
     <td class="mono small">heartbeats</td>
     <td class="mono">
       <span class="good">
-        2 270
+        2 280
       </span>
     </td>
   </tr>
@@ -965,7 +1024,7 @@ window.srpEsc = function (s) {
     <td class="mono small">scores</td>
     <td class="mono">
       <span class="good">
-        2 730
+        2 740
       </span>
     </td>
   </tr>

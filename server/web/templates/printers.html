@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Принтеры · SRP{% endblock %}
+{% block title %}Принтеры · J-Space{% endblock %}
 {% block subtitle %}сетевые принтеры{% endblock %}
 
 {% block extra_head %}
@@ -150,7 +150,7 @@ function filterRows() {
   if (!el) return;  // chart container exists only when printers are present
   function init() {
     if (typeof Plotly === "undefined") {
-      console.warn("SRP: Plotly unavailable; pages-history chart skipped");
+      console.warn("J-Space: Plotly unavailable; pages-history chart skipped");
       return;
     }
     var series = JSON.parse(document.getElementById("pages-series-data").textContent || "[]");

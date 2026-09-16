@@ -148,3 +148,16 @@ def test_explicit_path_argument_still_wins_over_env(
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.delenv("SRP_PORT", raising=False)
     assert load_config(explicit).port == 8002
+
+
+def test_config_with_utf8_bom_is_read_not_rejected(tmp_path: Path) -> None:
+    """Notepad сохраняет JSON с BOM. Раньше это роняло старт сервера целиком:
+    ``json.loads`` на строке с BOM бросает JSONDecodeError, и ``create_app``
+    падал при импорте -- оператор правил порт, а получал мёртвый сервер.
+    """
+    path = tmp_path / "config.json"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"port": 8123}).encode("utf-8"))
+
+    cfg = load_config(path)
+
+    assert cfg.port == 8123

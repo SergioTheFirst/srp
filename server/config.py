@@ -143,7 +143,9 @@ def load_config(path: Optional[Path] = None) -> ServerConfig:
         path = Path(env_cfg) if env_cfg else _CONFIG_PATH
     cfg = ServerConfig()
     if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig, а не utf-8: Блокнот сохраняет JSON с BOM, а json.loads на
+        # такой строке бросает -- оператор правил порт, а получал мёртвый сервер.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         known = {f.name for f in fields(ServerConfig)}
         for key, value in data.items():
             if key in known:
