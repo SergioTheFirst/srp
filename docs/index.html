@@ -13,9 +13,11 @@
 <meta property="og:image" content="https://j-space.ru/img/og.png">
 <meta property="og:url" content="https://j-space.ru/">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Шрифты лежат на своём домене: обращения к fonts.googleapis.com и
+     fonts.gstatic.com не происходит, IP посетителя за границу не уходит
+     (152-ФЗ ст. 12, трансграничная передача). Предзагружаем только кириллицу
+     основного текста — остальные подмножества браузер возьмёт по надобности. -->
+<link rel="preload" href="fonts/golos-text-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -32,7 +34,7 @@
       "author": {
         "@id": "https://j-space.ru/#author"
       },
-      "dateModified": "2026-09-15"
+      "dateModified": "2026-09-18"
     },
     {
       "@type": "Person",
@@ -61,7 +63,7 @@
       "operatingSystem": "Windows 7+; сервер — Windows или Linux",
       "softwareVersion": "0.3.0",
       "datePublished": "2026-08-29",
-      "dateModified": "2026-09-15",
+      "dateModified": "2026-09-18",
       "license": "https://opensource.org/licenses/MIT",
       "url": "https://j-space.ru/",
       "downloadUrl": "https://github.com/SergioTheFirst/srp/releases/latest",
@@ -245,6 +247,26 @@
 }
 /* Запасные шрифты подогнаны по ширине под Golos / JetBrains (замерено в браузере):
    поздняя подмена веб-шрифта не переупаковывает строки, CLS остаётся около нуля. */
+/* Golos Text · cyrillic-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/golos-text-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;}
+/* Golos Text · cyrillic */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/golos-text-cyrillic.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;}
+/* Golos Text · latin-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/golos-text-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;}
+/* Golos Text · latin */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/golos-text-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;}
+/* Golos Text · cyrillic-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/golos-text-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;}
+/* Golos Text · cyrillic */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/golos-text-cyrillic.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;}
+/* Golos Text · latin-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/golos-text-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;}
+/* Golos Text · latin */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/golos-text-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;}
+/* Golos Text · cyrillic-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/golos-text-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;}
+/* Golos Text · cyrillic */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/golos-text-cyrillic.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;}
+/* Golos Text · latin-ext */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/golos-text-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;}
+/* Golos Text · latin */ @font-face{font-family: 'Golos Text'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/golos-text-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;}
+/* JetBrains Mono · cyrillic-ext */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/jetbrains-mono-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;}
+/* JetBrains Mono · cyrillic */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/jetbrains-mono-cyrillic.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;}
+/* JetBrains Mono · latin-ext */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/jetbrains-mono-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;}
+/* JetBrains Mono · latin */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/jetbrains-mono-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;}
+/* JetBrains Mono · cyrillic-ext */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/jetbrains-mono-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;}
+/* JetBrains Mono · cyrillic */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/jetbrains-mono-cyrillic.woff2) format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;}
+/* JetBrains Mono · latin-ext */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/jetbrains-mono-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;}
+/* JetBrains Mono · latin */ @font-face{font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/jetbrains-mono-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;}
 @font-face{font-family:"Golos Fallback"; src:local("Segoe UI"),local("Arial"); font-weight:400 600; size-adjust:107.1%}
 @font-face{font-family:"Mono Fallback"; src:local("Consolas"),local("Courier New"); size-adjust:109.1%}
 
@@ -462,6 +484,9 @@ footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; bor
 .foot-grid a{color:var(--body)}
 .legal{display:flex; flex-wrap:wrap; justify-content:space-between; gap:var(--s-12); padding-top:var(--s-24); font-size:13px; color:var(--muted)}
 .legal a{color:var(--body)}
+.legal-info{padding-top:var(--s-24); font-size:13px; color:var(--muted); max-width:640px}
+.legal-info p{margin:0 0 var(--s-8)}
+.legal-info a{color:var(--body); text-decoration:underline; text-underline-offset:2px}
 
 /* Наведение — только там, где есть настоящий курсор: на тач-экране :hover
    залипает после тапа и врёт про интерактивность. Подсветка только у того,
@@ -1101,11 +1126,20 @@ footer{padding:var(--s-56) 0 var(--s-32); color:var(--body); font-size:14px; bor
         <ul role="list">
           <li><a href="mailto:mss777@mail.ru">mss777@mail.ru</a></li>
           <li><a href="https://github.com/SergioTheFirst">github.com/SergioTheFirst</a></li>
+          <li><a href="privacy.html">Политика обработки данных</a></li>
         </ul>
       </div>
     </div>
+    <div class="legal-info">
+      <p>Владелец сайта и оператор персональных данных — Сергей Станиславович Медведев,
+        <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.
+        <a href="privacy.html">Политика обработки персональных данных</a>.</p>
+      <p>Сайт не содержит рекламы: все ссылки и изображения относятся к собственному продукту
+        автора либо к его страницам на сторонних сервисах и размещены безвозмездно, поэтому
+        идентификатор «erid» не требуется. Cookies сайт не устанавливает.</p>
+    </div>
     <div class="legal">
-      <span>© 2026 J-Space · лицензия MIT · версия 0.3.0 от 29 августа 2026 · страница обновлена 15 сентября 2026</span>
+      <span>© 2026 J-Space · лицензия MIT · версия 0.3.0 от 29 августа 2026 · страница обновлена 18 сентября 2026</span>
       <span><a href="https://j-space.ru/">j-space.ru</a></span>
     </div>
   </div>
