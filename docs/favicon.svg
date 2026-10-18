@@ -1,6 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="J-Space">
-  <rect width="64" height="64" rx="14" fill="#040810"/>
-  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#132030" stroke-width="3"/>
-  <text x="32" y="41" text-anchor="middle" font-family="'JetBrains Mono',Consolas,monospace"
-        font-size="24" font-weight="700" letter-spacing="-0.5" fill="#0ea5e9">JS</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#EDF4F8"/>
+  <clipPath id="c"><rect width="32" height="32" rx="7"/></clipPath>
+  <g clip-path="url(#c)">
+    <circle cx="-4" cy="44" r="34" fill="#131E30"/>
+    <circle cx="-4" cy="44" r="42" fill="none" stroke="#131E30" stroke-width="1.6"/>
+    <g transform="translate(22 11) rotate(38)">
+      <rect x="-7.6" y="-1.25" width="4.8" height="2.5" fill="#FF6A1A"/>
+      <rect x="2.8" y="-1.25" width="4.8" height="2.5" fill="#FF6A1A"/>
+      <rect x="-2.3" y="-2.3" width="4.6" height="4.6" fill="#FF6A1A"/>
+    </g>
+  </g>
 </svg>

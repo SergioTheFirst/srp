@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="J-Space">
+  <!-- The lookout tower from the plate, spruce ink on its own birch ground: reads on light and dark tabs. -->
+  <rect width="64" height="64" rx="12" fill="#EEF1EC"/>
+  <g fill="none" stroke="#163A3A" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 20.5 32 9l15 11.5z" fill="#163A3A" stroke-width="2.4"/>
+    <path d="M20 20.5h24v10H20z" fill="#EEF1EC" stroke-width="3"/>
+    <path d="M23 24.5v6M27.5 24.5v6" stroke-width="2"/>
+    <path d="M22 30.5 15 56M42 30.5 49 56" stroke-width="3.4"/>
+    <path d="M21.2 34 44.6 47M42.8 34 19.4 47M18.3 43.5h27.4" stroke-width="2"/>
+    <path d="M12 56.5h40" stroke-width="2.4"/>
+  </g>
+  <circle cx="55.5" cy="50" r="4.5" fill="#B8441A"/>
+</svg>

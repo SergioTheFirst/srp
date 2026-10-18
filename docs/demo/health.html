@@ -596,7 +596,7 @@ window.srpEsc = function (s) {
 </script>
 </head>
 <body>
-<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-09-16 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-10-18 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
 <script id="mirror-data" type="application/json">{}</script>
 <script>
 (function () {
@@ -647,11 +647,10 @@ window.srpEsc = function (s) {
 
 
 
-
 <div class="section-label">Здоровье флота — обзор</div>
 <div class="cards" style="margin-bottom:16px">
   <div class="stat"><div class="n bad">1</div><div class="l">Критичные (≤7д)</div></div>
-  <div class="stat"><div class="n warn">0</div><div class="l">Ухудшились за неделю</div></div>
+  <div class="stat"><div class="n warn">1</div><div class="l">Ухудшились за неделю</div></div>
   <div class="stat"><div class="n warn">0</div><div class="l">Видимость &lt;40%</div></div>
   <div class="stat"><div class="n na">0</div><div class="l">Данные устарели</div></div>
 </div>
@@ -676,34 +675,27 @@ window.srpEsc = function (s) {
 
 <div class="section-label">Ухудшаются за 7 дней</div>
 
-  
-  
-  <div class="riskrow">
-    <div class="head">
-      <div><a href="./device/demo-buh-02.html" class="name">BUH-02</a></div>
-      <span class="chip bad">Δ7д -2.2</span>
-    </div>
-    <div class="worsening-row">
-      <div class="coord-chips">
-        <span class="chip bad" title="Повреждения (D)">D 100</span>
-        <span class="chip bad" title="Устойчивость (R)">R 0</span>
-        <span class="chip good" title="Видимость (O)">O 75</span>
-      </div>
-      <div class="spark-wrap" title="Индекс-проекция (D,R,O) — динамика по последним точкам">
-        
-        <svg viewBox="0 0 100 24" preserveAspectRatio="none"><polyline points="0.0,24.0 3.4,24.0 6.9,24.0 10.3,24.0 13.8,24.0 17.2,24.0 20.7,24.0 24.1,24.0 27.6,24.0 31.0,24.0 34.5,24.0 37.9,24.0 41.4,24.0 44.8,24.0 48.3,24.0 51.7,24.0 55.2,24.0 58.6,24.0 62.1,24.0 65.5,24.0 69.0,24.0 72.4,24.0 75.9,24.0 79.3,24.0 82.8,24.0 86.2,24.0 89.7,24.0 93.1,24.0 96.6,24.0 100.0,24.0" /></svg>
-        <span class="spark-label">проекция, 30 точек</span>
-        
-      </div>
-    </div>
-  </div>
-  
+<div class="no-data">За последнюю неделю ухудшений не зафиксировано</div>
 
 
 
 <div class="section-label incident" style="margin-top:28px">Новые эскалации</div>
 
-<div class="no-data" style="margin-bottom:24px">Новых эскалаций нет</div>
+<table style="margin-bottom:24px">
+  <thead>
+    <tr><th>Устройство</th><th>Было → стало</th><th>Механизм</th><th>Рекомендация</th></tr>
+  </thead>
+  <tbody>
+  
+    <tr>
+      <td><a href="./device/demo-prod-01.html">PROD-01</a></td>
+      <td>ранняя деградация → компенсация</td>
+      <td>траектория ресурса</td>
+      <td class="muted">ресурс близок к исчерпанию — планировать обслуживание</td>
+    </tr>
+  
+  </tbody>
+</table>
 
 
 
@@ -726,27 +718,27 @@ window.srpEsc = function (s) {
       <td>Aquilon O240</td>
       <td>1</td>
       <td>100</td>
-      <td>0</td>
-      <td>75</td>
-      <td>0</td>
+      <td>15</td>
+      <td>90</td>
+      <td>2</td>
     </tr>
   
     <tr>
       <td>Atlas H336</td>
       <td>1</td>
       <td>0</td>
-      <td>49</td>
-      <td>60</td>
-      <td>57</td>
+      <td>24</td>
+      <td>75</td>
+      <td>35</td>
     </tr>
   
     <tr>
       <td>ThinkCentre M720t</td>
       <td>1</td>
       <td>0</td>
-      <td>55</td>
+      <td>61</td>
       <td>90</td>
-      <td>62</td>
+      <td>67</td>
     </tr>
   
   </tbody>
@@ -754,7 +746,7 @@ window.srpEsc = function (s) {
 
 
 
-<script id="health-data" type="application/json">{"heatmap": {"cols": ["\u0421\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435", "\u041f\u043e\u0432\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f (D)", "\u0423\u0441\u0442\u043e\u0439\u0447\u0438\u0432\u043e\u0441\u0442\u044c (R)", "\u0412\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c (O)", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0434\u0438\u0441\u043a\u0430 (SMART)", "\u0421\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u041e\u0421", "\u0417\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430 / \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u043d\u0438\u0435 Windows", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0441\u0435\u0442\u0438", "\u0420\u0438\u0441\u043a \u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u0438"], "device_ids": ["demo-buh-02", "demo-kadry-01", "demo-sekr-01", "demo-prod-01", "demo-old-pc", "demo-sklad-01", "demo-buh-01", "demo-dir-nb", "demo-it-01", "demo-prod-02"], "dominant_labels": ["\u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c", "\u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430", "\u0441\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u044f \u0440\u0435\u0441\u0443\u0440\u0441\u0430", "\u0441\u0438\u0441\u0442\u0435\u043c\u043d\u0430\u044f \u043f\u0440\u0438\u0447\u0438\u043d\u0430", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u0441\u0435\u0442\u044c"], "hostnames": ["BUH-02", "KADRY-01", "SEKR-01", "PROD-01", "STARYI-PC", "SKLAD-01", "BUH-01", "DIR-NB", "IT-01", "PROD-02"], "state_labels": ["\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432"], "z": [[2, 2, 2, 0, 2, 3, 1, 0, 0, 0], [2, 0, 2, 1, 0, 3, 0, 2, 0, 2], [1, 0, 2, 0, 0, 2, 0, 0, 0, 0], [1, 0, 1, 0, 1, 3, 0, 0, 0, 1], [1, 1, 1, 0, 0, 1, 1, 1, 0, 0], [1, 1, 0, 0, 0, 3, 2, 0, 0, 0], [0, 0, 0, 1, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 1, 0, 3, 0, 0, 0, 0], [0, 0, 0, 1, 0, 3, 0, 0, 2, 0]]}, "state_dist": [{"band": "bad", "count": 1, "label": "\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "state": "h4"}, {"band": "unknown", "count": 0, "label": "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h3"}, {"band": "bad", "count": 4, "label": "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "state": "h2"}, {"band": "watch", "count": 1, "label": "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h1"}, {"band": "good", "count": 4, "label": "\u0437\u0434\u043e\u0440\u043e\u0432", "state": "h0"}, {"band": "unknown", "count": 0, "label": "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438", "state": "unknown"}]}</script>
+<script id="health-data" type="application/json">{"heatmap": {"cols": ["\u0421\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435", "\u041f\u043e\u0432\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f (D)", "\u0423\u0441\u0442\u043e\u0439\u0447\u0438\u0432\u043e\u0441\u0442\u044c (R)", "\u0412\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c (O)", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0434\u0438\u0441\u043a\u0430 (SMART)", "\u0421\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u041e\u0421", "\u0417\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430 / \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u043d\u0438\u0435 Windows", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0441\u0435\u0442\u0438", "\u0420\u0438\u0441\u043a \u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u0438"], "device_ids": ["demo-buh-02", "demo-kadry-01", "demo-prod-01", "demo-sekr-01", "demo-sklad-01", "demo-old-pc", "demo-buh-01", "demo-dir-nb", "demo-it-01", "demo-prod-02"], "dominant_labels": ["\u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c", "\u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430", "\u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u044f \u0440\u0435\u0441\u0443\u0440\u0441\u0430", "\u0441\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u0441\u0435\u0442\u044c"], "hostnames": ["BUH-02", "KADRY-01", "PROD-01", "SEKR-01", "SKLAD-01", "STARYI-PC", "BUH-01", "DIR-NB", "IT-01", "PROD-02"], "state_labels": ["\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432"], "z": [[2, 2, 2, 0, 2, 3, 1, 0, 0, 0], [2, 0, 2, 0, 0, 3, 0, 2, 0, 2], [1, 1, 1, 0, 1, 3, 0, 0, 0, 1], [1, 0, 1, 0, 0, 2, 0, 0, 0, 0], [1, 1, 0, 0, 0, 3, 2, 0, 0, 0], [1, 1, 0, 0, 0, 0, 1, 1, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 1, 0]]}, "state_dist": [{"band": "bad", "count": 1, "label": "\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "state": "h4"}, {"band": "bad", "count": 1, "label": "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h3"}, {"band": "watch", "count": 1, "label": "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "state": "h2"}, {"band": "watch", "count": 3, "label": "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h1"}, {"band": "good", "count": 4, "label": "\u0437\u0434\u043e\u0440\u043e\u0432", "state": "h0"}, {"band": "unknown", "count": 0, "label": "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438", "state": "unknown"}]}</script>
 <script>
   /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
      Читает текущие CSS-токены темы -- при переключении темы возвращает верные

@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>J-Space · vertu-high style</title>
+<meta name="description" content="J-Space помогает инженеру узнать, какой компьютер начал сдавать, раньше пользователя: компьютеры, принтеры и сеть офиса на одном экране, понятная причина и срок реакции для каждой машины, карта сети по SNMP, учёт печати, вердикты в Zabbix. Работает на вашем сервере, бесплатно, открытый код.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- Шрифты лежат на своём домене: обращения к fonts.googleapis.com и
+     fonts.gstatic.com не происходит, IP посетителя за границу не уходит
+     (152-ФЗ ст. 12, трансграничная передача). Предзагружаем только кириллицу. -->
+<link rel="preload" href="fonts/piazzolla-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+/* Piazzolla, variable wght 100–900 + opsz 8–30: книжная антиква с оптическими
+   размерами и настоящей кириллицей; одна семья на заголовки и текст. */
+@font-face {
+  font-family: "Piazzolla"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("fonts/piazzolla-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Piazzolla"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("fonts/piazzolla-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Piazzolla Fallback";
+  src: local("Times New Roman"), local("Liberation Serif"), local("Tinos");
+  size-adjust: 100.13%; ascent-override: 110.85%; descent-override: 30.96%; line-gap-override: 0%;
+}
+
+:root {
+  color-scheme: light;              /* правило владельца: главная светлая целиком */
+  --ground: #EEF1EC;                /* берёзовая кора */
+  --ink: #163A3A;                   /* ель в тени: единственная краска гравюры */
+  --ink-2: #3F5D5A;
+  --rule: #AFC0BA;
+  --accent: #B8441A;                /* тлеющий уголь: машина в беде и главное действие */
+  --accent-deep: #96350F;
+  --accent-ink: #FFFFFF;
+
+  --serif: "Piazzolla", "Piazzolla Fallback", Georgia, "Times New Roman", "Liberation Serif", serif;
+  --mono: ui-monospace, Consolas, "Cascadia Mono", Menlo, "Liberation Mono", monospace;
+
+  --t-display: clamp(1.875rem, 1.05rem + 3.1vw, 3.625rem);
+  --t-h2: clamp(1.75rem, 1.25rem + 1.9vw, 2.75rem);
+  --t-h3: clamp(1.3125rem, 1.15rem + 0.6vw, 1.625rem);
+  --t-lede: clamp(1.0625rem, 0.97rem + 0.45vw, 1.3125rem);
+  --t-body: 1.125rem;
+  --t-small: 0.9375rem;
+  --t-meta: 0.8125rem;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 40px; --s7: 64px; --s8: 104px; --s9: 152px;
+  --gutter: clamp(16px, 5.5vw, 88px);
+  --rail: 248px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: var(--s5); }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--serif); font-optical-sizing: auto; font-size: var(--t-body); line-height: 1.55;
+  font-kerning: normal; text-rendering: optimizeLegibility;
+}
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; border-radius: 2px; }
+img { max-width: 100%; height: auto; display: block; }
+code { font-family: var(--mono); font-size: 0.86em; white-space: nowrap; }
+.nw { white-space: nowrap; }
+h1, h2, h3 { text-wrap: balance; }
+p, li, dd, figcaption { text-wrap: pretty; }
+.defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.skip {
+  position: absolute; left: var(--s4); top: -100px; z-index: 10;
+  background: var(--ink); color: var(--ground); padding: var(--s3) var(--s4); text-decoration: none;
+}
+.skip:focus { top: var(--s4); }
+
+/* ---------- buttons: ember for the stand, ink outline for the rest ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 56px; padding: 0 var(--s5);
+  background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent-deep); border-radius: 2px;
+  font-size: var(--t-body); font-weight: 600; letter-spacing: 0.01em; text-decoration: none;
+}
+.btn:active { background: var(--accent-deep); }
+.btn-ink {
+  display: inline-flex; align-items: center; min-height: 48px; padding: 0 var(--s5);
+  border: 1px solid var(--ink); border-radius: 2px; text-decoration: none; font-weight: 600;
+}
+.btn-ink:active { background: var(--ink); color: var(--ground); }
+@media (hover: hover) {
+  .btn:hover { background: var(--accent-deep); }
+  .btn-ink:hover { background: var(--ink); color: var(--ground); }
+  .bar a:hover, .foot a:hover, .toc a:hover, .ledger a:hover { text-decoration: underline; }
+}
+
+/* ---------- header ---------- */
+.bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  padding: var(--s2) var(--gutter);
+}
+.mark { font-weight: 650; font-size: 1.375rem; letter-spacing: -0.01em; text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; }
+.bar ul { display: flex; gap: var(--s5); margin: 0; padding: 0; list-style: none; }
+.bar ul a { font-size: var(--t-small); min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; color: var(--ink-2); }
+.bar ul .stand a { color: var(--ink); font-weight: 600; }
+
+/* ---------- 0. first screen: the engraving, title set in its blank sky ---------- */
+.hero { position: relative; min-height: max(640px, 100svh, 62.5vw); display: flex; flex-direction: column; }
+.scene { position: absolute; inset: 0; overflow: hidden; }
+.scene .plate, .scene .marks { position: absolute; inset: 0; width: 100%; height: 100%; }
+.scene .plate { max-width: none; object-fit: cover; object-position: 100% 100%; }
+.marks { color: var(--ink); }
+.marks .k { fill: var(--ground); stroke: none; }
+.marks .lbl {
+  font-family: var(--serif); font-weight: 650; font-size: 15px; letter-spacing: 0.07em;
+  fill: var(--ink); stroke: var(--ground); stroke-width: 5px; stroke-linejoin: round; paint-order: stroke;
+}
+.marks .lbl.hot { fill: var(--accent); }
+.marks .pt { outline: none; cursor: pointer; }
+.marks .hit { fill: transparent; stroke: none; pointer-events: all; }
+.marks .pt:focus-visible .hit { fill: var(--ground); fill-opacity: 0.55; stroke: var(--ink); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+@media (hover: hover) { .marks .pt:hover .hit { stroke: var(--ink-2); stroke-width: 1px; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; } }
+
+.title {
+  position: relative; z-index: 2; width: min(540px, 100% - 2 * var(--gutter));
+  margin-left: var(--gutter); padding-top: calc(68px + clamp(28px, 6svh, 88px));
+}
+h1 { font-size: var(--t-display); font-weight: 560; line-height: 1.04; letter-spacing: -0.022em; margin: 0 0 var(--s5); }
+.lede { font-size: var(--t-lede); line-height: 1.45; margin: 0 0 var(--s6); }
+.act { margin: 0 0 var(--s4); }
+.note { font-size: var(--t-small); line-height: 1.5; color: var(--ink-2); margin: 0; max-width: 30em; }
+.note a { color: var(--ink); }
+
+.plate-foot {
+  position: relative; z-index: 2; margin-top: auto; padding: var(--s5) var(--gutter) var(--s4);
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s2) var(--s6);
+}
+.report { margin: 0; display: flex; gap: var(--s2); align-items: baseline; font-size: var(--t-small); line-height: 1.4; max-width: 64em; }
+.report svg { width: 12px; height: 12px; flex: none; transform: translateY(1px); }
+.report .m2, .report .m1, .report .m0 { display: none; }
+.report[data-s="2"] .m2, .report[data-s="1"] .m1, .report[data-s="0"] .m0 { display: block; }
+.report[data-s="2"] { color: var(--accent); }
+.report b { font-weight: 650; letter-spacing: 0.02em; }
+.legend { margin: 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); font-size: var(--t-meta); line-height: 1.4; color: var(--ink-2); }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
+.legend .key svg { width: 12px; height: 12px; flex: none; }
+.legend .hot { color: var(--accent); }
+
+/* the one moving thing on the page: smoke over BUH-02 */
+.smoke { transform-box: view-box; transform-origin: 1272px 699px; animation: sway 11s ease-in-out infinite alternate; }
+/* every dash pattern sums to 159, so a -318 offset loops without a jump */
+.smoke .w { stroke-dasharray: 70 5 28 4 46 6; animation: rise 12s linear infinite; }
+.smoke .w2 { stroke-dasharray: 52 6 34 4 58 5; animation-duration: 13.5s; }
+.smoke .w3 { stroke-dasharray: 40 7 66 4 36 6; animation-duration: 10.5s; }
+.smoke .w4 { stroke-dasharray: 22 9 50 7 62 9; animation-duration: 14.5s; }
+.smoke .w5 { stroke-dasharray: 34 8 24 10 77 6; animation-duration: 9.5s; }
+.smoke .w6 { stroke-dasharray: 45 6 30 5 66 7; animation-duration: 15.5s; }
+.smoke .w7 { stroke-dasharray: 28 5 55 8 57 6; animation-duration: 11.5s; }
+@keyframes rise { to { stroke-dashoffset: -318; } }
+@keyframes sway { from { transform: rotate(-1.6deg) skewX(-2deg); } to { transform: rotate(1.4deg) skewX(2.5deg); } }
+.is-off .smoke, .is-off .smoke .w { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .smoke, .smoke .w { animation: none; } }
+
+/* ---------- the document ---------- */
+.doc {
+  display: grid; grid-template-columns: var(--rail) minmax(0, 720px); column-gap: var(--s7);
+  padding: var(--s8) var(--gutter); border-top: 1px solid var(--rule);
+}
+.doc > * { grid-column: 2; }
+.doc > .rail { grid-column: 1; grid-row: 1 / span 20; align-self: start; position: sticky; top: var(--s6); }
+.doc h2 { font-size: var(--t-h2); font-weight: 560; line-height: 1.1; letter-spacing: -0.015em; margin: 0 0 var(--s5); }
+.doc h3 { font-size: var(--t-h3); font-weight: 600; line-height: 1.2; margin: 0 0 var(--s3); }
+.doc p { margin: 0 0 var(--s4); max-width: 65ch; }
+.intro { font-size: var(--t-lede); line-height: 1.5; }
+.doc article, .doc .part { padding-top: var(--s7); scroll-margin-top: var(--s5); }
+.lead-in { font-weight: 650; }
+
+.toc-h { font-size: var(--t-meta); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 var(--s3); }
+.toc ol { margin: 0; padding: 0; list-style: none; counter-reset: q; border-top: 1px solid var(--rule); }
+.toc li { counter-increment: q; border-bottom: 1px solid var(--rule); }
+.toc a { display: flex; gap: var(--s3); align-items: baseline; min-height: 44px; padding: var(--s2) 0; text-decoration: none; font-size: var(--t-small); line-height: 1.35; }
+.toc a::before { content: counter(q); color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 1ch; }
+
+/* figures break out 160px to the right, but never past the page's right gutter
+   (20px spare for a classic scrollbar inside 100vw) */
+.doc { --room: calc(100vw - 2 * var(--gutter) - var(--rail) - var(--s7) - 20px); }
+.shot { margin: var(--s5) 0; width: max(100%, min(100% + 160px, var(--room))); }
+.shot a { display: block; border: 1px solid var(--ink); }
+.shot img { width: 100%; aspect-ratio: 16 / 9; }
+.shot figcaption { font-size: var(--t-small); color: var(--ink-2); margin-top: var(--s3); max-width: 62ch; }
+@media (hover: hover) { .shot a:hover { outline: 3px solid var(--accent); outline-offset: 2px; } }
+
+.ledger-wrap { margin: var(--s5) 0 var(--s3); overflow-x: auto; position: relative; }
+.ledger { width: 100%; border-collapse: collapse; font-size: var(--t-small); line-height: 1.35; font-variant-numeric: tabular-nums; border-top: 3px double var(--ink); border-bottom: 1px solid var(--ink); }
+.ledger caption { text-align: left; font-size: var(--t-h3); font-weight: 600; padding-bottom: var(--s3); }
+.ledger th { text-align: left; font-weight: 600; font-size: var(--t-meta); color: var(--ink-2); padding: var(--s2) var(--s3) var(--s2) 0; border-bottom: 1px solid var(--ink); vertical-align: bottom; }
+.ledger td { padding: var(--s3) var(--s3) var(--s3) 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.ledger tbody tr { position: relative; }
+.ledger td:first-child { white-space: nowrap; }
+.ledger td:first-child a { font-weight: 650; letter-spacing: 0.04em; text-decoration: none; }
+.ledger td:first-child a::after { content: ""; position: absolute; inset: 0; }
+.ledger .num { text-align: right; }
+.ledger .st { white-space: nowrap; }
+.ledger .st svg { width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; }
+.ledger .hot td { color: var(--accent); }
+@media (hover: hover) { .ledger tbody tr:hover td { background: rgba(22, 58, 58, 0.05); } }
+.fine { font-size: var(--t-small); color: var(--ink-2); }
+
+.stand-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3) var(--s5); margin-top: var(--s5); }
+.stand-row a:not([class]) { min-height: 44px; display: inline-flex; align-items: center; }
+
+.dial-fig { margin: var(--s5) 0 var(--s5); max-width: 520px; color: var(--ink); }
+.dial { width: 100%; height: auto; display: block; }
+.dial-n { font-family: var(--serif); font-size: 24px; font-weight: 600; fill: var(--ink); stroke: var(--ground); stroke-width: 5px; paint-order: stroke; }
+.ladder { list-style: upper-roman; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s5); margin: var(--s3) 0 0; padding: 0 0 0 1.2em; font-size: var(--t-small); }
+.ladder li { padding-left: 2px; margin-right: var(--s3); }
+.ladder li::marker { color: var(--ink-2); font-weight: 600; }
+.ladder .hot { color: var(--accent); }
+.dial-fig figcaption { font-size: var(--t-small); color: var(--ink-2); margin-top: var(--s3); }
+
+.coords { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s5); margin: var(--s5) 0; padding: var(--s4) 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); }
+.coords dt { font-weight: 650; }
+.coords dd { margin: var(--s1) 0 0; font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+
+.compare { width: 100%; border-collapse: collapse; margin: var(--s5) 0; font-size: var(--t-small); line-height: 1.4; border-top: 3px double var(--ink); border-bottom: 1px solid var(--ink); }
+.compare th, .compare td { text-align: left; padding: var(--s3) var(--s3) var(--s3) 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.compare thead th { font-size: var(--t-meta); color: var(--ink-2); border-bottom: 1px solid var(--ink); }
+.compare tbody th { font-weight: 600; width: 22%; }
+.compare td:last-child { color: var(--ink); font-weight: 500; }
+
+.kit { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: start; gap: var(--s3); margin: var(--s5) 0 var(--s4); width: max(100%, min(100% + 160px, var(--room))); color: var(--ink); }
+.kit figure { margin: 0; text-align: center; }
+.kit svg { width: 100%; max-width: 160px; height: auto; margin: 0 auto; display: block; }
+.kit figcaption { font-size: var(--t-small); margin-top: var(--s2); }
+.kit figcaption b { font-weight: 650; display: block; }
+.wire { display: flex; flex-direction: column; align-items: center; padding-top: 34px; font-size: var(--t-meta); color: var(--ink-2); letter-spacing: 0.04em; }
+.wire svg { width: 56px; height: 12px; }
+.parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s5); margin-top: var(--s4); }
+.parts h3 { font-size: 1.1875rem; }
+.parts p { font-size: var(--t-small); line-height: 1.5; }
+.steps { margin: var(--s4) 0 0; padding: 0; list-style: none; counter-reset: st; border-top: 1px solid var(--ink); }
+.steps li { counter-increment: st; display: grid; grid-template-columns: 2.25rem 1fr; gap: var(--s3); padding: var(--s4) 0; border-bottom: 1px solid var(--rule); }
+.steps li::before { content: counter(st); font-size: var(--t-h3); font-weight: 600; line-height: 1.1; color: var(--ink-2); }
+.steps b { font-weight: 650; }
+.release { border-top: 3px double var(--ink); padding-top: var(--s4); font-size: var(--t-small); }
+.release h3 { font-size: 1.1875rem; margin-bottom: var(--s2); }
+.release p { margin-bottom: var(--s3); }
+.release a:not([class]) { min-height: 44px; display: inline-flex; align-items: center; }
+
+.faq details { border-bottom: 1px solid var(--rule); }
+.faq details:first-of-type { border-top: 1px solid var(--ink); }
+.faq summary { display: block; position: relative; min-height: 56px; padding: var(--s4) var(--s7) var(--s4) 0; cursor: pointer; font-weight: 600; font-size: 1.1875rem; line-height: 1.3; list-style: none; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-weight: 400; font-size: 1.5rem; color: var(--ink-2); }
+.faq details[open] summary::after { content: "−"; }
+.faq details p { padding-bottom: var(--s4); }
+@media (hover: hover) { .faq summary:hover { color: var(--ink-2); } }
+
+.ways { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: var(--s6); margin-top: var(--s5); width: max(100%, min(100% + 160px, var(--room))); }
+.ways h3 { font-size: 1.1875rem; }
+.ways p, .ways li { font-size: var(--t-small); line-height: 1.5; }
+.ways ul { margin: 0; padding-left: 1.1em; }
+.ways li { margin-bottom: var(--s2); }
+.qr { width: 156px; border: 1px solid var(--ink); background: #fff; padding: 6px; margin-bottom: var(--s3); }
+.mail { margin-top: var(--s6); }
+.finale { margin-top: var(--s7); padding-top: var(--s6); border-top: 3px double var(--ink); }
+.finale p.big { font-size: var(--t-h3); font-weight: 600; line-height: 1.25; margin-bottom: var(--s4); }
+
+/* ---------- footer ---------- */
+.foot { border-top: 1px solid var(--ink); padding: var(--s7) var(--gutter) var(--s6); font-size: var(--t-small); }
+.foot-cols { display: grid; grid-template-columns: repeat(3, max-content); gap: var(--s5) var(--s7); margin-bottom: var(--s6); }
+.foot h2 { font-size: var(--t-meta); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 var(--s2); }
+.foot ul { list-style: none; margin: 0; padding: 0; }
+.foot li a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; white-space: nowrap; }
+.legal { color: var(--ink-2); max-width: 72ch; border-top: 1px solid var(--rule); padding-top: var(--s4); }
+.legal p { margin: 0 0 var(--s3); }
+.legal a { color: var(--ink); }
+
+/* ---------- tablet and phone: plate on top, the title set under it ---------- */
+@media (max-width: 1199px) {
+  .bar { position: static; }
+  .bar .sec { display: none; }
+  .hero { min-height: 0; }
+  .scene { position: relative; inset: auto; aspect-ratio: 16 / 10; order: 1; border-bottom: 1px solid var(--ink); }
+  /* crop x 600–1600, y 280–905 of the 1600×1000 plate */
+  .scene .plate, .scene .marks { inset: auto; width: 160%; height: auto; left: -60%; top: -44.8%; }
+  .marks .lbl { font-size: 17px; stroke-width: 6px; }
+  .plate-foot { order: 2; margin-top: 0; padding: var(--s3) var(--gutter) 0; }
+  .title { order: 3; width: auto; margin: 0; padding: var(--s5) var(--gutter) var(--s6); }
+  h1 { font-size: 3rem; }
+  .doc { grid-template-columns: minmax(0, 1fr); padding-block: var(--s7); }
+  .doc > *, .doc > .rail { grid-column: 1; }
+  .doc > .rail { grid-row: auto; position: static; margin-bottom: var(--s4); }
+  .shot, .kit, .ways { width: 100%; }
+}
+@media (max-width: 640px) {
+  .bar ul { gap: var(--s4); }
+  .scene { aspect-ratio: 390 / 344; }
+  /* crop x 900–1420, y 290–749: the tower and BUH-02's smoke (PH in the generator) */
+  .scene .plate, .scene .marks { width: 307.7%; left: -173.1%; top: -63.2%; }
+  .marks .lbl { font-size: 18px; }
+  .marks .pt:not(.ph), .legend .mid { display: none; }
+  .legend { order: 9; }
+  .plate-foot { display: contents; }
+  .report { order: 2; padding: var(--s3) var(--gutter) 0; font-size: var(--t-meta); line-height: 1.35; }
+  .legend { padding: 0 var(--gutter) var(--s5); }
+  .title { padding-bottom: var(--s4); }
+  h1 { font-size: var(--t-display); margin-bottom: var(--s4); }
+  .lede { margin-bottom: var(--s5); }
+  .btn { width: 100%; }
+  .coords, .parts, .ways, .foot-cols { grid-template-columns: minmax(0, 1fr); }
+  .kit { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .wire { padding-top: 0; flex-direction: row; gap: var(--s2); }
+  .wire svg { display: none; }
+  .wire::before { content: "↓"; font-size: 1.25rem; line-height: 1; color: var(--ink); }
+  .compare thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .compare, .compare tbody, .compare tr, .compare th, .compare td { display: block; }
+  .compare tr { padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+  .compare tbody th { width: auto; border: 0; padding: 0 0 var(--s1); }
+  .compare td { border: 0; padding: 2px 0; }
+  .compare td::before { content: attr(data-h) ": "; color: var(--ink-2); font-size: var(--t-meta); }
+  .doc > * { order: 2; }
+  .doc > h2, .doc > .intro { order: 0; }
+  .doc > .rail { order: 1; }
+  /* journal: each machine becomes a two-line entry */
+  .ledger thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .ledger, .ledger tbody { display: block; }
+  .ledger caption { display: block; }
+  .ledger tbody tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: var(--s3); row-gap: 2px; padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+  .ledger td { padding: 0; border: 0; }
+  .ledger td:nth-child(4) { grid-column: 1 / 3; color: var(--ink-2); }
+  .ledger td:nth-child(5) { grid-column: 3; text-align: right; }
+  .ledger .hot td { color: var(--accent); }
+}
+@media (max-width: 380px) { .bar .gh { display: none; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Перейти к содержанию</a>
+<!--defs--><svg class="defs" width="0" height="0" aria-hidden="true" focusable="false"><defs><pattern id="hd1" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)"><path d="M0 0V7" stroke="#163A3A" stroke-width="0.7"/></pattern><pattern id="hd2" width="4.6" height="4.6" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)"><path d="M0 0V4.6" stroke="#163A3A" stroke-width="0.75"/></pattern><pattern id="hd3" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)"><path d="M0 0V3.2" stroke="#163A3A" stroke-width="0.8"/></pattern><pattern id="hd4" width="2.6" height="2.6" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)"><path d="M0 0V2.6M0 0H2.6" stroke="#163A3A" stroke-width="0.85"/></pattern><pattern id="hv" width="2.4" height="2.4" patternUnits="userSpaceOnUse" patternTransform="rotate(0)"><path d="M0 0V2.4" stroke="#163A3A" stroke-width="0.6"/></pattern><pattern id="hs" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(50)"><path d="M0 0V5" stroke="#163A3A" stroke-width="0.6"/></pattern></defs></svg><!--/defs-->
+
+<header class="bar">
+  <a class="mark" href="../"><span class="nw">J-Space</span></a>
+  <nav aria-label="Основное меню">
+    <ul>
+      <li class="sec"><a href="#what">Что видно с вышки</a></li>
+      <li class="sec"><a href="#how">Как он решает</a></li>
+      <li class="sec"><a href="#download">Установка</a></li>
+      <li class="sec"><a href="#faq">Вопросы</a></li>
+      <li class="gh"><a href="https://github.com/SergioTheFirst/srp">GitHub</a></li>
+      <li class="stand"><a href="https://srp-private.vercel.app/">Рабочий стенд</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="main">
+<section class="hero" id="top" aria-labelledby="hero-h">
+  <div class="scene">
+    <img class="plate" src="plate.svg" width="1600" height="1000" fetchpriority="high" decoding="async"
+         alt="Гравюра: пожарная вышка на холме над еловыми грядами, в будке наблюдатель. Среди деревьев отмечены десять машин демо-парка, над BUH-02 поднимается дымок.">
+<!--overlay-->
+<svg class="marks" viewBox="0 0 1600 1000" preserveAspectRatio="xMaxYMax slice" role="group" aria-label="Машины демо-парка на гравюре">
+<defs><radialGradient id="sf" gradientUnits="userSpaceOnUse" cx="1272" cy="699.5313274277777" r="275"><stop offset="0.6" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+<mask id="sm" maskUnits="userSpaceOnUse" x="992" y="379.5313274277777" width="360" height="330"><rect x="992" y="379.5313274277777" width="360" height="330" fill="url(#sf)"/></mask></defs>
+<g class="smoke" aria-hidden="true">
+<path class="k" d="M1268 693.5L1266.9 680L1265.8 666.4L1264.6 653L1262.8 639.6L1260.1 626.5L1256.3 613.7L1251.5 601.4L1246.1 589.7L1240.8 578.3L1236.2 566.9L1232.4 555.1L1229.1 542.8L1225.2 530.4L1219.8 518.6L1211.8 508.5L1200.7 501L1187.3 496.8L1173.2 495.4L1160.3 495.7L1150.5 495.3L1181.3 441.5L1195.4 447.8L1210.9 453.2L1226.4 459.6L1240.1 468.3L1250.7 479.6L1257.9 493.2L1262.2 508.3L1264.8 524L1266.7 539.5L1268.8 554.4L1271.6 568.6L1274.8 582.6L1277.9 596.5L1280.3 610.5L1281.5 624.6L1281.6 638.6L1280.7 652.4L1279.2 666.2L1277.6 679.9L1276 693.5Z" opacity="0.78" mask="url(#sm)"/>
+<g mask="url(#sm)" fill="none" stroke="currentColor" stroke-linecap="round">
+<path class="w w1" d="M1272 693.5L1272.1 683.3L1272.3 673.1L1272.5 666.3L1272.6 656.1L1272.5 645.9L1272 635.7L1270.9 625.5L1269.6 618.8L1267.4 608.8L1264.7 599L1261.6 589.3L1258.4 579.8L1256.2 573.5L1253.4 563.9L1250.9 554L1248.7 543.9L1246.6 533.6L1245.8 526.2L1242.9 515.8L1238.9 505.9L1233.4 496.8L1226.4 488.8L1220 485L1210.2 479.8L1199.5 476L1188.6 473.3L1178.2 471.2L1171.4 470.6" stroke-width="1.3"/>
+<path class="w w2" d="M1271.1 686.7L1270.8 676.5L1270.6 666.4L1270.4 656.2L1270.3 646L1270.4 639.2L1270.2 629L1269.5 618.8L1268 608.7L1265.7 598.8L1263.1 592.4L1259 583.1L1254.3 574L1249.4 565.3L1244.6 556.7L1241.7 550.9L1238.3 541.7L1235.5 531.9L1233.2 521.7L1230.8 511.3L1229.6 503.8L1225.2 494.2L1219 485.8L1210.7 479.3L1200.5 474.9L1191.6 474.7L1180 473.9L1169.2 474" stroke-width="1"/>
+<path class="w w3" d="M1272.9 686.7L1273 676.5L1273 666.3L1272.7 656.1L1272 645.9L1271.4 639.1L1270.5 629L1269.6 618.8L1268.9 608.6L1268.3 598.3L1268.6 591.2L1268.1 580.7L1267.2 570L1265.4 559.5L1262.3 549.3L1259.3 542.9L1253.4 534L1246.2 525.9L1238.2 518.7L1230 511.8L1224.2 507.6L1217.5 500.1L1212.1 491.6L1208 481.8L1204.6 470.7L1203.8 461L1199.5 448.7L1193.1 437.3" stroke-width="1"/>
+<path class="w w4" d="M1270.2 676.5L1269.4 666.4L1268.5 659.6L1267.6 649.5L1266.8 639.4L1266.3 629.3L1265.8 619.2L1265.7 612.4L1264.8 602.4L1263 592.4L1260.1 582.8L1255.8 573.6L1251.4 568.1L1245.1 560L1238.5 552.3L1232.3 544.7L1227 536.7L1224.6 530.8L1221.7 521.2L1219.5 510.9L1217.1 500.4L1213.6 490.3L1210.3 484.2L1202.5 477.7L1192.3 473.9L1180.6 473.1L1168.7 474.7" stroke-width="0.8"/>
+<path class="w w5" d="M1273 676.5L1273.1 666.3L1273.3 659.5L1273.6 649.3L1274 639L1274.6 628.6L1275.2 618.2L1275.8 611.1L1275.3 600.6L1273.7 590.2L1270.9 580L1266.8 570.1L1263 564L1257.9 554.9L1252.9 545.7L1248.8 536.3L1245.7 526.2L1245.3 518.4L1243.7 506.9L1241.8 495.2L1238.8 483.8L1233.7 473.6L1228.5 468L1218.5 461.8L1206.6 457.9L1194 455.8L1181.9 454.5" stroke-width="0.8"/>
+<path class="w w6" d="M1269.5 669.8L1268.4 659.6L1266.9 649.5L1265.1 639.5L1263.4 632.9L1261.7 623L1260.3 613.2L1259.2 603.3L1258.3 593.4L1257.8 586.8L1255.7 577.1L1252.2 567.8L1246.9 559.3L1240 551.6L1233.5 547.7L1225.5 541.2L1218.3 534.5L1212.6 527.1L1208.6 518.6L1208 511.3L1206.1 500.7L1203.5 490.3L1198.8 481.4L1191.2 475.2L1183.4 474.6L1171.5 475.6L1159.6 479.5" stroke-width="0.6"/>
+<path class="w w7" d="M1274.8 669.7L1275.7 659.4L1276.6 649.1L1277.2 638.8L1277.5 631.9L1276.8 621.5L1275.3 611.2L1273.2 601L1270.7 590.8L1269.3 584L1267.8 573.5L1266.9 562.7L1266.4 551.4L1265.7 539.9L1265.7 531.8L1262.5 521L1257 511.4L1249.4 503.2L1240.2 496.3L1232.5 493.1L1223.4 486.7L1216 479.2L1210.6 469.7L1206.8 457.7L1206.4 446.3L1202 431.5L1194.7 418.1" stroke-width="0.6"/>
+<path d="M1269.4 593.4L1267.8 593.5L1266.2 594L1264.8 594.8L1263.6 595.8L1262.7 597.1L1262.1 598.4L1261.7 599.8L1261.7 601.2L1261.9 602.6L1262.4 603.8L1263.1 604.9L1264 605.8L1265 606.5L1266.1 607L1267.2 607.2L1268.3 607.2M1251.4 557.8L1253.3 557L1255.2 556.6L1257.1 556.6L1259 557L1260.7 557.8L1262.1 558.8L1263.3 560.1L1264.2 561.5L1264.7 563.1L1264.9 564.7L1264.8 566.2L1264.4 567.7L1263.8 569L1262.9 570.1L1261.8 571L1260.6 571.6M1245.7 521.2L1243.5 522.2L1241.7 523.5L1240.2 525.2L1239 527.1L1238.3 529.1L1238.1 531.2L1238.2 533.2L1238.8 535.1L1239.6 536.8L1240.8 538.3L1242.2 539.4L1243.8 540.2L1245.5 540.7L1247.1 540.8L1248.7 540.6L1250.2 540.1M1201 508.1L1203.1 506.5L1205.4 505.3L1207.9 504.6L1210.4 504.5L1212.8 504.8L1215 505.6L1216.9 506.8L1218.6 508.3L1219.9 510.1L1220.7 512.1L1221.1 514.1L1221.2 516.1L1220.8 518L1220 519.7L1219 521.2L1217.7 522.5M1219.9 451.3L1217.6 453.2L1215.8 455.4L1214.5 457.9L1213.7 460.6L1213.5 463.3L1213.8 465.9L1214.7 468.3L1215.9 470.5L1217.6 472.3L1219.5 473.7L1221.6 474.6L1223.8 475.1L1226 475.1L1228 474.8L1229.9 474L1231.6 472.9M1172.6 457.9L1174.4 455.3L1176.7 453.1L1179.3 451.4L1182.1 450.3L1185 449.9L1187.9 450L1190.6 450.7L1193 451.9L1195.1 453.5L1196.8 455.4L1198.1 457.6L1198.8 459.9L1199 462.3L1198.8 464.6L1198.1 466.7L1197.1 468.6" stroke-width="0.7"/>
+</g>
+<path d="M1272 693.5L1272.1 683.3L1272.3 673.1M1271.2 690.1L1270.9 679.9M1272.8 690.1L1273 679.9" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
+</g>
+<a class="pt ph" href="../demo/device/demo-buh-02.html" aria-label="BUH-02: предотказ, срок реакции до 7 дней. Открыть карточку в снимке экранов" data-line="BUH-02 · предотказ · срок реакции до 7 дней · накопитель: 124 переназначенных сектора, 18 в ожидании" data-s="2">
+<rect class="hit" x="1254" y="666.5" width="123.3" height="66" rx="3"/>
+<circle class="k" cx="1272" cy="699.5" r="10"/>
+<circle cx="1272" cy="699.5" r="10.5" fill="none" stroke="var(--accent)" stroke-width="1.2"/><circle cx="1272" cy="699.5" r="5.6" fill="var(--accent)"/>
+<text class="lbl hot" x="1285" y="704.5" aria-hidden="true">BUH-02</text></a>
+<a class="pt ph" href="../demo/device/demo-buh-01.html" aria-label="BUH-01: здоров. Открыть карточку в снимке экранов" data-line="BUH-01 · здоров · индекс 100 · в норме" data-s="0">
+<rect class="hit" x="1080.7" y="698.5" width="123.3" height="66" rx="3"/>
+<circle class="k" cx="1186" cy="731.5" r="10"/>
+<circle cx="1186" cy="731.5" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<text class="lbl" x="1173" y="736.5" text-anchor="end" aria-hidden="true">BUH-01</text></a>
+<a class="pt ph" href="../demo/device/demo-it-01.html" aria-label="IT-01: здоров. Открыть карточку в снимке экранов" data-line="IT-01 · здоров · индекс 100 · в норме" data-s="0">
+<rect class="hit" x="936.6" y="689.9" width="111.4" height="66" rx="3"/>
+<circle class="k" cx="1030" cy="722.9" r="10"/>
+<circle cx="1030" cy="722.9" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<text class="lbl" x="1017" y="727.9" text-anchor="end" aria-hidden="true">IT-01</text></a>
+<a class="pt" href="../demo/device/demo-prod-01.html" aria-label="PROD-01: компенсация, срок реакции до 90 дней. Открыть карточку в снимке экранов" data-line="PROD-01 · компенсация · индекс 75 · траектория ресурса · срок реакции до 90 дней" data-s="1">
+<rect class="hit" x="812.8" y="663.1" width="135.2" height="66" rx="3"/>
+<circle class="k" cx="930" cy="696.1" r="10"/>
+<circle cx="930" cy="696.1" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<path d="M930 690.9a5.2 5.2 0 0 0 0 10.4z" fill="currentColor"/>
+<text class="lbl" x="917" y="701.1" text-anchor="end" aria-hidden="true">PROD-01</text></a>
+<a class="pt" href="../demo/device/demo-kadry-01.html" aria-label="KADRY-01: компенсация, срок реакции до 90 дней. Открыть карточку в снимке экранов" data-line="KADRY-01 · компенсация · индекс 57 · заполнение диска · срок реакции до 90 дней" data-s="1">
+<rect class="hit" x="788" y="721.1" width="147" height="66" rx="3"/>
+<circle class="k" cx="806" cy="754.1" r="10"/>
+<circle cx="806" cy="754.1" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<path d="M806 748.9a5.2 5.2 0 0 0 0 10.4z" fill="currentColor"/>
+<text class="lbl" x="819" y="759.1" aria-hidden="true">KADRY-01</text></a>
+<a class="pt" href="../demo/device/demo-dir-nb.html" aria-label="DIR-NB: здоров. Открыть карточку в снимке экранов" data-line="DIR-NB · здоров · индекс 100 · в норме" data-s="0">
+<rect class="hit" x="1312" y="806.2" width="123.3" height="66" rx="3"/>
+<circle class="k" cx="1330" cy="839.2" r="10"/>
+<circle cx="1330" cy="839.2" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<text class="lbl" x="1343" y="844.2" aria-hidden="true">DIR-NB</text></a>
+<a class="pt" href="../demo/device/demo-sekr-01.html" aria-label="SEKR-01: компенсация, срок реакции до 90 дней. Открыть карточку в снимке экранов" data-line="SEKR-01 · компенсация · индекс 62 · старение ПО · срок реакции до 90 дней" data-s="1">
+<rect class="hit" x="682.8" y="594.3" width="135.2" height="66" rx="3"/>
+<circle class="k" cx="800" cy="627.3" r="10"/>
+<circle cx="800" cy="627.3" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<path d="M800 622.1a5.2 5.2 0 0 0 0 10.4z" fill="currentColor"/>
+<text class="lbl" x="787" y="632.3" text-anchor="end" aria-hidden="true">SEKR-01</text></a>
+<a class="pt" href="../demo/device/demo-sklad-01.html" aria-label="SKLAD-01: ранняя деградация. Открыть карточку в снимке экранов" data-line="SKLAD-01 · ранняя деградация · индекс 70 · операционная система" data-s="1">
+<rect class="hit" x="1370" y="738.5" width="147" height="66" rx="3"/>
+<circle class="k" cx="1388" cy="771.5" r="10"/>
+<circle cx="1388" cy="771.5" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<path d="M1388 766.3a5.2 5.2 0 0 0 0 10.4z" fill="currentColor"/>
+<text class="lbl" x="1401" y="776.5" aria-hidden="true">SKLAD-01</text></a>
+<a class="pt" href="../demo/device/demo-prod-02.html" aria-label="PROD-02: здоров. Открыть карточку в снимке экранов" data-line="PROD-02 · здоров · индекс 100 · в норме" data-s="0">
+<rect class="hit" x="1360.8" y="625.4" width="135.2" height="66" rx="3"/>
+<circle class="k" cx="1478" cy="658.4" r="10"/>
+<circle cx="1478" cy="658.4" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<text class="lbl" x="1465" y="663.4" text-anchor="end" aria-hidden="true">PROD-02</text></a>
+<a class="pt" href="../demo/device/demo-old-pc.html" aria-label="STARYI-PC: компенсация, срок реакции до 90 дней. Открыть карточку в снимке экранов" data-line="STARYI-PC · компенсация · индекс 80 · системная причина · срок реакции до 90 дней" data-s="1">
+<rect class="hit" x="1359.1" y="526.3" width="158.9" height="66" rx="3"/>
+<circle class="k" cx="1500" cy="559.3" r="10"/>
+<circle cx="1500" cy="559.3" r="5.2" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/>
+<path d="M1500 554.1a5.2 5.2 0 0 0 0 10.4z" fill="currentColor"/>
+<text class="lbl" x="1487" y="564.3" text-anchor="end" aria-hidden="true">STARYI-PC</text></a>
+</svg>
+<!--/overlay-->
+  </div>
+
+  <div class="title">
+    <h1 id="hero-h">Вы узнаёте, что компьютер начал сдавать, раньше пользователя</h1>
+    <p class="lede"><span class="nw">J-Space</span> — пожарная вышка над вашим офисным парком: компьютеры, принтеры и сеть на одном экране, у каждой тревоги понятная причина и срок, чтобы спокойно вмешаться. Работает на вашем сервере и бесплатно.</p>
+    <p class="act"><a class="btn" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a></p>
+    <p class="note">Это настоящий сервер <span class="nw">J-Space</span> с демо-парком из 10 машин. Режим только для чтения, так что смело нажимайте всё. Если стенд дремал, первая страница откроется чуть дольше. Мгновенный вариант: <a href="../demo/">снимок экранов</a>.</p>
+  </div>
+
+  <div class="plate-foot">
+    <p class="report" id="report" data-s="2" aria-live="polite">
+      <svg class="m2" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4" fill="currentColor"/></svg>
+      <svg class="m1" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>
+      <svg class="m0" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+      <span class="report-text">BUH-02 · предотказ · срок реакции до 7 дней · накопитель: 124 переназначенных сектора, 18 в ожидании</span>
+    </p>
+    <p class="legend">
+      <span>Демо-парк: 10 машин, 45 дней истории.</span>
+      <span class="key"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>здоров</span>
+      <span class="key mid"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>ранняя деградация или компенсация</span>
+      <span class="key hot"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="currentColor"/></svg>предотказ</span>
+      <span>Метки на карте ведут в карточку машины.</span>
+    </p>
+  </div>
+</section>
+
+<!-- 1 ============================================================ -->
+<section class="doc" id="what" aria-labelledby="what-h">
+  <nav class="rail toc" aria-labelledby="toc-h">
+    <p class="toc-h" id="toc-h">В этом разделе</p>
+    <ol>
+      <li><a href="#q-break">Что сломается</a></li>
+      <li><a href="#q-runout">Что кончится</a></li>
+      <li><a href="#q-net">Что к чему подключено</a></li>
+      <li><a href="#q-print">Кто сколько печатает</a></li>
+      <li><a href="#q-trust">Можно ли опереться на данные</a></li>
+    </ol>
+  </nav>
+  <h2 id="what-h">Что видно с вышки</h2>
+  <p class="intro">Когда вы один отвечаете за весь офис, утро начинается с четырёх вопросов. <span class="nw">J-Space</span> отвечает на все четыре с одного экрана и показывает, насколько можно опереться на каждый ответ.</p>
+
+  <article id="q-break" aria-labelledby="q-break-h">
+    <h3 id="q-break-h">Что сломается</h3>
+    <p>У каждой машины одно из пяти состояний и три оценки от 0 до 100: повреждения, устойчивость, наблюдаемость. Вместо гадания о дате отказа <span class="nw">J-Space</span> называет срок реакции: время, за которое вы спокойно успеете вмешаться.</p>
+    <figure class="shot" id="shots">
+      <a href="../demo/device/demo-buh-02.html"><img src="../img/device-dying-disk.png" width="1600" height="900" fetchpriority="low" decoding="async"
+        alt="Карточка BUH-02 в снимке экранов: состояние «предотказ», главный фактор накопитель, повреждения 100 из 100, устойчивость 0 из 100, наблюдаемость 75 из 100."></a>
+      <figcaption>BUH-02 из демо-парка, жёсткий диск бухгалтерии на 1 ТБ: 124 переназначенных сектора и 18 в ожидании, прошивка диска сама подаёт сигнал. Срок реакции до 7 дней: самое время снять образ и заказать замену.</figcaption>
+    </figure>
+
+    <div class="ledger-wrap" id="demo">
+      <table class="ledger">
+        <caption>Журнал вышки</caption>
+        <thead><tr><th scope="col">Машина</th><th scope="col">Состояние</th><th scope="col" class="num">Индекс</th><th scope="col">Главный фактор</th><th scope="col">Срок реакции</th></tr></thead>
+        <tbody>
+          <tr class="hot"><td><a href="../demo/device/demo-buh-02.html">BUH-02</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4" fill="currentColor"/></svg>предотказ</td><td class="num">0</td><td>накопитель</td><td>≤ 7 дн</td></tr>
+          <tr><td><a href="../demo/device/demo-old-pc.html">STARYI-PC</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>компенсация</td><td class="num">80</td><td>системная причина</td><td>≤ 90 дн</td></tr>
+          <tr><td><a href="../demo/device/demo-prod-01.html">PROD-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>компенсация</td><td class="num">75</td><td>траектория ресурса</td><td>≤ 90 дн</td></tr>
+          <tr><td><a href="../demo/device/demo-sekr-01.html">SEKR-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>компенсация</td><td class="num">62</td><td>старение ПО</td><td>≤ 90 дн</td></tr>
+          <tr><td><a href="../demo/device/demo-kadry-01.html">KADRY-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>компенсация</td><td class="num">57</td><td>заполнение диска</td><td>≤ 90 дн</td></tr>
+          <tr><td><a href="../demo/device/demo-sklad-01.html">SKLAD-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 1.7a4.3 4.3 0 0 0 0 8.6z" fill="currentColor"/></svg>ранняя деградация</td><td class="num">70</td><td>операционная система</td><td></td></tr>
+          <tr><td><a href="../demo/device/demo-prod-02.html">PROD-02</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>здоров</td><td class="num">100</td><td>в норме</td><td></td></tr>
+          <tr><td><a href="../demo/device/demo-buh-01.html">BUH-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>здоров</td><td class="num">100</td><td>в норме</td><td></td></tr>
+          <tr><td><a href="../demo/device/demo-dir-nb.html">DIR-NB</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>здоров</td><td class="num">100</td><td>в норме</td><td></td></tr>
+          <tr><td><a href="../demo/device/demo-it-01.html">IT-01</a></td><td class="st"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>здоров</td><td class="num">100</td><td>в норме</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fine">Парк вымышленный, история телеметрии настоящая: те же цифры живут на рабочем стенде.</p>
+  </article>
+
+  <article id="q-runout" aria-labelledby="q-runout-h">
+    <h3 id="q-runout-h">Что кончится</h3>
+    <p>Тонер, свободное место на диске, ресурс SSD: где у ресурса есть физический предел, <span class="nw">J-Space</span> ставит дату, когда он закончится, а для остальных показателей рисует направление тренда. Картридж приезжает раньше, чем встанет печать.</p>
+    <figure class="shot">
+      <a href="../demo/printers.html"><img src="../img/printers.png" width="1600" height="900" fetchpriority="low" decoding="async"
+        alt="Страница принтеров в снимке экранов: уровни расходников, счётчики страниц и прогноз до конца тонера."></a>
+      <figcaption>Принтеры демо-парка: уровни расходников по SNMP, счётчики страниц и прогноз «≈ 3 дн» до конца тонера.</figcaption>
+    </figure>
+  </article>
+
+  <article id="q-net" aria-labelledby="q-net-h">
+    <h3 id="q-net-h">Что к чему подключено</h3>
+    <p>Роутер, коммутатор, точки доступа, компьютеры и принтеры складываются в карту сети: <span class="nw">J-Space</span> собирает её из SNMP, LLDP и наблюдений самих агентов. Провод и Wi-Fi нарисованы по-разному, у каждой связи своя степень уверенности.</p>
+    <figure class="shot">
+      <a href="../demo/netmap.html"><img src="../img/netmap.png" width="1600" height="900" fetchpriority="low" decoding="async"
+        alt="Карта сети в снимке экранов: роутер, коммутатор, точки доступа, компьютеры и принтеры, связи с разной степенью уверенности."></a>
+      <figcaption>Карта сети демо-парка: 16 узлов, 25 связей, фильтры по типу и уверенности.</figcaption>
+    </figure>
+  </article>
+
+  <article id="q-print" aria-labelledby="q-print-h">
+    <h3 id="q-print-h">Кто сколько печатает</h3>
+    <p>Учёт печати в страницах: с какого компьютера, на какой принтер, сколько, по дням и отделам, с выгрузкой в CSV. Сетевые принтеры <span class="nw">J-Space</span> сам сопоставляет с очередями печати на машинах.</p>
+    <figure class="shot">
+      <a href="../demo/print.html"><img src="../img/print.png" width="1600" height="900" fetchpriority="low" decoding="async"
+        alt="Учёт печати в снимке экранов: компьютеры, принтеры и число страниц по дням."></a>
+      <figcaption>Учёт печати демо-парка: компьютер, принтер, страницы по дням.</figcaption>
+    </figure>
+  </article>
+
+  <article id="q-trust" aria-labelledby="q-trust-h">
+    <h3 id="q-trust-h">Можно ли опереться на данные</h3>
+    <p>Каждый источник телеметрии проходит проверку: свежий ли он, согласуется ли с остальными, на связи ли. В выводы попадают только проверенные источники, а там, где сведений мало, <span class="nw">J-Space</span> так прямо и пишет. Поэтому на каждую цифру на экране можно опереться.</p>
+    <p><a href="../demo/pipeline.html">Открыть внутренности сервера</a></p>
+  </article>
+
+  <div class="part">
+    <p>Всё это живёт на рабочем стенде: сортировки, переход в карточку машины, выгрузка CSV.</p>
+    <div class="stand-row">
+      <a class="btn-ink" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a>
+      <a href="../demo/health.html">Ещё в снимке: здоровье парка</a>
+    </div>
+  </div>
+</section>
+
+<!-- 2 ============================================================ -->
+<section class="doc" id="how" aria-labelledby="how-h">
+  <h2 id="how-h">Как он решает</h2>
+
+  <div class="part" style="padding-top:0">
+    <h3>Пять ступеней вместо сирены</h3>
+    <p>Машина сдаёт постепенно: здоров → ранняя деградация → компенсация → ускоренная деградация → предотказ. <span class="nw">J-Space</span> замечает каждый переход, как лесная служба, которая ведёт класс пожарной опасности по погоде задолго до первого дыма.</p>
+    <figure class="dial-fig">
+      <!--dial--><svg class="dial" viewBox="0 0 440 236" role="img" aria-label="Шкала из пяти ступеней, стрелка на пятой ступени: предотказ"><path d="M44 214A176 176 0 0 1 77.6 110.5L169.8 177.6A62 62 0 0 0 158 214Z" fill="none" stroke="currentColor" stroke-width="1"/><path d="M77.6 110.5A176 176 0 0 1 165.6 46.6L200.8 155A62 62 0 0 0 169.8 177.6Z" fill="url(#hd1)" stroke="currentColor" stroke-width="1"/><path d="M165.6 46.6A176 176 0 0 1 274.4 46.6L239.2 155A62 62 0 0 0 200.8 155Z" fill="url(#hd2)" stroke="currentColor" stroke-width="1"/><path d="M274.4 46.6A176 176 0 0 1 362.4 110.5L270.2 177.6A62 62 0 0 0 239.2 155Z" fill="url(#hd3)" stroke="currentColor" stroke-width="1"/><path d="M362.4 110.5A176 176 0 0 1 396 214L282 214A62 62 0 0 0 270.2 177.6Z" fill="url(#hd4)" stroke="currentColor" stroke-width="1"/><path d="M39 214A181 181 0 0 1 401 214" fill="none" stroke="currentColor" stroke-width="0.7"/><path d="M28 214A192 192 0 0 1 412 214" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M39 214L28 214M39.4 202.6L35.4 202.4M40.4 191.3L36.5 190.8M42.2 180.1L38.3 179.3M44.7 169L40.8 168M47.9 158.1L41.2 155.9M51.7 147.4L48 145.9M56.2 136.9L52.6 135.2M61.4 126.8L57.9 124.9M67.2 117L63.8 114.9M73.6 107.6L64.7 101.1M80.5 98.6L77.5 96.1M88.1 90.1L85.1 87.4M96.1 82.1L93.4 79.1M104.6 74.5L102.1 71.5M113.6 67.6L109.5 61.9M123 61.2L120.9 57.8M132.8 55.4L130.9 51.9M142.9 50.2L141.2 46.6M153.4 45.7L151.9 42M164.1 41.9L160.7 31.4M175 38.7L174 34.8M186.1 36.2L185.3 32.3M197.3 34.4L196.8 30.5M208.6 33.4L208.4 29.4M220 33L220 26M231.4 33.4L231.6 29.4M242.7 34.4L243.2 30.5M253.9 36.2L254.7 32.3M265 38.7L266 34.8M275.9 41.9L279.3 31.4M286.6 45.7L288.1 42M297.1 50.2L298.8 46.6M307.2 55.4L309.1 51.9M317 61.2L319.1 57.8M326.4 67.6L330.5 61.9M335.4 74.5L337.9 71.5M343.9 82.1L346.6 79.1M351.9 90.1L354.9 87.4M359.5 98.6L362.5 96.1M366.4 107.6L375.3 101.1M372.8 117L376.2 114.9M378.6 126.8L382.1 124.9M383.8 136.9L387.4 135.2M388.3 147.4L392 145.9M392.1 158.1L398.8 155.9M395.3 169L399.2 168M397.8 180.1L401.7 179.3M399.6 191.3L403.5 190.8M400.6 202.6L404.6 202.4M401 214L412 214" stroke="currentColor" stroke-width="0.8"/><text class="dial-n" x="102.1" y="183.7" text-anchor="middle">I</text><text class="dial-n" x="147.1" y="121.7" text-anchor="middle">II</text><text class="dial-n" x="220" y="98" text-anchor="middle">III</text><text class="dial-n" x="292.9" y="121.7" text-anchor="middle">IV</text><text class="dial-n" x="331.5" y="167.6" text-anchor="middle">V</text><path d="M384.4 190.9L218.9 206.1L196.2 217.3Z" fill="var(--ground)" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M384.4 190.9L221.1 221.9L196.2 217.3Z" fill="url(#hv)" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><circle cx="220" cy="214" r="17" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/><circle cx="220" cy="214" r="11.5" fill="none" stroke="currentColor" stroke-width="0.6"/><circle cx="220" cy="214" r="5" fill="currentColor"/><circle cx="368.5" cy="193.1" r="9" fill="var(--ground)" stroke="var(--accent)" stroke-width="1.2"/><circle cx="368.5" cy="193.1" r="4.6" fill="var(--accent)"/></svg><!--/dial-->
+      <ol class="ladder" aria-label="Ступени шкалы">
+        <li>здоров</li><li>ранняя деградация</li><li>компенсация</li><li>ускоренная деградация</li><li class="hot">предотказ</li>
+      </ol>
+      <figcaption>Шкала <span class="nw">J-Space</span>. BUH-02 сегодня на последней ступени.</figcaption>
+    </figure>
+  </div>
+
+  <div class="part">
+    <h3>Три координаты вместо одного числа</h3>
+    <dl class="coords">
+      <div><dt>Повреждения</dt><dd>что уже накоплено (сектора, BSOD, ошибки)</dd></div>
+      <div><dt>Устойчивость</dt><dd>сколько запаса прочности осталось</dd></div>
+      <div><dt>Наблюдаемость</dt><dd>насколько полны данные</dd></div>
+    </dl>
+    <p>У BUH-02: 100, 0 и 75.</p>
+  </div>
+
+  <div class="part">
+    <h3>Честность как принцип</h3>
+    <p>У каждого источника своё доверие: в расчёт идут свежие и согласованные данные, а пробелы видны прямо на экране. Вы всегда знаете, на чём основан вывод.</p>
+    <table class="compare">
+      <caption class="vh">Классический мониторинг и <span class="nw">J-Space</span></caption>
+      <thead><tr><th scope="col"><span class="vh">Вопрос</span></th><th scope="col">Классический мониторинг</th><th scope="col"><span class="nw">J-Space</span></th></tr></thead>
+      <tbody>
+        <tr><th scope="row">На что отвечает</th><td data-h="Классический мониторинг">Что сломано прямо сейчас</td><td data-h="J-Space">Какая машина начала сдавать и сколько времени на реакцию</td></tr>
+        <tr><th scope="row">Как срабатывает</th><td data-h="Классический мониторинг">По порогу: диск на 90 % — авария</td><td data-h="J-Space">По тренду и его значимости, заранее</td></tr>
+        <tr><th scope="row">Оценка машины</th><td data-h="Классический мониторинг">Одно число или набор графиков</td><td data-h="J-Space">Три координаты: повреждения, устойчивость, наблюдаемость</td></tr>
+        <tr><th scope="row">Качество данных</th><td data-h="Классический мониторинг">Берёт данные как есть</td><td data-h="J-Space">Проверяет каждый источник и учитывает только надёжные</td></tr>
+        <tr><th scope="row">Что ставится на ПК</th><td data-h="Классический мониторинг">Агент с зависимостями или опрос извне</td><td data-h="J-Space">Агент на чистой стандартной библиотеке Python, ноль pip-пакетов</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="part" id="zabbix">
+    <h3>Отлично работает вместе с Zabbix</h3>
+    <p><span class="nw">J-Space</span> дополняет его тем, что умеет лучше всего: вердиктом по каждой машине. Четыре значения на компьютер (состояние, риск от 0 до 100, срок реакции в сутках, главный фактор одной фразой) уходят по протоколу траппера, и дальше работают ваши привычные триггеры и эскалации. Включается одной настройкой, адресом Zabbix; готовые шаблоны лежат в репозитории. Наружу уходит только вывод, вся телеметрия остаётся у вас; отправка идёт в фоне, сбор данных работает своим ходом.</p>
+    <p><a href="https://github.com/SergioTheFirst/srp/blob/main/docs/zabbix-export.md">Инструкция по Zabbix</a></p>
+  </div>
+</section>
+
+<!-- 3 ============================================================ -->
+<section class="doc" id="download" aria-labelledby="dl-h">
+  <aside class="rail release" aria-labelledby="rel-h">
+    <h3 id="rel-h">Бесплатная сборка 0.3.0</h3>
+    <p>От 29 августа 2026: до 3 компьютеров, все возможности сразу, лицензия MIT.</p>
+    <p><a class="btn-ink" href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать в Releases</a></p>
+    <p><a href="https://srp-private.vercel.app/">или сначала открыть рабочий стенд</a></p>
+  </aside>
+  <h2 id="dl-h">Что ставится и где живут данные</h2>
+
+  <div class="kit" role="group" aria-label="Схема: агент на Windows отправляет данные серверу по HTTP, сервер отдаёт дашборд в браузер">
+    <figure><!--pc--><svg viewBox="0 0 160 112" role="img" aria-label="Рабочий компьютер с агентом"><rect x="22" y="10" width="116" height="74" rx="3" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/><rect x="30" y="17" width="100" height="58" fill="url(#hs)" stroke="currentColor" stroke-width="0.8"/><path d="M40 64l16-14 12 8 18-22 14 10 20-16" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M70 84l-8 16h36l-8-16" fill="url(#hv)" stroke="currentColor" stroke-width="1.1"/><path d="M46 104h68" stroke="currentColor" stroke-width="1.6"/></svg><!--/pc--><figcaption><b>агент</b>Windows</figcaption></figure>
+    <div class="wire" aria-hidden="true"><svg viewBox="0 0 56 12"><path d="M2 6h48M44 1.5l7 4.5-7 4.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>HTTP</div>
+    <figure><!--server--><svg viewBox="0 0 160 112" role="img" aria-label="Сервер J-Space"><path d="M100 10l16-6v96l-16 6z" fill="url(#hd3)" stroke="currentColor" stroke-width="1.1"/><path d="M50 10l16-6h50l-16 6z" fill="url(#hd1)" stroke="currentColor" stroke-width="1.1"/><rect x="50" y="10" width="50" height="96" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/><rect x="58" y="20" width="34" height="9" fill="none" stroke="currentColor" stroke-width="0.8"/><circle cx="86" cy="24.5" r="1.4" fill="currentColor"/><rect x="58" y="34" width="34" height="9" fill="none" stroke="currentColor" stroke-width="0.8"/><circle cx="86" cy="38.5" r="1.4" fill="currentColor"/><rect x="58" y="48" width="34" height="9" fill="none" stroke="currentColor" stroke-width="0.8"/><circle cx="86" cy="52.5" r="1.4" fill="currentColor"/><rect x="58" y="62" width="34" height="9" fill="none" stroke="currentColor" stroke-width="0.8"/><circle cx="86" cy="66.5" r="1.4" fill="currentColor"/><path d="M60 80h30M60 83.4h30M60 86.8h30M60 90.2h30M60 93.6h30M60 97h30" stroke="currentColor" stroke-width="0.7"/></svg><!--/server--><figcaption><b>сервер</b>FastAPI</figcaption></figure>
+    <div class="wire" aria-hidden="true"><svg viewBox="0 0 56 12"><path d="M2 6h48M44 1.5l7 4.5-7 4.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>HTML</div>
+    <figure><!--browser--><svg viewBox="0 0 160 112" role="img" aria-label="Дашборд в браузере"><rect x="14" y="12" width="132" height="92" rx="3" fill="var(--ground)" stroke="currentColor" stroke-width="1.4"/><path d="M14 28h132" stroke="currentColor" stroke-width="1"/><rect x="14" y="12" width="132" height="16" fill="url(#hd1)" stroke="none"/><circle cx="24" cy="20" r="2.6" fill="var(--ground)" stroke="currentColor"/><circle cx="33" cy="20" r="2.6" fill="var(--ground)" stroke="currentColor"/><circle cx="42" cy="20" r="2.6" fill="var(--ground)" stroke="currentColor"/><path d="M26 40h60" stroke="currentColor" stroke-width="2"/><path d="M26 54h44" stroke="currentColor" stroke-width="0.9"/><circle cx="118" cy="54" r="3" fill="var(--accent)" stroke="var(--accent)" stroke-width="1"/><path d="M26 65h61" stroke="currentColor" stroke-width="0.9"/><circle cx="118" cy="65" r="3" fill="var(--ground)" stroke="currentColor" stroke-width="1"/><path d="M26 76h48" stroke="currentColor" stroke-width="0.9"/><circle cx="118" cy="76" r="3" fill="var(--ground)" stroke="currentColor" stroke-width="1"/><path d="M26 87h65" stroke="currentColor" stroke-width="0.9"/><circle cx="118" cy="87" r="3" fill="var(--ground)" stroke="currentColor" stroke-width="1"/></svg><!--/browser--><figcaption><b>дашборд</b>браузер</figcaption></figure>
+  </div>
+
+  <div class="parts">
+    <div><h3>Агент</h3><p>Чистая стандартная библиотека Python и PowerShell 5.1, который уже есть в Windows: на рабочие машины ставится один агент и ноль pip-пакетов. Счётчики читаются через CIM, в расчёт идут только числа, поэтому русская Windows даёт те же результаты, что английская.</p></div>
+    <div><h3>Сервер</h3><p>FastAPI и SQLite, один файл базы, разворачивается у вас на Windows или Linux. Проверяет каждый конверт на входе, хранит 45 дней истории, сам опрашивает принтеры и сеть по SNMP.</p></div>
+    <div><h3>Дашборд</h3><p>Серверный рендер: открывается в любом браузере сразу, без сборки JavaScript.</p></div>
+  </div>
+
+  <div class="part">
+    <h3>Данные остаются у вас</h3>
+    <p>Серийные номера дисков агент превращает в хеш SHA-256 ещё на машине, из адресов передаются только частные диапазоны локальной сети, у сертификатов только сроки действия. Вся телеметрия хранится на вашем сервере.</p>
+  </div>
+
+  <div class="part">
+    <h3>Установка, три шага</h3>
+    <ol class="steps">
+      <li><span><b>Поднять сервер.</b> Скачайте <code>srp-server-free.zip</code>, распакуйте и запустите <code>install-server.bat</code>; нужен Python 3.9 или новее.</span></li>
+      <li><span><b>Поставить агент.</b> На каждой машине запустите <code>srp-setup-free.exe</code> от администратора, мастер спросит только адрес сервера.</span></li>
+      <li><span><b>Открыть дашборд.</b> Вскоре после установки на <code>http://адрес-сервера:8000</code> появятся первые машины и их оценки.</span></li>
+    </ol>
+  </div>
+</section>
+
+<!-- 4 ============================================================ -->
+<section class="doc faq" id="faq" aria-labelledby="faq-h">
+  <h2 id="faq-h">Вопросы</h2>
+  <div>
+    <details><summary>Чем рабочий стенд отличается от снимка экранов?</summary><p>Это две двери в один демо-парк. Рабочий стенд — запущенный сервер <span class="nw">J-Space</span> на отдельном адресе: всё нажимается, цифры считает настоящий движок. Он живёт на бесплатном хостинге и в тишине засыпает, поэтому первая страница открывается чуть дольше, а дальше всё быстро. Снимок экранов — 36 страниц того же дашборда, сохранённых прямо на этом сайте: открываются мгновенно и подходят для быстрого знакомства. Парк один и тот же: 10 вымышленных машин, 45 дней истории, вход свободный.</p></details>
+    <details><summary>Как <span class="nw">J-Space</span> оценивает риск?</summary><p>Он замечает деградацию по фактам: рост переназначенных секторов, серии BSOD, внезапные перезагрузки, старение ПО. Каждой машине он назначает состояние и срок реакции: время, за которое стоит вмешаться. Дату он ставит там, где у ресурса есть физический предел: тонер, место на диске, ресурс SSD. Когда сведений мало, он честно об этом сообщает.</p></details>
+    <details><summary>У нас уже стоит Zabbix. Зачем ещё один инструмент?</summary><p>Они отлично дополняют друг друга. Zabbix по порогам сообщает, что сломано сейчас. <span class="nw">J-Space</span> по тренду и истории показывает, какая машина начала сдавать и сколько времени на реакцию. Его вердикт приходит в Zabbix четырьмя значениями на компьютер, и дальше работают ваши триггеры. Наружу уходит только вывод.</p></details>
+    <details><summary>Что нужно, чтобы попробовать?</summary><p>Только браузер: рабочий стенд открывается сразу, без регистрации. Для установки у себя понадобятся Python 3.9 или новее на машине сервера и права администратора на компьютерах, куда ставится агент. Всё работает в вашей сети.</p></details>
+    <details><summary>Где хранится собранная телеметрия?</summary><p>На вашем сервере, и только там. Серийные номера дисков агент хеширует до отправки, из сетевых адресов передаются только частные диапазоны, у сертификатов только сроки действия.</p></details>
+    <details><summary>Работает ли это на русской Windows?</summary><p>Да, и это проверено на живых машинах. Агент читает счётчики через CIM и разбирает только числа и английские имена перечислений, а установщик назначает права по идентификаторам групп, поэтому результат одинаков на любом языке системы.</p></details>
+    <details><summary>Сколько это стоит?</summary><p><span class="nw">J-Space</span> бесплатен. Бесплатная сборка принимает до 3 компьютеров и сразу открывает все возможности, без подписок и платных функций. Код открыт по лицензии MIT: пользуйтесь, меняйте и распространяйте свободно, в том числе в коммерческих проектах. Если он экономит вам время, <a href="#support">поддержите разработку</a>.</p></details>
+  </div>
+</section>
+
+<!-- 5 ============================================================ -->
+<section class="doc" id="support" aria-labelledby="sup-h">
+  <h2 id="sup-h">Кто на вышке</h2>
+  <p class="intro"><span class="nw">J-Space</span> написал и развивает инженер, который сам отвечает за парк офисных машин и знает цену утреннего звонка «у меня всё зависло». Проект открытый и бесплатный, все возможности доступны сразу. Если инструмент экономит вам вечер, поддержите разработку: это помогает ей двигаться быстрее.</p>
+
+  <div class="ways">
+    <div>
+      <h3>Boosty</h3>
+      <img class="qr" src="../img/boosty_qr.svg" width="156" height="156" loading="lazy" decoding="async" alt="QR-код для перевода через Boosty">
+      <p>Отсканируйте код или откройте ссылку. Любая сумма помогает.</p>
+      <p><a class="btn-ink" href="https://boosty.to/personalbot/donate?qr=true">Поддержать через Boosty</a></p>
+    </div>
+    <div>
+      <h3>Картой или через СБП</h3>
+      <p>Взносы превращаются во время: разбор присланных ошибок, поддержка новых моделей принтеров и сетевого оборудования, проверка сборок на живом парке.</p>
+      <p><a class="btn-ink" href="https://pay.cloudtips.ru/p/00d77c6a">Поддержать через CloudTips</a></p>
+    </div>
+    <div>
+      <h3>Помочь можно и делом</h3>
+      <ul>
+        <li><a href="https://github.com/SergioTheFirst/srp">Звезда на GitHub</a>: проект становится заметнее.</li>
+        <li><a href="https://github.com/SergioTheFirst/srp/issues">Issue с ошибкой или идеей</a>: самая ценная помощь.</li>
+        <li>Расскажите коллеге, который отвечает за офисный парк.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="mail">Вопросы о внедрении — на почту <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
+
+  <div class="finale">
+    <p class="big">Десять машин, 45 дней истории, вход свободный.</p>
+    <div class="stand-row">
+      <a class="btn" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a>
+      <a href="../demo/">снимок экранов</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-cols">
+    <nav aria-labelledby="f1"><h2 id="f1">Продукт</h2><ul>
+      <li><a href="https://srp-private.vercel.app/">Рабочий стенд</a></li>
+      <li><a href="../demo/">Снимок экранов</a></li>
+      <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать сборки</a></li>
+      <li><a href="https://github.com/SergioTheFirst/srp">Код на GitHub</a></li>
+    </ul></nav>
+    <nav aria-labelledby="f2"><h2 id="f2">Поддержать</h2><ul>
+      <li><a href="https://boosty.to/personalbot/donate?qr=true">Boosty</a></li>
+      <li><a href="https://pay.cloudtips.ru/p/00d77c6a">CloudTips</a></li>
+      <li><a href="https://github.com/SergioTheFirst/srp/issues">Сообщить об ошибке</a></li>
+    </ul></nav>
+    <nav aria-labelledby="f3"><h2 id="f3">Автор</h2><ul>
+      <li><a href="mailto:mss777@mail.ru">mss777@mail.ru</a></li>
+      <li><a href="https://github.com/SergioTheFirst">github.com/SergioTheFirst</a></li>
+      <li><a href="../privacy.html">Политика обработки данных</a></li>
+    </ul></nav>
+  </div>
+  <div class="legal">
+    <p>Владелец сайта и оператор персональных данных — Сергей Станиславович Медведев, <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>. <a href="../privacy.html">Политика обработки персональных данных</a>.</p>
+    <p>Сайт свободен от рекламы: все ссылки и изображения относятся к собственному продукту автора и его страницам на сторонних сервисах и размещены безвозмездно, поэтому маркировка erid здесь лишняя. Сайт работает без cookies.</p>
+    <p>© 2026 <span class="nw">J-Space</span> · лицензия MIT · версия 0.3.0 от 29 августа 2026 · страница обновлена 18 октября 2026 · <a href="https://j-space.ru/">j-space.ru</a></p>
+  </div>
+</footer>
+
+<script>
+  // Строка-донесение под гравюрой: наведение или фокус на машине показывает её строку из журнала.
+  // Без JS остаётся строка BUH-02; дым без JS тоже идёт, здесь он только замирает вне экрана.
+  (function () {
+    var report = document.getElementById("report");
+    var hero = document.querySelector(".hero");
+    if (report) {
+      var text = report.querySelector(".report-text");
+      var base = { line: text.textContent, s: report.getAttribute("data-s") };
+      var show = function (el) {
+        text.textContent = el ? el.getAttribute("data-line") : base.line;
+        report.setAttribute("data-s", el ? el.getAttribute("data-s") : base.s);
+      };
+      var marks = document.querySelectorAll(".marks .pt");
+      for (var i = 0; i < marks.length; i++) {
+        (function (a) {
+          a.addEventListener("mouseenter", function () { show(a); });
+          a.addEventListener("focus", function () { show(a); });
+          a.addEventListener("mouseleave", function () { show(null); });
+          a.addEventListener("blur", function () { show(null); });
+        })(marks[i]);
+      }
+    }
+    if (hero && "IntersectionObserver" in window) {
+      new IntersectionObserver(function (e) { hero.classList.toggle("is-off", !e[0].isIntersecting); }).observe(hero);
+    }
+  })();
+</script>
+
+<!-- Cloudflare Web Analytics: без cookies и без сбора персональных данных,
+     скрипт подключён последним и не блокирует отрисовку (type="module" = defer). -->
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "11d5e6f0db134a9ca8c002759822bfbb"}'></script>
+<!-- End Cloudflare Web Analytics -->
+
+</body>
+</html>
