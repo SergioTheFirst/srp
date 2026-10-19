@@ -47,6 +47,5 @@
 
 ## Автор
 
-- Владелец сайта и оператор персональных данных: Сергей Станиславович Медведев
 - Почта: mss777@mail.ru
 - `SergioTheFirst -> https://github.com/SergioTheFirst`
