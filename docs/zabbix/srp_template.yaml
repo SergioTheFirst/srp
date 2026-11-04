@@ -115,6 +115,20 @@ zabbix_export:
             Деградация идёт быстрее обычного. Это ещё не авария: время
             на плановую замену или обслуживание есть.
           url: '{$SRP.URL}'
+        - uuid: 14e5c2b6a6da4416b7f41bb9160ef1ff
+          expression: 'count(/SRP predictive verdict/srp.days_left,30m)>0 and
+            last(/SRP predictive verdict/srp.days_left)<=7 and
+            last(/SRP predictive verdict/srp.state)<>"h3" and
+            last(/SRP predictive verdict/srp.state)<>"h4"'
+          name: 'SRP: действовать в течение 7 дней — {HOST.NAME}'
+          priority: AVERAGE
+          description: |
+            Прогноз тренда требует действий в течение недели, хотя состояние
+            ниже h3: обычно системный диск вот-вот заполнится (место — это
+            срочность, а не деградация). Гаснет вместе со сроком реакции: срок
+            не приходит — значит, его больше нет. При h3/h4 срочность уже
+            несут их собственные триггеры.
+          url: '{$SRP.URL}'
         - uuid: 7645752e733fdc5c6994f05aef74c02d
           expression: 'count(/SRP predictive verdict/srp.state,1d,"eq","unknown")>0 and
             count(/SRP predictive verdict/srp.state,1d,"eq","unknown")=count(/SRP predictive

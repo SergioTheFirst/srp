@@ -138,6 +138,22 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 }
 .toolbtn:hover { border-color: var(--bad); color: var(--bad); }
 
+/* ── Ack dialog (H18) ───────────────────────────────────────────────────── */
+.ackdlg {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-card);
+  padding: 16px; width: min(420px, calc(100vw - 32px));
+}
+.ackdlg::backdrop { background: rgba(0,0,0,.5); }
+.ackdlg-title { margin: 0 0 12px; font-weight: 600; }
+.ackdlg-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;
+  font-size: 13px; color: var(--muted); }
+.ackdlg select, .ackdlg textarea {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 6px 8px;
+}
+.ackdlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* ── Compact table rows ─────────────────────────────────────────────────── */
 table th { padding: 5px 8px; }
 table td { padding: 4px 8px; }
@@ -925,8 +941,8 @@ window.srpEsc = function (s) {
 </script>
 </head>
 <body>
-<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-10-18 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
-<script id="mirror-data" type="application/json">{"/fleet/fragment": "\n\n\n\u003cdiv class=\"kpi-strip\">\n  \u003cdiv class=\"kpi\" data-filter=\"all\">\n    \u003cdiv class=\"kn\">10\u003c/div>\n    \u003cdiv class=\"kl\">устройств\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"at_risk\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">в зоне риска\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"worsening\">\n    \u003cdiv class=\"kn warn\">7\u003c/div>\n    \u003cdiv class=\"kl\">тренд ↑\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"unknown\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">unknown\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"regressed\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">пропал\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"stale\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">не на связи\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"expiring\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">cert ≤30д\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"untrusted\" title=\"ПК без подтверждённого описания (инвентаризации). С токеном не связано: причина — в подсказке значка у ПК.\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">untrusted\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"update_pending\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">не применяют обновл.\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"update_failed\" title=\"Агент не смог обновиться — причина в подсказке значка у ПК и в его карточке\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">ошибки обновл.\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"outdated\"\n       title=\"Версия агента ниже выложенной на сервере — устройства ждут обновления\">\n    \u003cdiv class=\"kn na\">0 из 10\u003c/div>\n    \u003cdiv class=\"kl\">агенты устарели\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"new\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">новых ≤7д\u003c/div>\n  \u003c/div>\n\u003c/div>\n\n\n\n\n\n\u003cdiv class=\"site\">\n  \u003cdiv class=\"site-head\">\n    \u003cspan class=\"site-name\">Объект: — без объекта —\u003c/span>\n    \u003cspan class=\"muted small mono\">10\u003c/span>\n  \u003c/div>\n  \u003ctable>\n    \u003cthead>\n      \u003ctr>\n        \u003cth class=\"sortable\" data-col=\"0\" data-sort=\"text\">\u003cspan>Устройство\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth>Статус\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"2\" title=\"сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше\">\u003cspan>Индекс\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"3\" title=\"состояние по координатной модели: от «здоров» до «предотказ»\">\u003cspan>Состояние\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth title=\"главный фактор и срок реакции (по состоянию) или прогноз по тренду, если он короче\">Главный фактор\u003c/th>\n        \u003cth>Сертификат\u003c/th>\n        \u003cth title=\"страниц за сегодня\">Печать\u003c/th>\n        \u003cth>Связь\u003c/th>\n        \u003cth title=\"локальный IP — клик копирует\">IP\u003c/th>\n        \u003cth>\u003c/th>\n      \u003c/tr>\n    \u003c/thead>\n    \u003ctbody>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"kadry-01 demo-kadry-01 — без объекта — ооо «ромашка» служба персонала\"\n        data-id=\"demo-kadry-01\"\n        data-risk=\"30.0\">\n\n      \n      \u003ctd data-name=\"kadry-01\">\n        \u003ca href=\"/device/demo-kadry-01\" title=\"demo-kadry-01\">KADRY-01\u003c/a>\u003cspan class=\"dev-sub\">, Белова Марина Юрьевна, Специалист по кадрам, +7 900 000-04-41\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Atlas H336\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Служба персонала\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"35.0\">\n          \u003cspan class=\"hidx bad\">35\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"3\">\n          \u003cspan class=\"hstate bad\">ускоренная деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            заполнение диска \u003cspan class=\"hfar\" title=\"прогноз по тренду (свободное место на системном диске до 5%): предел уже достигнут — действовать в течение 7 дней\">≤7дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-kadry-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.15\" title=\"скопировать IP\">192.168.77.15\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-kadry-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-kadry-01\"\n                data-name=\"KADRY-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"buh-02 demo-buh-02 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-02\"\n        data-risk=\"25.0\">\n\n      \n      \u003ctd data-name=\"buh-02\">\n        \u003ca href=\"/device/demo-buh-02\" title=\"demo-buh-02\">BUH-02\u003c/a>\u003cspan class=\"dev-sub\">, Кузьмина Ольга Ивановна, Бухгалтер-кассир, +7 900 000-01-12\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O240\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"2.2\">\n          \u003cspan class=\"hidx bad\">2\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"4\">\n          \u003cspan class=\"hstate bad\">предотказ\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            накопитель \u003cspan class=\"hfar\" title=\"предотказ — действовать в течение 7 дней (срок реакции, не прогноз отказа)\">≤7дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.12\" title=\"скопировать IP\">192.168.77.12\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-02\"\n                data-name=\"BUH-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"sklad-01 demo-sklad-01 — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-sklad-01\"\n        data-risk=\"15.0\">\n\n      \n      \u003ctd data-name=\"sklad-01\">\n        \u003ca href=\"/device/demo-sklad-01\" title=\"demo-sklad-01\">SKLAD-01\u003c/a>\u003cspan class=\"dev-sub\">, Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton X2665G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"75.5\">\n          \u003cspan class=\"hidx warn\">76\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"1\">\n          \u003cspan class=\"hstate warn\">ранняя деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            операционная система\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sklad-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.13\" title=\"скопировать IP\">192.168.77.13\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sklad-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sklad-01\"\n                data-name=\"SKLAD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"prod-02 demo-prod-02 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-02\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"prod-02\">\n        \u003ca href=\"/device/demo-prod-02\" title=\"demo-prod-02\">PROD-02\u003c/a>\u003cspan class=\"dev-sub\">, Тарасов Виктор Ильич, Оператор станка, +7 900 000-06-62\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton M2640G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            сеть\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.19\" title=\"скопировать IP\">192.168.77.19\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-02\"\n                data-name=\"PROD-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"staryi-pc demo-old-pc — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-old-pc\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"staryi-pc\">\n        \u003ca href=\"/device/demo-old-pc\" title=\"demo-old-pc\">STARYI-PC\u003c/a>\u003cspan class=\"dev-sub\">, Фомин Аркадий Степанович, Приёмщик товара, +7 900 000-02-22\u003c/span>\u003cspan class=\"dev-sub\"> · desktop HP Compaq Pro 6300\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"84.2\">\n          \u003cspan class=\"hidx warn\">84\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"1\">\n          \u003cspan class=\"hstate warn\">ранняя деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            операционная система\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-old-pc\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.20\" title=\"скопировать IP\">192.168.77.20\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-old-pc\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-old-pc\"\n                data-name=\"STARYI-PC\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"buh-01 demo-buh-01 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"buh-01\">\n        \u003ca href=\"/device/demo-buh-01\" title=\"demo-buh-01\">BUH-01\u003c/a>\u003cspan class=\"dev-sub\">, Петрова Анна Сергеевна, Бухгалтер, +7 900 000-01-11\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M70q G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.11\" title=\"скопировать IP\">192.168.77.11\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-01\"\n                data-name=\"BUH-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"dir-nb demo-dir-nb — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-dir-nb\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"dir-nb\">\n        \u003ca href=\"/device/demo-dir-nb\" title=\"demo-dir-nb\">DIR-NB\u003c/a>\u003cspan class=\"dev-sub\">, Соколов Игорь Валентинович, Директор, +7 900 000-03-31\u003c/span>\u003cspan class=\"dev-sub\"> · laptop EliteBook 840 G8\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-dir-nb\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.14\" title=\"скопировать IP\">192.168.77.14\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-dir-nb\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-dir-nb\"\n                data-name=\"DIR-NB\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"sekr-01 demo-sekr-01 — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-sekr-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"sekr-01\">\n        \u003ca href=\"/device/demo-sekr-01\" title=\"demo-sekr-01\">SEKR-01\u003c/a>\u003cspan class=\"dev-sub\">, Романова Дарья Олеговна, Секретарь, +7 900 000-03-32\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M720t\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"66.9\">\n          \u003cspan class=\"hidx warn\">67\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"1\">\n          \u003cspan class=\"hstate warn\">ранняя деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            старение ПО\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sekr-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.16\" title=\"скопировать IP\">192.168.77.16\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sekr-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sekr-01\"\n                data-name=\"SEKR-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"it-01 demo-it-01 — без объекта — ооо «ромашка» ит-отдел\"\n        data-id=\"demo-it-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"it-01\">\n        \u003ca href=\"/device/demo-it-01\" title=\"demo-it-01\">IT-01\u003c/a>\u003cspan class=\"dev-sub\">, Ерохин Максим Андреевич, Системный администратор, +7 900 000-05-51\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ExpertCenter D700M\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / ИТ-отдел\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-it-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.17\" title=\"скопировать IP\">192.168.77.17\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-it-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-it-01\"\n                data-name=\"IT-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"prod-01 demo-prod-01 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"prod-01\">\n        \u003ca href=\"/device/demo-prod-01\" title=\"demo-prod-01\">PROD-01\u003c/a>\u003cspan class=\"dev-sub\">, Дмитриев Сергей Львович, Мастер участка, +7 900 000-06-61\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O246\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v0.3.4\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"70.9\">\n          \u003cspan class=\"hidx warn\">71\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            траектория ресурса \u003cspan class=\"hfar\" title=\"компенсация — действовать в течение 90 дней (срок реакции, не прогноз отказа)\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-10-18T11:15:39.420039+00:00\">\n        2с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.18\" title=\"скопировать IP\">192.168.77.18\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-01\"\n                data-name=\"PROD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003c/tbody>\n  \u003c/table>\n\u003c/div>\n\n\n\n\n", "/api/v1/fleet/print?today=1": {"period_days": 0, "today": true, "total_pages": 375, "total_jobs": 58, "printer_count": 3, "devices": [{"device_id": "demo-sekr-01", "hostname": "SEKR-01", "pages": 158, "jobs": 22}, {"device_id": "demo-kadry-01", "hostname": "KADRY-01", "pages": 64, "jobs": 12}, {"device_id": "demo-prod-01", "hostname": "PROD-01", "pages": 45, "jobs": 5}, {"device_id": "demo-buh-01", "hostname": "BUH-01", "pages": 40, "jobs": 8}, {"device_id": "demo-buh-02", "hostname": "BUH-02", "pages": 24, "jobs": 3}, {"device_id": "demo-dir-nb", "hostname": "DIR-NB", "pages": 18, "jobs": 3}, {"device_id": "demo-prod-02", "hostname": "PROD-02", "pages": 17, "jobs": 3}, {"device_id": "demo-it-01", "hostname": "IT-01", "pages": 9, "jobs": 2}], "printers": [{"name": "Kyocera ECOSYS P3145dn", "pages": 267, "devices": 3}, {"name": "HP LaserJet Pro M404dn", "pages": 73, "devices": 3}, {"name": "Canon iR-ADV C3520", "pages": 35, "devices": 2}]}}</script>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-11-05 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
+<script id="mirror-data" type="application/json">{"/fleet/fragment": "\n\n\n\u003cdiv class=\"kpi-strip\">\n  \u003cdiv class=\"kpi\" data-filter=\"all\">\n    \u003cdiv class=\"kn\">10\u003c/div>\n    \u003cdiv class=\"kl\">устройств\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"at_risk\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">в зоне риска\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"worsening\">\n    \u003cdiv class=\"kn warn\">7\u003c/div>\n    \u003cdiv class=\"kl\">тренд ↑\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"unknown\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">unknown\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"regressed\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">пропал\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"stale\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">не на связи\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"expiring\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">cert ≤30д\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"untrusted\" title=\"ПК без подтверждённого описания (инвентаризации). С токеном не связано: причина — в подсказке значка у ПК.\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">untrusted\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"ps_broken\" title=\"PowerShell на ПК не загружает свои модули (обычно повреждён .NET Framework) — агент ничего не может собрать. Что делать — в подсказке значка untrusted у ПК.\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">PowerShell сломан\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"update_pending\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">не применяют обновл.\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"update_failed\" title=\"Агент не смог обновиться — причина в подсказке значка у ПК и в его карточке\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">ошибки обновл.\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"outdated\"\n       title=\"Версия агента ниже выложенной на сервере — устройства ждут обновления\">\n    \u003cdiv class=\"kn na\">0 из 10\u003c/div>\n    \u003cdiv class=\"kl\">агенты устарели\u003c/div>\n  \u003c/div>\n  \u003cdiv class=\"kpi\" data-filter=\"new\">\n    \u003cdiv class=\"kn na\">0\u003c/div>\n    \u003cdiv class=\"kl\">новых ≤7д\u003c/div>\n  \u003c/div>\n\u003c/div>\n\n\n\n\n\n\u003cdiv class=\"site\">\n  \u003cdiv class=\"site-head\">\n    \u003cspan class=\"site-name\">Объект: — без объекта —\u003c/span>\n    \u003cspan class=\"muted small mono\">10\u003c/span>\n  \u003c/div>\n  \u003ctable>\n    \u003cthead>\n      \u003ctr>\n        \u003cth class=\"sortable\" data-col=\"0\" data-sort=\"text\">\u003cspan>Устройство\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth>Статус\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"2\" title=\"сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше\">\u003cspan>Индекс\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth class=\"sortable\" data-col=\"3\" title=\"состояние по координатной модели: от «здоров» до «предотказ»\">\u003cspan>Состояние\u003c/span>\u003cspan class=\"sort-icon\">\u003c/span>\u003c/th>\n        \u003cth title=\"главный фактор и срок реакции (по состоянию) или прогноз по тренду, если он короче\">Главный фактор\u003c/th>\n        \u003cth>Сертификат\u003c/th>\n        \u003cth title=\"страниц за сегодня\">Печать\u003c/th>\n        \u003cth>Связь\u003c/th>\n        \u003cth title=\"локальный IP — клик копирует\">IP\u003c/th>\n        \u003cth>\u003c/th>\n      \u003c/tr>\n    \u003c/thead>\n    \u003ctbody>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"kadry-01 demo-kadry-01 — без объекта — ооо «ромашка» служба персонала\"\n        data-id=\"demo-kadry-01\"\n        data-risk=\"30.0\">\n\n      \n      \u003ctd data-name=\"kadry-01\">\n        \u003ca href=\"/device/demo-kadry-01\" title=\"demo-kadry-01\">KADRY-01\u003c/a>\u003cspan class=\"dev-sub\">, Белова Марина Юрьевна, Специалист по кадрам, +7 900 000-04-41\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Atlas H336\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Служба персонала\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"42.2\">\n          \u003cspan class=\"hidx bad\">42\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate bad\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            заполнение диска \u003cspan class=\"hfar\" title=\"прогноз по тренду (свободное место на системном диске до 5%): предел уже достигнут — действовать в течение 7 дней\">≤7дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-kadry-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.15\" title=\"скопировать IP\">192.168.77.15\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-kadry-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-kadry-01\"\n                data-name=\"KADRY-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"buh-02 demo-buh-02 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-02\"\n        data-risk=\"25.0\">\n\n      \n      \u003ctd data-name=\"buh-02\">\n        \u003ca href=\"/device/demo-buh-02\" title=\"demo-buh-02\">BUH-02\u003c/a>\u003cspan class=\"dev-sub\">, Кузьмина Ольга Ивановна, Бухгалтер-кассир, +7 900 000-01-12\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O240\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"2.2\">\n          \u003cspan class=\"hidx bad\">2\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"4\">\n          \u003cspan class=\"hstate bad\">предотказ\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            накопитель \u003cspan class=\"hfar\" title=\"предотказ — действовать в течение 7 дней (срок реакции, не прогноз отказа)\">≤7дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.12\" title=\"скопировать IP\">192.168.77.12\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-02\"\n                data-name=\"BUH-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"sklad-01 demo-sklad-01 — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-sklad-01\"\n        data-risk=\"15.0\">\n\n      \n      \u003ctd data-name=\"sklad-01\">\n        \u003ca href=\"/device/demo-sklad-01\" title=\"demo-sklad-01\">SKLAD-01\u003c/a>\u003cspan class=\"dev-sub\">, Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton X2665G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"75.5\">\n          \u003cspan class=\"hidx warn\">76\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"3\">\n          \u003cspan class=\"hstate warn\">ускоренная деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            операционная система \u003cspan class=\"hfar\" title=\"ускоренная деградация — действовать в течение 30 дней (срок реакции, не прогноз отказа)\">≤30дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sklad-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.13\" title=\"скопировать IP\">192.168.77.13\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sklad-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sklad-01\"\n                data-name=\"SKLAD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"prod-02 demo-prod-02 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-02\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"prod-02\">\n        \u003ca href=\"/device/demo-prod-02\" title=\"demo-prod-02\">PROD-02\u003c/a>\u003cspan class=\"dev-sub\">, Тарасов Виктор Ильич, Оператор станка, +7 900 000-06-62\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Veriton M2640G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hidx na\">—\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"-1\">\n          \u003cspan class=\"hstate na\">нет видимости\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-02\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.19\" title=\"скопировать IP\">192.168.77.19\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-02\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-02\"\n                data-name=\"PROD-02\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"staryi-pc demo-old-pc — без объекта — ооо «ромашка» логистика\"\n        data-id=\"demo-old-pc\"\n        data-risk=\"10.0\">\n\n      \n      \u003ctd data-name=\"staryi-pc\">\n        \u003ca href=\"/device/demo-old-pc\" title=\"demo-old-pc\">STARYI-PC\u003c/a>\u003cspan class=\"dev-sub\">, Фомин Аркадий Степанович, Приёмщик товара, +7 900 000-02-22\u003c/span>\u003cspan class=\"dev-sub\"> · desktop HP Compaq Pro 6300\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Логистика\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"87.8\">\n          \u003cspan class=\"hidx good\">88\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            операционная система\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-old-pc\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.20\" title=\"скопировать IP\">192.168.77.20\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-old-pc\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-old-pc\"\n                data-name=\"STARYI-PC\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"buh-01 demo-buh-01 — без объекта — ооо «ромашка» финансовый отдел\"\n        data-id=\"demo-buh-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"buh-01\">\n        \u003ca href=\"/device/demo-buh-01\" title=\"demo-buh-01\">BUH-01\u003c/a>\u003cspan class=\"dev-sub\">, Петрова Анна Сергеевна, Бухгалтер, +7 900 000-01-11\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M70q G\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Финансовый отдел\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hidx na\">—\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"-1\">\n          \u003cspan class=\"hstate na\">нет видимости\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-buh-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.11\" title=\"скопировать IP\">192.168.77.11\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-buh-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-buh-01\"\n                data-name=\"BUH-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"dir-nb demo-dir-nb — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-dir-nb\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"dir-nb\">\n        \u003ca href=\"/device/demo-dir-nb\" title=\"demo-dir-nb\">DIR-NB\u003c/a>\u003cspan class=\"dev-sub\">, Соколов Игорь Валентинович, Директор, +7 900 000-03-31\u003c/span>\u003cspan class=\"dev-sub\"> · laptop EliteBook 840 G8\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-dir-nb\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.14\" title=\"скопировать IP\">192.168.77.14\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-dir-nb\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-dir-nb\"\n                data-name=\"DIR-NB\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"sekr-01 demo-sekr-01 — без объекта — ооо «ромашка» дирекция\"\n        data-id=\"demo-sekr-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"sekr-01\">\n        \u003ca href=\"/device/demo-sekr-01\" title=\"demo-sekr-01\">SEKR-01\u003c/a>\u003cspan class=\"dev-sub\">, Романова Дарья Олеговна, Секретарь, +7 900 000-03-32\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ThinkCentre M720t\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Дирекция\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"66.9\">\n          \u003cspan class=\"hidx warn\">67\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"1\">\n          \u003cspan class=\"hstate warn\">ранняя деградация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            старение ПО\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-sekr-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.16\" title=\"скопировать IP\">192.168.77.16\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-sekr-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-sekr-01\"\n                data-name=\"SEKR-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"\"\n        data-text=\"it-01 demo-it-01 — без объекта — ооо «ромашка» ит-отдел\"\n        data-id=\"demo-it-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"it-01\">\n        \u003ca href=\"/device/demo-it-01\" title=\"demo-it-01\">IT-01\u003c/a>\u003cspan class=\"dev-sub\">, Ерохин Максим Андреевич, Системный администратор, +7 900 000-05-51\u003c/span>\u003cspan class=\"dev-sub\"> · desktop ExpertCenter D700M\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / ИТ-отдел\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n            \u003cspan class=\"badge good\">OK\u003c/span>\n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"100.0\">\n          \u003cspan class=\"hidx good\">100\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"0\">\n          \u003cspan class=\"hstate good\">здоров\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \u003cspan class=\"muted\">—\u003c/span>\n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-it-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.17\" title=\"скопировать IP\">192.168.77.17\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-it-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-it-01\"\n                data-name=\"IT-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003ctr class=\"devrow \"\n        data-flags=\"worsening\"\n        data-text=\"prod-01 demo-prod-01 — без объекта — ооо «ромашка» цех №1\"\n        data-id=\"demo-prod-01\"\n        data-risk=\"0\">\n\n      \n      \u003ctd data-name=\"prod-01\">\n        \u003ca href=\"/device/demo-prod-01\" title=\"demo-prod-01\">PROD-01\u003c/a>\u003cspan class=\"dev-sub\">, Дмитриев Сергей Львович, Мастер участка, +7 900 000-06-61\u003c/span>\u003cspan class=\"dev-sub\"> · desktop Aquilon O246\u003c/span>\n        \u003cdiv class=\"dev-sub2\">ООО «Ромашка» / Цех №1\u003cspan class=\"ver\">v1.0.0\u003c/span>\n        \u003c/div>\n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cdiv class=\"alerts\">\n          \n          \n          \n          \n          \n          \n        \u003c/div>\n      \u003c/td>\n\n      \n      \n      \n      \n        \n        \n        \n        \n        \n        \u003ctd data-val=\"70.9\">\n          \u003cspan class=\"hidx warn\">71\u003c/span>\n        \u003c/td>\n        \u003ctd data-val=\"2\">\n          \u003cspan class=\"hstate warn\">компенсация\u003c/span>\n        \u003c/td>\n        \u003ctd class=\"hfactor\">\n          \n          \n            накопитель \u003cspan class=\"hfar\" title=\"компенсация — действовать в течение 90 дней (срок реакции, не прогноз отказа)\">≤90дн\u003c/span>\n          \n        \u003c/td>\n      \n\n      \n      \u003ctd>\n        \n          \u003cspan class=\"chip na\">—\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd class=\"pprint\" data-dev=\"demo-prod-01\">\n        \u003cspan class=\"chip na\">…\u003c/span>\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\" title=\"2026-11-04T21:24:45.306601+00:00\">\n        9с\n      \u003c/td>\n\n      \n      \u003ctd class=\"mono\">\n        \n          \u003cspan class=\"ip-copy\" data-ip=\"192.168.77.18\" title=\"скопировать IP\">192.168.77.18\u003c/span>\n        \n      \u003c/td>\n\n      \n      \u003ctd>\n        \u003cbutton class=\"ackbtn \"\n                data-id=\"demo-prod-01\"\n                disabled title=\"демо: только чтение\"\n                >\n          ·\n        \u003c/button>\n        \u003cbutton class=\"delbtn\"\n                data-id=\"demo-prod-01\"\n                data-name=\"PROD-01\"\n                disabled title=\"демо: только чтение\"\n                >✕\u003c/button>\n      \u003c/td>\n    \u003c/tr>\n    \n    \u003c/tbody>\n  \u003c/table>\n\u003c/div>\n\n\n\n\n", "/api/v1/fleet/print?today=1": {"period_days": 0, "today": true, "total_pages": 0, "total_jobs": 0, "printer_count": 0, "devices": [], "printers": []}}</script>
 <script>
 (function () {
   var D = JSON.parse(document.getElementById("mirror-data").textContent);
@@ -1023,6 +1039,10 @@ window.srpEsc = function (s) {
     <div class="kn na">0</div>
     <div class="kl">untrusted</div>
   </div>
+  <div class="kpi" data-filter="ps_broken" title="PowerShell на ПК не загружает свои модули (обычно повреждён .NET Framework) — агент ничего не может собрать. Что делать — в подсказке значка untrusted у ПК.">
+    <div class="kn na">0</div>
+    <div class="kl">PowerShell сломан</div>
+  </div>
   <div class="kpi" data-filter="update_pending">
     <div class="kn na">0</div>
     <div class="kl">не применяют обновл.</div>
@@ -1077,7 +1097,7 @@ window.srpEsc = function (s) {
       
       <td data-name="kadry-01">
         <a href="./device/demo-kadry-01.html" title="demo-kadry-01">KADRY-01</a><span class="dev-sub">, Белова Марина Юрьевна, Специалист по кадрам, +7 900 000-04-41</span><span class="dev-sub"> · desktop Atlas H336</span>
-        <div class="dev-sub2">ООО «Ромашка» / Служба персонала<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Служба персонала<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1102,11 +1122,11 @@ window.srpEsc = function (s) {
         
         
         
-        <td data-val="35.0">
-          <span class="hidx bad">35</span>
+        <td data-val="42.2">
+          <span class="hidx bad">42</span>
         </td>
-        <td data-val="3">
-          <span class="hstate bad">ускоренная деградация</span>
+        <td data-val="2">
+          <span class="hstate bad">компенсация</span>
         </td>
         <td class="hfactor">
           
@@ -1129,8 +1149,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1165,7 +1185,7 @@ window.srpEsc = function (s) {
       
       <td data-name="buh-02">
         <a href="./device/demo-buh-02.html" title="demo-buh-02">BUH-02</a><span class="dev-sub">, Кузьмина Ольга Ивановна, Бухгалтер-кассир, +7 900 000-01-12</span><span class="dev-sub"> · desktop Aquilon O240</span>
-        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1217,8 +1237,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1253,7 +1273,7 @@ window.srpEsc = function (s) {
       
       <td data-name="sklad-01">
         <a href="./device/demo-sklad-01.html" title="demo-sklad-01">SKLAD-01</a><span class="dev-sub">, Гаврилов Пётр Николаевич, Кладовщик, +7 900 000-02-21</span><span class="dev-sub"> · desktop Veriton X2665G</span>
-        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1281,13 +1301,13 @@ window.srpEsc = function (s) {
         <td data-val="75.5">
           <span class="hidx warn">76</span>
         </td>
-        <td data-val="1">
-          <span class="hstate warn">ранняя деградация</span>
+        <td data-val="3">
+          <span class="hstate warn">ускоренная деградация</span>
         </td>
         <td class="hfactor">
           
           
-            операционная система
+            операционная система <span class="hfar" title="ускоренная деградация — действовать в течение 30 дней (срок реакции, не прогноз отказа)">≤30дн</span>
           
         </td>
       
@@ -1305,8 +1325,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1341,7 +1361,7 @@ window.srpEsc = function (s) {
       
       <td data-name="prod-02">
         <a href="./device/demo-prod-02.html" title="demo-prod-02">PROD-02</a><span class="dev-sub">, Тарасов Виктор Ильич, Оператор станка, +7 900 000-06-62</span><span class="dev-sub"> · desktop Veriton M2640G</span>
-        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1354,8 +1374,6 @@ window.srpEsc = function (s) {
           
           
           
-            <span class="badge good">OK</span>
-          
         </div>
       </td>
 
@@ -1368,17 +1386,15 @@ window.srpEsc = function (s) {
         
         
         
-        <td data-val="100.0">
-          <span class="hidx good">100</span>
-        </td>
         <td data-val="0">
-          <span class="hstate good">здоров</span>
+          <span class="hidx na">—</span>
+        </td>
+        <td data-val="-1">
+          <span class="hstate na">нет видимости</span>
         </td>
         <td class="hfactor">
           
-          
-            сеть
-          
+          <span class="muted">—</span>
         </td>
       
 
@@ -1395,8 +1411,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1431,7 +1447,7 @@ window.srpEsc = function (s) {
       
       <td data-name="staryi-pc">
         <a href="./device/demo-old-pc.html" title="demo-old-pc">STARYI-PC</a><span class="dev-sub">, Фомин Аркадий Степанович, Приёмщик товара, +7 900 000-02-22</span><span class="dev-sub"> · desktop HP Compaq Pro 6300</span>
-        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Логистика<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1444,6 +1460,8 @@ window.srpEsc = function (s) {
           
           
           
+            <span class="badge good">OK</span>
+          
         </div>
       </td>
 
@@ -1456,11 +1474,11 @@ window.srpEsc = function (s) {
         
         
         
-        <td data-val="84.2">
-          <span class="hidx warn">84</span>
+        <td data-val="87.8">
+          <span class="hidx good">88</span>
         </td>
-        <td data-val="1">
-          <span class="hstate warn">ранняя деградация</span>
+        <td data-val="0">
+          <span class="hstate good">здоров</span>
         </td>
         <td class="hfactor">
           
@@ -1483,8 +1501,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1519,7 +1537,7 @@ window.srpEsc = function (s) {
       
       <td data-name="buh-01">
         <a href="./device/demo-buh-01.html" title="demo-buh-01">BUH-01</a><span class="dev-sub">, Петрова Анна Сергеевна, Бухгалтер, +7 900 000-01-11</span><span class="dev-sub"> · desktop ThinkCentre M70q G</span>
-        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Финансовый отдел<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1532,8 +1550,6 @@ window.srpEsc = function (s) {
           
           
           
-            <span class="badge good">OK</span>
-          
         </div>
       </td>
 
@@ -1546,11 +1562,11 @@ window.srpEsc = function (s) {
         
         
         
-        <td data-val="100.0">
-          <span class="hidx good">100</span>
-        </td>
         <td data-val="0">
-          <span class="hstate good">здоров</span>
+          <span class="hidx na">—</span>
+        </td>
+        <td data-val="-1">
+          <span class="hstate na">нет видимости</span>
         </td>
         <td class="hfactor">
           
@@ -1571,8 +1587,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1607,7 +1623,7 @@ window.srpEsc = function (s) {
       
       <td data-name="dir-nb">
         <a href="./device/demo-dir-nb.html" title="demo-dir-nb">DIR-NB</a><span class="dev-sub">, Соколов Игорь Валентинович, Директор, +7 900 000-03-31</span><span class="dev-sub"> · laptop EliteBook 840 G8</span>
-        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1659,8 +1675,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1695,7 +1711,7 @@ window.srpEsc = function (s) {
       
       <td data-name="sekr-01">
         <a href="./device/demo-sekr-01.html" title="demo-sekr-01">SEKR-01</a><span class="dev-sub">, Романова Дарья Олеговна, Секретарь, +7 900 000-03-32</span><span class="dev-sub"> · desktop ThinkCentre M720t</span>
-        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Дирекция<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1747,8 +1763,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1783,7 +1799,7 @@ window.srpEsc = function (s) {
       
       <td data-name="it-01">
         <a href="./device/demo-it-01.html" title="demo-it-01">IT-01</a><span class="dev-sub">, Ерохин Максим Андреевич, Системный администратор, +7 900 000-05-51</span><span class="dev-sub"> · desktop ExpertCenter D700M</span>
-        <div class="dev-sub2">ООО «Ромашка» / ИТ-отдел<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / ИТ-отдел<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1835,8 +1851,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1871,7 +1887,7 @@ window.srpEsc = function (s) {
       
       <td data-name="prod-01">
         <a href="./device/demo-prod-01.html" title="demo-prod-01">PROD-01</a><span class="dev-sub">, Дмитриев Сергей Львович, Мастер участка, +7 900 000-06-61</span><span class="dev-sub"> · desktop Aquilon O246</span>
-        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v0.3.4</span>
+        <div class="dev-sub2">ООО «Ромашка» / Цех №1<span class="ver">v1.0.0</span>
         </div>
       </td>
 
@@ -1905,7 +1921,7 @@ window.srpEsc = function (s) {
         <td class="hfactor">
           
           
-            траектория ресурса <span class="hfar" title="компенсация — действовать в течение 90 дней (срок реакции, не прогноз отказа)">≤90дн</span>
+            накопитель <span class="hfar" title="компенсация — действовать в течение 90 дней (срок реакции, не прогноз отказа)">≤90дн</span>
           
         </td>
       
@@ -1923,8 +1939,8 @@ window.srpEsc = function (s) {
       </td>
 
       
-      <td class="mono" title="2026-10-18T11:15:39.420039+00:00">
-        2с
+      <td class="mono" title="2026-11-04T21:24:45.306601+00:00">
+        9с
       </td>
 
       
@@ -1958,6 +1974,30 @@ window.srpEsc = function (s) {
 
 
 </div>
+
+
+<dialog id="ackdlg" class="ackdlg">
+  <form method="dialog">
+    <p class="ackdlg-title">Квитирование</p>
+    <label class="ackdlg-row">Исход проверки
+      <select name="outcome">
+        <option value="">без исхода — только заметка</option>
+        <option value="confirmed_failure">подтверждён отказ</option>
+        <option value="preventive_replacement">заменили по тревоге, отказ не подтверждён</option>
+        <option value="false_alarm">ложная тревога</option>
+        <option value="resolved_software">исправлено в ПО или ОС</option>
+        <option value="unverified">не проверялось</option>
+      </select>
+    </label>
+    <label class="ackdlg-row">Заметка (необязательно)
+      <textarea name="note" maxlength="1000" rows="3"></textarea>
+    </label>
+    <div class="ackdlg-btns">
+      <button class="toolbtn" value="cancel">Отмена</button>
+      <button class="toolbtn" value="ok">Сохранить</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (function () {
@@ -2141,17 +2181,34 @@ fleet.addEventListener("click", function (e) {
   var ack = e.target.closest(".ackbtn");
   if (ack) {
     e.preventDefault();
-    var id   = ack.getAttribute("data-id");
-    var note = window.prompt("Квитирование — заметка (необязательно):", "");
-    if (note === null) return;
-    fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: note })
-    })
-      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
-      .catch(function () {});
+    openAck(ack.getAttribute("data-id"));
   }
+});
+
+// ── Квитирование с исходом (H18): исход — в журнал, под админ-токеном ─────
+var ackDlg = document.getElementById("ackdlg");
+function openAck(id) {
+  if (!ackDlg || typeof ackDlg.showModal !== "function") return;
+  ackDlg.dataset.id = id;
+  ackDlg.returnValue = "";  // Esc keeps the last returnValue -> would resend
+  ackDlg.querySelector("form").reset();
+  ackDlg.showModal();
+}
+if (ackDlg) ackDlg.addEventListener("close", function () {
+  if (ackDlg.returnValue !== "ok") return;
+  var form = ackDlg.querySelector("form");
+  var outcome = form.elements.outcome.value;
+  var body = { note: form.elements.note.value };
+  var headers = { "Content-Type": "application/json" };
+  if (outcome) {
+    body.outcome = outcome;
+    headers["x-srp-token"] = adminHeaders()["x-srp-token"];
+  }
+  fetch("/api/v1/devices/" + encodeURIComponent(ackDlg.dataset.id) + "/ack", {
+    method: "POST", headers: headers, body: JSON.stringify(body)
+  })
+    .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+    .catch(function () {});
 });
 
 // ── Bulk purge of long-silent ghosts (toolbar; outside the polled #fleet) ──

@@ -1,0 +1,1762 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>J-Space: телеметрия, учёт и прогнозы для компьютерного парка</title>
+<meta name="description" content="J-Space собирает телеметрию с Windows-ПК, принтеров и сети, ведёт учёт, считает статистику и прогнозы и заранее показывает, какой машине нужна коррекция курса. Работает на вашем сервере, открытый код.">
+<meta name="theme-color" content="#EDF4F8">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- Шрифты лежат на этом же домене: страница обходится собственными файлами (152-ФЗ, ст. 12).
+     Каждая роль — свой статичный файл: одинаковый вид в Chromium, Firefox и WebKit. -->
+<link rel="preload" href="../fonts/commissioner-flared-900-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../fonts/commissioner-text-400-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face { font-family: "Commissioner"; src: url("../fonts/commissioner-text-400-cyrillic.woff2") format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Commissioner"; src: url("../fonts/commissioner-text-400-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Commissioner"; src: url("../fonts/commissioner-text-650-cyrillic.woff2") format("woff2"); font-weight: 650; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Commissioner"; src: url("../fonts/commissioner-text-650-latin.woff2") format("woff2"); font-weight: 650; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Commissioner Flared"; src: url("../fonts/commissioner-flared-700-cyrillic.woff2") format("woff2"); font-weight: 700; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Commissioner Flared"; src: url("../fonts/commissioner-flared-700-latin.woff2") format("woff2"); font-weight: 700; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Commissioner Flared"; src: url("../fonts/commissioner-flared-900-cyrillic.woff2") format("woff2"); font-weight: 900; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Commissioner Flared"; src: url("../fonts/commissioner-flared-900-latin.woff2") format("woff2"); font-weight: 900; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Martian Mono"; src: url("../fonts/martian-mono-500-cyrillic.woff2") format("woff2"); font-weight: 500; font-display: swap; unicode-range: U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Martian Mono"; src: url("../fonts/martian-mono-500-latin.woff2") format("woff2"); font-weight: 500; font-display: swap; unicode-range: U+0000-03FF, U+2000-206F, U+2212; }
+@font-face { font-family: "Martian Mono"; src: url("../fonts/martian-mono-650-cyrillic.woff2") format("woff2"); font-weight: 650; font-display: swap; unicode-range: U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Martian Mono"; src: url("../fonts/martian-mono-650-latin.woff2") format("woff2"); font-weight: 650; font-display: swap; unicode-range: U+0000-03FF, U+2000-206F, U+2212; }
+/* Fallbacks with the web fonts' widths, measured in Chrome against the shipped static files, so a late font
+   swaps without reflow: Arial for the text cut, Arial Black for the flared display, Consolas or Courier for mono. */
+@font-face { font-family: "Commissioner Fallback"; src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("Arimo"); font-weight: 400; size-adjust: 99.44%; ascent-override: 102.27%; descent-override: 20.72%; line-gap-override: 0%; }
+@font-face { font-family: "Commissioner Fallback"; src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("Arimo Bold"); font-weight: 650; size-adjust: 94.6%; ascent-override: 107.51%; descent-override: 21.78%; line-gap-override: 0%; }
+@font-face { font-family: "Commissioner Flared Fallback"; src: local("Arial Black"), local("Arial-Black"); font-weight: 900; size-adjust: 87.09%; ascent-override: 116.78%; descent-override: 23.65%; line-gap-override: 0%; }
+@font-face { font-family: "Commissioner Flared Fallback"; src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"); font-weight: 700; size-adjust: 95.42%; ascent-override: 106.58%; descent-override: 21.59%; line-gap-override: 0%; }
+@font-face { font-family: "Martian Mono Fallback"; src: local("Consolas"); font-weight: 500; size-adjust: 118.22%; ascent-override: 84.59%; descent-override: 16.92%; line-gap-override: 0%; }
+@font-face { font-family: "Martian Mono Fallback"; src: local("Consolas Bold"); font-weight: 650; size-adjust: 118.22%; ascent-override: 84.59%; descent-override: 16.92%; line-gap-override: 0%; }
+@font-face { font-family: "Martian Mono Fallback 2"; src: local("Menlo"), local("Liberation Mono"), local("Courier New"); font-weight: 500; size-adjust: 108.31%; ascent-override: 92.33%; descent-override: 18.47%; line-gap-override: 0%; }
+@font-face { font-family: "Martian Mono Fallback 2"; src: local("Menlo Bold"), local("Liberation Mono Bold"), local("Courier New Bold"); font-weight: 650; size-adjust: 108.31%; ascent-override: 92.33%; descent-override: 18.47%; line-gap-override: 0%; }
+
+:root {
+  color-scheme: light;
+  /* Two inks on a dawn sky, like a two-colour litho poster; orange is the Gagarin suit. */
+  --sky: #EDF4F8;          /* the thin bright air at dawn, seen from orbit */
+  --sheet: #F8FBFD;        /* plates that float over the planet: console, cards */
+  --ink: #131E30;          /* night-side ink: every dot, every letter */
+  --ink-2: #4C5969;        /* the same ink, thinned: 6.4:1 on sky */
+  --ink-hover: #2A3A55;
+  --rule: #C3CDD5;         /* hairlines between rows */
+  --orange: #FF6A1A;       /* SK-1 suit orange, graphics only: marks, trails, frames */
+  --orange-ink: #B4470E;   /* the same orange made readable, 4.9:1 on sky: every action date */
+  --on-ink: #FFFFFF;
+
+  /* Roles: each is its own static file, so no engine depends on variation support. */
+  --font: "Commissioner", "Commissioner Fallback", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: "Commissioner Flared", "Commissioner Flared Fallback", "Commissioner Fallback", system-ui, "Segoe UI", Arial, sans-serif;
+  --mono: "Martian Mono", "Martian Mono Fallback", "Martian Mono Fallback 2", ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Mono", "Liberation Mono", monospace;
+
+  --t-mega: clamp(2.5rem, 6.25vw + 0.25rem, 6.5rem);
+  --t-sub: clamp(1.375rem, 1rem + 1.15vw, 2.25rem);
+  --t-fig: clamp(2.125rem, 1.5rem + 2.4vw, 4.25rem);
+  --t-h3: clamp(1.1875rem, 1rem + 0.45vw, 1.375rem);
+  --t-lede: clamp(1.0625rem, 0.75rem + 0.7vw, 1.375rem);
+  --t-body: 1.0625rem;
+  --t-small: 1rem;
+  --t-meta: 0.8125rem;
+
+  --gutter: clamp(16px, 4.4vw, 64px);
+  --gap: clamp(16px, 1.7vw, 24px);
+  --sec: clamp(72px, 8vw, 128px);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-behavior: smooth; font-synthesis: none; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--sky); color: var(--ink);
+  font-family: var(--font); font-weight: 400; font-size: var(--t-body); line-height: 1.55;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
+p { margin: 0; }
+img, svg { display: block; max-width: 100%; }
+img { height: auto; }
+code, .mono { font-family: var(--mono); font-weight: 500; }
+code { font-size: var(--t-meta); padding: 0.08em 0.3em; background: var(--sheet); outline: 1px solid var(--rule); outline-offset: -1px; white-space: nowrap; }
+strong, b { font-weight: 650; }
+.nw { white-space: nowrap; }
+.cm { font-family: var(--font); font-weight: 400; }
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.vh {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip { position: absolute; left: var(--gutter); top: -120px; z-index: 20; padding: 12px 16px; background: var(--ink); color: var(--on-ink); }
+.skip:focus { top: 12px; }
+
+.wrap { max-width: 1520px; margin: 0 auto; padding: 0 var(--gutter); }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); }
+
+/* ---------- buttons and links ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 52px; padding: 0 24px;
+  background: var(--ink); color: var(--on-ink); text-decoration: none; border-radius: 2px; border: 1px solid transparent;
+  font-family: var(--font); font-weight: 650; font-size: 1.0625rem; letter-spacing: 0.005em;
+  transition: background-color .18s ease-out;
+}
+.btn-line {
+  display: inline-flex; align-items: center; min-height: 48px; padding: 0 20px; white-space: nowrap;
+  color: var(--ink); text-decoration: none; border-radius: 2px; border: 1.5px solid var(--ink);
+  font-family: var(--font); font-weight: 650;
+  transition: background-color .18s ease-out, color .18s ease-out;
+}
+.more { display: inline-block; padding: 9px 0; line-height: 26px; font-family: var(--font); font-weight: 650; }
+@media (hover: hover) {
+  .btn:hover { background: var(--ink-hover); }
+  .btn-line:hover { background: var(--ink); color: var(--on-ink); }
+  a:not(.btn):not(.btn-line):hover { text-decoration-thickness: 2px; }
+}
+.btn:active { background: var(--ink-hover); }
+
+/* ---------- header ---------- */
+.top {
+  position: absolute; inset: 0 0 auto 0; z-index: 6;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px var(--gutter) 0;
+}
+.brand {
+  display: inline-flex; align-items: center; min-height: 44px; text-decoration: none;
+  font-family: var(--display); font-weight: 900; font-size: 1.375rem; letter-spacing: -0.01em;
+}
+.top-r { display: flex; align-items: center; gap: 8px; }
+.top nav ul { display: flex; align-items: center; gap: clamp(4px, 1.3vw, 20px); margin: 0; padding: 0; list-style: none; }
+.top nav a, .menu a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; white-space: nowrap;
+  font-family: var(--font); font-weight: 400; font-size: 0.9375rem; text-decoration: none;
+}
+.stand { padding: 0 14px; margin-left: 6px; border: 1.5px solid var(--ink); border-radius: 2px; font-family: var(--font); font-weight: 650; }
+.top .stand { display: inline-flex; align-items: center; min-height: 44px; font-size: 0.9375rem; text-decoration: none; white-space: nowrap; }
+@media (hover: hover) { .top nav a:hover, .menu a:hover { text-decoration: underline; } .top .stand:hover { background: var(--ink); color: var(--on-ink); text-decoration: none; } }
+.menu { display: none; position: relative; }
+.menu summary {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; cursor: pointer; list-style: none;
+  border: 1.5px solid var(--ink); border-radius: 2px; font-family: var(--font); font-weight: 650; font-size: 0.9375rem;
+}
+.menu summary::-webkit-details-marker { display: none; }
+.menu summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink); transform: translateY(-2px) rotate(45deg); }
+.menu[open] summary::after { transform: translateY(2px) rotate(225deg); }
+.menu ul {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 7; min-width: 220px; margin: 0; padding: 6px 16px;
+  list-style: none; background: var(--sheet); border: 1px solid var(--ink); border-radius: 2px;
+  box-shadow: 0 18px 40px -24px rgba(19, 30, 48, .45);
+}
+.menu li + li { border-top: 1px solid var(--rule); }
+.menu a { display: flex; width: 100%; font-size: 1rem; }
+
+/* ---------- hero: the dawn poster ---------- */
+.hero { position: relative; isolation: isolate; overflow: hidden; }
+.hero-grid {
+  --top: clamp(84px, 11vh, 108px);
+  position: relative; display: grid; align-content: start;
+  grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap);
+  --band: 240px;                     /* the sky between the copy and the log: the orbit and the limb are fitted into it */
+  grid-template-rows: auto auto var(--band) auto auto;
+  padding: var(--top) var(--gutter) 0;
+  min-height: max(640px, 100svh);
+}
+.stage { grid-column: 1 / -1; grid-row: 1 / 5; position: relative; margin: calc(-1 * var(--top)) calc(-1 * var(--gutter)) -28px; }
+.stage-art { z-index: 0; }   /* the planet and the fleet drawing stay under the copy (z 1); craft buttons (z 2) and the card (z 4) above */
+.stage-art, .stage-art canvas, .stage-art img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage-art img { object-fit: cover; object-position: 50% 100%; }
+.hero h1, .hero .lede, .hero .act, .console, .summary, .honesty { position: relative; z-index: 1; }
+.hero h1 {
+  grid-column: 1 / span 8; grid-row: 1; margin: 0;
+  font-family: var(--display); font-weight: 900; font-size: var(--t-mega); line-height: 0.9; letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+.hero h1 .small {
+  display: inline-block; vertical-align: baseline; white-space: nowrap;
+  font-family: var(--font); font-weight: 400; font-size: var(--t-sub); line-height: 1.12; letter-spacing: -0.005em;
+}
+.hero .lede { grid-column: 1 / span 7; grid-row: 2; margin-top: clamp(18px, 2.4vh, 28px); max-width: 38em; font-size: var(--t-lede); line-height: 1.5; text-wrap: pretty; }
+.hero .act { grid-column: 9 / span 4; grid-row: 1 / span 2; align-self: start; padding-top: 0.5rem; }
+.act-alt { margin-top: 8px; font-size: var(--t-body); color: var(--ink); }
+.act-alt a { display: inline-flex; align-items: center; min-height: 44px; }
+.act-note { margin-top: 16px; max-width: 30em; font-size: var(--t-small); line-height: 1.5; color: var(--ink-2); }
+.act-note a { color: var(--ink); }
+.band { grid-column: 1 / -1; grid-row: 3; }
+
+.fleet { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.fleet:not(.placed) { visibility: hidden; }   /* the craft buttons appear once the script has placed them */
+.craft {
+  position: absolute; left: 0; top: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  width: max-content; min-width: 44px; min-height: 44px; margin: 0; padding: 2px 4px 3px;
+  border: 1px solid transparent; border-radius: 2px; background: transparent; color: var(--ink);
+  cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent; text-align: center;
+}
+.craft .tag { font-family: var(--font); font-weight: 650; font-size: 0.8125rem; line-height: 1.2; color: var(--orange-ink); white-space: nowrap; }
+.craft .host { font-family: var(--mono); font-weight: 500; font-size: 0.8125rem; line-height: 1.25; white-space: nowrap; word-spacing: -0.3em; }
+.craft.hot .host { font-weight: 650; color: var(--orange-ink); }
+.craft.bare .tag, .craft.bare .host { display: none; }
+.craft.bare { border: 0; }   /* an unlabelled glyph has no letters to protect; forced colours would draw a box */
+.craft[aria-expanded="true"] .host { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.craft:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+.card {
+  position: absolute; left: 0; top: 0; z-index: 4; width: min(320px, calc(100% - 32px));
+  padding: 14px 16px 14px; background: var(--sheet); border: 1px solid var(--ink); border-radius: 2px;
+  box-shadow: 0 18px 40px -24px rgba(19, 30, 48, .45); font-size: var(--t-small); line-height: 1.45;
+}
+.card[hidden] { display: none; }
+.card .c-host { font-family: var(--mono); font-weight: 650; font-size: 0.875rem; line-height: 1.3; }
+.card .c-host.hot { color: var(--orange-ink); }
+.card .c-state { margin-top: 2px; font-weight: 650; }
+.card .c-dro { margin-top: 8px; font-family: var(--mono); font-weight: 500; font-size: 0.8125rem; line-height: 1.5; color: var(--ink-2); }
+.card .c-dro b { color: var(--ink); font-weight: 650; }
+.card .c-act { margin-top: 8px; }
+.card .c-act.hot { color: var(--orange-ink); font-weight: 650; }
+.card .c-link { margin-top: 8px; font-size: var(--t-meta); }
+
+.console {
+  grid-column: 8 / -1; grid-row: 4; justify-self: end; align-self: start; width: min(470px, 100%);
+}
+.con-title { padding-bottom: 8px; border-bottom: 1px solid var(--ink); font-size: 0.9375rem; font-weight: 650; }
+.live { margin-top: 10px; font-family: var(--mono); font-weight: 500; font-size: 0.9375rem; line-height: 1.55; }
+.live b { font-weight: 650; }
+.live .hot { color: var(--orange-ink); }
+.log { margin: 8px 0 0; padding: 0; list-style: none; font-family: var(--mono); font-weight: 500; font-size: 0.9375rem; line-height: 1.65; letter-spacing: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.log li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log li:first-child { color: var(--ink); }
+.log .hot { color: var(--orange-ink); font-weight: 650; }
+@media (max-width: 359px) { .log .kadr { display: none; } }   /* «принят:» alone on the narrowest phones: a time is never cut */
+.summary { grid-column: 1 / span 8; grid-row: 5; margin-top: 22px; font-size: var(--t-small); line-height: 1.5; }
+.summary .lg { white-space: nowrap; }
+.summary svg { display: inline-block; vertical-align: -1px; margin-right: 6px; }
+.honesty { grid-column: 9 / span 4; grid-row: 5; margin-top: 22px; font-size: var(--t-meta); line-height: 1.5; color: var(--ink-2); }
+
+/* ---------- chapters ---------- */
+.chapter { padding-top: var(--sec); }
+.open { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: clamp(20px, 2.4vw, 32px); align-items: end; }
+.h2 { margin: 0; }
+.h2 .kw { display: block; font-family: var(--display); font-weight: 900; font-size: var(--t-mega); line-height: 0.9; letter-spacing: -0.04em; }
+.h2 .sub { display: block; margin-top: 0.42em; max-width: 22em; font-family: var(--font); font-weight: 400; font-size: var(--t-sub); line-height: 1.12; letter-spacing: -0.01em; text-wrap: balance; }
+.lead { max-width: 36em; font-size: var(--t-lede); line-height: 1.55; text-wrap: pretty; }
+/* A: the lede beside the title, in the right half */
+.open-a .h2 { grid-column: 1 / span 7; }
+.open-a .lead { grid-column: 8 / -1; padding-bottom: 0.3em; }
+/* B: title and lede on the left, the chapter's data graphic on the right */
+.open-b .h2, .open-b .lead { grid-column: 1 / span 6; }
+.open-b .lead { align-self: start; }
+.open-b > figure { grid-column: 8 / -1; grid-row: 1 / span 2; align-self: center; margin: 0; }
+/* C: a narrow title column, the matter on the right */
+.open-c { align-items: start; grid-template-rows: auto 1fr; }
+.open-c .h2 { grid-column: 1 / span 5; }
+.open-c .lead { grid-column: 1 / span 5; }
+.open-c .side { grid-column: 7 / -1; grid-row: 1 / span 2; }
+.h3 { margin: 0; font-family: var(--display); font-weight: 700; font-size: var(--t-h3); line-height: 1.2; letter-spacing: -0.01em; }
+.note-title { font-weight: 650; }
+
+
+/* ---------- 1. telemetry ---------- */
+.channels {
+  grid-column: 1 / -1; margin: clamp(36px, 4.4vw, 56px) 0 0; padding: 0; list-style: none;
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap);
+}
+.channels li { grid-column: span 6; display: grid; grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr); column-gap: 24px; align-items: baseline; padding: 16px 0 18px; border-top: 1px solid var(--rule); }
+.channels .h3 { grid-column: 1; }
+.channels p { grid-column: 2; font-size: var(--t-small); line-height: 1.5; }
+.channels .src { grid-column: 1; display: block; margin-bottom: 6px; font-family: var(--mono); font-weight: 500; font-size: 0.8125rem; line-height: 1.2; color: var(--ink-2); }
+.channels li.server { grid-template-rows: auto auto; }
+.channels li.server .src { grid-row: 1; }
+.channels li.server .h3 { grid-row: 2; }
+.channels li.server p { grid-row: 1 / span 2; }
+.tm-low { grid-column: 1 / -1; margin-top: clamp(36px, 4.4vw, 56px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 40px; align-items: start; }
+.frame { grid-column: 1 / span 7; margin: 0; }
+.frame figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding-bottom: 10px; border-bottom: 1.5px solid var(--ink); font-size: var(--t-small); }
+.frame figcaption b { font-family: var(--mono); font-weight: 650; font-size: 0.9375rem; line-height: 1.3; color: var(--orange-ink); }
+.frame figcaption > span { color: var(--ink-2); }
+.frame table, .ptable { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.frame th, .frame td { padding: 11px 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: baseline; }
+.frame th { padding-right: 16px; font-weight: 400; color: var(--ink); }
+.frame th .k { display: inline-block; min-width: 7.4em; font-family: var(--mono); font-weight: 500; font-size: 0.8125rem; line-height: 1; color: var(--ink-2); }
+.frame td { text-align: right; font-family: var(--mono); font-weight: 650; font-size: 0.9375rem; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.frame td.n { white-space: nowrap; }
+.frame td.hot { color: var(--orange-ink); }
+.tm-notes { grid-column: 9 / span 4; display: grid; gap: 32px; }
+.tm-notes p { font-size: var(--t-small); line-height: 1.5; }
+.tm-notes .note-title { display: block; margin-bottom: 6px; font-size: var(--t-body); }
+
+/* ---------- 2. logbook ---------- */
+.keep { display: grid; gap: 12px; }
+.keep-row { display: grid; grid-template-columns: 11.5rem 1fr; column-gap: 20px; align-items: end; }
+.keep-l { padding-bottom: 1px; font-size: var(--t-small); color: var(--ink-2); text-align: right; line-height: 1.2; }
+.keep-bar { position: relative; height: 30px; }
+.keep-bar > span { position: absolute; left: 0; bottom: 6px; height: 2px; background: var(--ink); }
+.keep-bar > span::before { content: ""; position: absolute; left: 0; top: -4px; width: 2px; height: 10px; background: var(--ink); }
+.keep-bar > span::after { content: ""; position: absolute; right: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--ink); }
+.keep-bar b { position: absolute; bottom: 9px; transform: translateX(calc(-100% + 4px)); white-space: nowrap; font-family: var(--mono); font-size: 0.8125rem; font-weight: 650; }
+.keep-bar b.out { bottom: 0; transform: translateX(14px); }
+.entry { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 88px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 18px; }
+.entry-h { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 8px; align-items: baseline; padding-top: 14px; border-top: 1.5px solid var(--ink); }
+.entry-h .h3 { grid-column: 1 / span 3; }
+.entry-h p { grid-column: 4 / span 6; font-size: var(--t-small); line-height: 1.5; }
+.entry-h .more { grid-column: 10 / -1; justify-self: end; }
+.entry-eq { row-gap: 24px; align-items: start; padding-top: 14px; border-top: 1.5px solid var(--ink); }
+.eq-text { grid-column: 1 / span 5; }
+.eq-text p { margin-top: 10px; font-size: var(--t-small); line-height: 1.5; }
+.eq-fig { grid-column: 7 / -1; margin: 0; }
+/* a product crop, one ink hairline like a mounted print */
+.eq-fig img { width: 100%; max-width: 560px; outline: 1px solid var(--ink); outline-offset: -1px; background: #050A14; }
+.eq-fig figcaption { margin-top: 12px; font-size: var(--t-small); line-height: 1.5; }
+.eq-fig figcaption .mono { font-size: 0.8125rem; color: var(--ink-2); }
+.pair { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 88px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 48px; }
+.pair > div { grid-column: span 6; padding-top: 14px; border-top: 1.5px solid var(--ink); }
+.pair p { font-size: var(--t-small); line-height: 1.5; }
+.pair .h3 { margin-bottom: 8px; }
+.strip { margin: 22px 0 0; }
+.strip svg { width: 100%; height: auto; overflow: visible; }
+.strip-narrow { display: none; }
+.strip text { font-family: var(--mono); font-weight: 500; font-size: 13px; fill: var(--ink-2); }
+.strip figcaption { margin-top: 10px; font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+.strip figcaption b { font-family: var(--font); font-weight: 650; font-variant-numeric: tabular-nums; }
+.ptable { margin-top: 22px; }
+.ptable th, .ptable td { padding: 11px 12px 11px 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: baseline; }
+.ptable thead th { padding-top: 0; border-bottom: 1.5px solid var(--ink); font-size: var(--t-meta); font-weight: 650; color: var(--ink-2); }
+.ptable tbody th { font-family: var(--mono); font-weight: 650; font-size: 0.875rem; }
+.ptable td { font-family: var(--mono); font-weight: 500; font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.ptable td.r, .ptable th.r { text-align: right; padding-right: 0; }
+.ptable .hot { color: var(--orange-ink); font-weight: 650; }
+.ptable .sub { display: block; margin-top: 3px; font-family: var(--font); font-weight: 400; font-size: var(--t-meta); color: var(--ink-2); }
+.ptable .sub.hot { color: var(--orange-ink); font-weight: 650; }
+.net { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 32px; align-items: start; }
+.net .netmap { grid-column: 1 / span 7; margin: 0; }
+.netmap svg { width: 100%; height: auto; overflow: visible; }
+.netmap text { font-family: var(--mono); font-size: 13px; paint-order: stroke; stroke: var(--sky); stroke-width: 4px; stroke-linejoin: round; }
+.netmap text.model { font-family: var(--font); font-weight: 400; fill: var(--ink-2); }
+.netmap figcaption { margin-top: 12px; font-size: var(--t-small); line-height: 1.5; color: var(--ink-2); }
+.netmap figcaption a { color: var(--ink); font-weight: 650; }
+.net-narrow { display: none; }
+.pblocks { display: none; margin: 22px 0 0; padding: 0; list-style: none; border-top: 1.5px solid var(--ink); }
+.pblocks li { display: grid; gap: 3px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: var(--t-small); }
+.pblocks b { font-family: var(--mono); font-weight: 650; font-size: 0.875rem; }
+.pblocks .hot { color: var(--orange-ink); font-weight: 650; }
+.net aside { grid-column: 9 / -1; display: grid; gap: 28px; align-content: start; }
+.net aside p { font-size: var(--t-small); line-height: 1.5; }
+.net aside .h3 { margin-bottom: 6px; }
+
+.board-wrap { grid-column: 1 / -1; margin-top: clamp(64px, 7vw, 104px); }
+.board-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding-bottom: 12px; border-bottom: 1.5px solid var(--ink); }
+.board-head .h3 { font-size: var(--t-sub); }
+.board-head p { font-size: var(--t-small); color: var(--ink-2); }
+.board { margin: 0; padding: 0; list-style: none; }
+.b-cols, .board .row {
+  display: grid; align-items: center; column-gap: 20px;
+  grid-template-columns: 8.5rem 11rem minmax(10rem, 1.4fr) 3.5rem minmax(10rem, 1.2fr) minmax(9rem, 1fr);
+}
+.b-cols { padding: 14px 0 10px; font-size: var(--t-meta); color: var(--ink-2); border-bottom: 1px solid var(--rule); }
+.board .row { min-height: 60px; padding: 10px 0; border-bottom: 1px solid var(--rule); text-decoration: none; transition: background-color .15s ease-out; }
+@media (hover: hover) { .board a.row:hover { background: var(--sheet); } .board a.row:hover .b-host { text-decoration: underline; } }
+.b-host { font-family: var(--mono); font-weight: 650; font-size: 0.9375rem; line-height: 1.2; }
+.b-spark svg { width: 100%; height: 30px; overflow: visible; }
+.b-state { display: inline-flex; align-items: center; gap: 10px; }
+.b-state svg { flex: none; }
+.b-idx { font-family: var(--mono); font-weight: 650; font-size: 0.9375rem; line-height: 1; text-align: right; font-variant-numeric: tabular-nums; }
+.b-course { font-size: var(--t-small); }
+.board .fold .b-host { grid-column: 1 / span 2; font-weight: 500; line-height: 1.6; }
+.board .fold .b-host a { font-weight: 650; }
+.board .tone-strong .b-host, .board .tone-soft .b-host, .board .tone-strong .b-course, .board .tone-soft .b-course { color: var(--orange-ink); }
+.board .tone-strong .b-course, .board .tone-soft .b-course { font-weight: 650; }
+.board .tone-ok .b-course, .board .tone-early .b-course { color: var(--ink-2); }
+.board-foot { margin-top: 14px; font-size: var(--t-small); color: var(--ink-2); }
+
+/* ---------- 3. forecasts ---------- */
+.casts { grid-column: 1 / -1; margin: clamp(36px, 4.4vw, 56px) 0 0; padding: 0; list-style: none; border-top: 1.5px solid var(--ink); }
+.casts li { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-areas: "who who who fig fig gauge gauge gauge text text text text"; column-gap: var(--gap); align-items: center; padding: 22px 0; border-bottom: 1px solid var(--rule); }
+.casts .who { grid-area: who; display: grid; gap: 4px; font-family: var(--mono); font-weight: 650; font-size: 0.9375rem; line-height: 1.3; }
+.casts .who > span { font-weight: 500; font-size: 0.8125rem; color: var(--ink-2); }
+.casts .hot { color: var(--orange-ink); }
+.casts .fig { grid-area: fig; font-family: var(--mono); font-weight: 650; font-size: var(--t-fig); line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.casts .fig small { font-size: var(--t-h3); letter-spacing: 0; margin-left: 4px; }
+.casts .gauge { grid-area: gauge; position: relative; padding-top: 20px; }
+.casts .lim { position: absolute; top: 0; white-space: nowrap; font-family: var(--mono); font-weight: 650; font-size: 0.8125rem; line-height: 1.2; }
+.casts .lim.hot { color: var(--orange-ink); }
+.casts svg { width: 100%; height: 26px; overflow: visible; }
+.casts .scale { display: flex; justify-content: space-between; font-family: var(--mono); font-weight: 500; font-size: 0.8125rem; line-height: 1.2; color: var(--ink-2); }
+.casts li > p:last-child { grid-area: text; font-size: var(--t-small); line-height: 1.5; }
+.casts .date { color: var(--orange-ink); font-weight: 650; }
+.method { grid-column: 1 / span 7; margin-top: clamp(28px, 3.4vw, 44px); }
+.ladder { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 96px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 40px; align-items: center; }
+.rings { grid-column: 1 / span 7; margin: 0; }
+.rings svg { width: 100%; height: auto; overflow: hidden; }
+.rings text { font-family: var(--mono); }
+.rings-narrow { display: none; }
+.rings figcaption { margin-top: 10px; font-size: var(--t-meta); line-height: 1.5; color: var(--ink-2); }
+.ladder-t { grid-column: 9 / span 4; display: grid; gap: 36px; }
+.ladder-t p { font-size: var(--t-small); line-height: 1.5; }
+.coords { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.coords li { display: grid; grid-template-columns: 4.2rem 1fr; column-gap: 14px; align-items: baseline; }
+.coords b { font-family: var(--mono); font-weight: 650; font-size: var(--t-sub); line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.coords li > span { font-size: var(--t-small); line-height: 1.45; }
+.vs { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 96px); }
+.vs table { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+@media (min-width: 700px) {
+  /* columns on the page grid: the J-Space column starts on column 7, like Принтеры, Программа and Вопросы */
+  .vs table { table-layout: fixed; }
+  /* table columns ignore calc() with mixed units: 25.47 % = a quarter of the grid plus a quarter gap */
+  .vs col.c1, .vs col.c2 { width: 25.47%; }
+}
+.vs caption { text-align: left; padding-bottom: 14px; font-family: var(--display); font-weight: 700; font-size: var(--t-sub); letter-spacing: -0.01em; }
+.vs th, .vs td { padding: 14px 20px 14px 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; line-height: 1.5; }
+.vs thead th { border-bottom: 1.5px solid var(--ink); font-size: var(--t-meta); font-weight: 650; color: var(--ink-2); }
+.vs tbody th { font-weight: 650; }
+.vs td:last-child { font-weight: 650; }
+.on-stand { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 96px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 20px; align-items: center; padding: clamp(24px, 3vw, 36px) 0; border-top: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink); }
+.on-stand p { grid-column: 1 / span 8; font-size: var(--t-lede); line-height: 1.5; }
+.on-stand div { grid-column: 9 / -1; justify-self: end; }
+
+/* ---------- 4. organisation ---------- */
+.org-items { grid-column: 1 / span 7; margin: clamp(36px, 4.4vw, 56px) 0 0; display: grid; grid-template-columns: 1fr 1fr; column-gap: var(--gap); row-gap: 28px; }
+.org-items div { padding-top: 12px; border-top: 1px solid var(--ink); }
+.org-items dt { font-weight: 650; }
+.org-items dd { margin: 6px 0 0; font-size: var(--t-small); line-height: 1.5; }
+.scheme { grid-column: 9 / span 4; margin: clamp(36px, 4.4vw, 56px) 0 0; }
+.scheme svg { width: 100%; height: auto; overflow: visible; }
+@media (max-width: 1300px) {
+  /* the schematic keeps 13 px text or more: below 1300 it leaves the side column and holds a fixed width */
+  .org-items { grid-column: 1 / -1; }
+  .scheme { grid-column: 1 / -1; }
+  .scheme svg { max-width: 440px; }
+}
+.scheme text { font-family: var(--mono); font-weight: 500; font-size: 13px; fill: var(--ink); }
+.scheme .t2 { font-family: var(--font); font-weight: 400; font-size: 13px; fill: var(--ink-2); }
+.scheme .n { font-family: var(--font); font-weight: 650; font-size: 13px; fill: var(--ink); }
+.scheme figcaption { margin-top: 12px; font-size: var(--t-meta); color: var(--ink-2); }
+.install { grid-column: 1 / span 7; margin-top: clamp(48px, 5vw, 80px); }
+.steps { margin: 18px 0 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 22px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 3rem 1fr; column-gap: 12px; padding-top: 14px; border-top: 1px solid var(--rule); font-size: var(--t-body); line-height: 1.6; }
+.steps li::before { content: counter(s); font-family: var(--mono); font-weight: 650; font-size: var(--t-sub); line-height: 1; }
+.aside-demo { grid-column: 9 / span 4; margin-top: clamp(48px, 5vw, 80px); align-self: start; padding: 24px 26px 26px; background: var(--sheet); }
+.aside-demo p { font-size: var(--t-small); line-height: 1.5; }
+.aside-demo p + p { margin-top: 12px; }
+.aside-demo .btn-line { margin: 18px 0 18px; }
+.specs { grid-column: 1 / -1; margin-top: clamp(56px, 6vw, 96px); }
+.specs-grid { margin: 18px 0 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 32px; padding-top: 18px; border-top: 1.5px solid var(--ink); }
+.specs-grid h4 { margin: 0 0 10px; font-family: var(--display); font-weight: 700; font-size: var(--t-body); }
+.specs-grid ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.specs-grid li { position: relative; padding-left: 14px; font-size: var(--t-small); line-height: 1.45; }
+.specs-grid li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+
+/* ---------- 5. flight programme ---------- */
+.plan { display: grid; gap: 40px; }
+.plan .h3 { margin-bottom: 18px; }
+.path { margin: 0; padding: 0; list-style: none; position: relative; }
+.path li { position: relative; padding: 0 0 20px 34px; font-size: var(--t-small); line-height: 1.5; }
+.path li::before { content: ""; position: absolute; left: 4px; top: 0.36em; width: 12px; height: 12px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 5px var(--sky); z-index: 1; }
+.path li:not(:last-child)::after { content: ""; position: absolute; left: 9.5px; top: 0.9em; bottom: -0.36em; width: 1px; background: var(--ink); }
+.path.ahead li::before { background: var(--sky); border: 1.5px solid var(--ink); }
+.path.ahead li:not(:last-child)::after { background: none; border-left: 1px dashed var(--ink); }
+
+/* ---------- 6. questions ---------- */
+.faq { border-top: 1.5px solid var(--ink); }
+.faq details { border-bottom: 1px solid var(--rule); }
+.faq summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 64px; padding: 14px 0;
+  cursor: pointer; list-style: none; font-size: var(--t-h3); line-height: 1.3; font-weight: 650;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary .q { flex: 1 1 auto; min-width: 0; }
+.faq summary::after { content: ""; flex: none; width: 12px; height: 12px; border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: translateY(-3px) rotate(45deg); transition: transform .2s ease-out; }
+.faq details[open] summary::after { transform: translateY(3px) rotate(225deg); }
+.faq details p { max-width: 46em; padding: 0 0 22px; font-size: var(--t-body); line-height: 1.6; }
+
+/* ---------- 7. crew ---------- */
+.crew-text { font-size: var(--t-lede); line-height: 1.55; }
+.support { display: grid; gap: 32px; }
+.support > div { padding-top: 16px; border-top: 1.5px solid var(--ink); }
+.support .h3 { margin-bottom: 10px; }
+.support p, .support li { font-size: var(--t-small); line-height: 1.5; }
+.support .btn-line { margin-top: 16px; }
+.boosty { display: grid; grid-template-columns: 132px 1fr; grid-template-areas: "qr txt" "qr btn"; column-gap: 20px; align-items: start; }
+.boosty img { grid-area: qr; width: 132px; height: 132px; background: #fff; outline: 1px solid var(--ink); outline-offset: -1px; }
+.boosty .txt { grid-area: txt; }
+.boosty .btn-line { grid-area: btn; justify-self: start; }
+.deeds { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.finale { grid-column: 1 / -1; margin-top: clamp(64px, 7vw, 112px); padding: clamp(36px, 4.4vw, 56px) 0 clamp(40px, 5vw, 64px); border-top: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 28px; align-items: end; }
+.finale p { grid-column: 1 / span 8; font-family: var(--display); font-weight: 900; font-size: var(--t-fig); line-height: 1; letter-spacing: -0.03em; text-wrap: balance; }
+.finale div { grid-column: 9 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; }
+.finale .link { display: inline-flex; align-items: center; min-height: 44px; font-weight: 650; }
+
+/* ---------- footer ---------- */
+.foot { margin-top: clamp(56px, 6vw, 96px); padding-bottom: 40px; font-size: var(--t-small); }
+.foot-cols { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 28px; }
+.foot-cols div { grid-column: span 3; }
+.foot-cols h2 { margin: 0 0 6px; font-size: var(--t-meta); font-weight: 650; color: var(--ink-2); }
+.foot-cols ul { margin: 0; padding: 0; list-style: none; }
+.foot-cols li a { display: inline-flex; align-items: center; min-height: 44px; }
+.foot-brand { font-family: var(--display); font-weight: 900; font-size: 1.375rem; letter-spacing: -0.02em; line-height: 1; }
+.legal { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--rule); display: grid; gap: 8px; max-width: 46em; font-size: var(--t-meta); line-height: 1.55; color: var(--ink-2); }
+.legal a { color: var(--ink); }
+.colophon { margin-top: 16px; font-size: var(--t-meta); color: var(--ink-2); }
+.colophon .vh-link { color: var(--ink-2); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1340px) {
+  /* the subtitle line goes under the title on purpose, before it would wrap there by accident */
+  .hero h1 .small { display: block; margin-top: 0.35em; }
+}
+@media (max-width: 1180px) {
+  .hero h1 { grid-column: 1 / -1; }
+  .hero .lede { grid-column: 1 / span 8; }
+  .hero .act { grid-column: 9 / span 4; grid-row: 2; padding-top: clamp(18px, 2.4vh, 28px); }
+  .console { grid-column: 6 / -1; }
+  .frame, .tm-notes { grid-column: 1 / -1; }
+  .channels li { display: block; }
+  .channels p { margin-top: 6px; }
+  .tm-notes { grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .b-cols, .board .row { grid-template-columns: 7.5rem 8rem minmax(9rem, 1.3fr) 2.5rem minmax(8rem, 1fr) minmax(8rem, 1fr); column-gap: 14px; }
+  .specs-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .install { grid-column: 1 / span 8; }
+  .aside-demo { grid-column: 9 / span 4; }
+  .net .netmap, .net aside { grid-column: 1 / -1; }
+  .net aside { grid-template-columns: 1fr 1fr; gap: var(--gap); }
+}
+@media (max-width: 980px) {
+  .top nav { display: none; }
+  .menu { display: block; }
+}
+@media (max-width: 900px) {
+  .hero .lede { grid-column: 1 / -1; }
+  .hero .act { grid-column: 1 / -1; grid-row: 3; padding-top: 22px; }
+  .hero-grid { grid-template-rows: auto auto auto var(--band) auto auto; }
+  .band { grid-row: 4; }
+  .console { grid-row: 5; grid-column: 4 / -1; }
+  .stage { grid-row: 1 / 6; }
+  .summary { grid-row: 6; grid-column: 1 / -1; }
+  .honesty { grid-row: 7; grid-column: 1 / -1; margin-top: 8px; }
+  .open-a .h2, .open-a .lead, .open-b .h2, .open-b .lead, .open-b > figure, .open-c .h2, .open-c .lead, .open-c .side { grid-column: 1 / -1; grid-row: auto; }
+  .open-c .side { margin-top: 12px; }
+  .entry-h .h3, .entry-h p, .entry-h .more, .eq-text, .eq-fig { grid-column: 1 / -1; justify-self: start; }
+  .pair > div { grid-column: 1 / -1; }
+  .casts li { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who fig" "gauge gauge" "text text"; row-gap: 12px; }
+  .casts .fig { text-align: right; }
+  .method, .rings, .ladder-t { grid-column: 1 / -1; }
+  .on-stand p, .on-stand div { grid-column: 1 / -1; justify-self: start; }
+  .org-items, .install, .scheme, .aside-demo { grid-column: 1 / -1; }
+  .specs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finale p, .finale div { grid-column: 1 / -1; }
+  .foot-cols div { grid-column: span 6; }
+  .b-cols { display: none; }
+  .board .row { grid-template-columns: 1fr auto; grid-template-areas: "host idx" "spark spark" "state state" "factor course"; row-gap: 6px; padding: 16px 0; }
+  .b-host { grid-area: host; } .b-idx { grid-area: idx; } .b-spark { grid-area: spark; } .b-state { grid-area: state; }
+  .b-factor { grid-area: factor; font-size: var(--t-small); } .b-course { grid-area: course; text-align: right; }
+  .board .fold .b-host { grid-area: host; }
+}
+@media (max-width: 699px) {
+  :root { --t-small: 0.9375rem; }
+  .hero-grid {
+    --top: 72px;
+    grid-template-columns: minmax(0, 1fr); column-gap: 0;
+    grid-template-rows: auto auto auto auto var(--band) auto auto auto auto;
+    min-height: 0; padding-bottom: 0;
+  }
+  .stage { grid-row: 1 / 7; margin-bottom: -60px; }
+  .hero h1, .hero .lede, .band, .act-btn, .act-alt, .act-note, .console, .summary, .honesty { grid-column: 1; }
+  .hero h1 { line-height: 0.92; letter-spacing: -0.03em; }
+  .hero h1 .small { display: block; margin: 10px 0 0; white-space: normal; }
+  .hero .lede { margin-top: 14px; font-size: 1rem; line-height: 1.5; }
+  .hero .act { display: contents; }
+  .act-btn { grid-row: 3; margin-top: 18px; position: relative; z-index: 1; }
+  .act-alt { display: block; grid-row: 4; position: relative; z-index: 1; margin-top: 4px; }
+  .band { grid-row: 5; }
+  .console { grid-row: 6; width: auto; margin: 0; justify-self: stretch; }
+  .summary { grid-row: 7; margin-top: 76px; }
+  .honesty { grid-row: 8; margin-top: 18px; }
+  .act-note { grid-row: 9; margin-top: 14px; position: relative; z-index: 1; }
+  .channels { grid-template-columns: 1fr; }
+  .channels li, .channels li.server { grid-column: 1 / -1; }
+  .channels li, .channels li.server { display: block; padding: 12px 0 14px; border-top: 0; }
+  .channels p { margin-top: 4px; }
+  .tm-notes { grid-template-columns: 1fr; }
+  .specs-grid { grid-template-columns: 1fr; }
+  .boosty { grid-template-columns: 96px 1fr; grid-template-areas: "qr txt" "btn btn"; }
+  .boosty img { width: 96px; height: 96px; }
+  .boosty .btn-line { margin-top: 16px; }
+  .foot-cols div { grid-column: 1 / -1; }
+  .frame table, .frame tbody { display: block; }
+  .frame tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--rule); }
+  .frame th, .frame td { padding: 0; border: 0; }
+  .frame th .k { min-width: 0; margin-right: 8px; }
+  .frame tr.long { grid-template-columns: minmax(0, 1fr); row-gap: 5px; }
+  .frame tr.long td { text-align: left; }
+  .rings-wide, .strip-wide, .net-wide { display: none; }
+  .rings-narrow, .strip-narrow, .net-narrow { display: block; }
+  .keep-row { grid-template-columns: 1fr; row-gap: 2px; }
+  .keep-l { text-align: left; }
+  .vs thead { display: none; }
+  .vs tr { display: grid; grid-template-columns: 1fr; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+  .vs th, .vs td, .vs tbody th { padding: 4px 0; border: 0; width: auto; }
+  .vs td::before { content: attr(data-h) ": "; color: var(--ink-2); font-weight: 400; }
+  .org-items { grid-template-columns: 1fr; }
+  .scheme text, .scheme .t2, .scheme .n { font-size: 14.5px; }
+  .net aside { grid-template-columns: 1fr; }
+  .ptable .hide-s { display: none; }
+}
+@media (max-width: 599px) {
+  .ptable { display: none; }
+  .pblocks { display: block; }
+}
+@media (max-width: 1340px) { .hero-grid { --band: 280px; } }
+@media (min-width: 901px) and (max-width: 1340px) {
+  /* where the legend and the honesty line share a row */
+  .summary { grid-column: 1 / span 7; }
+  .honesty { grid-column: 8 / span 5; }
+}
+@media (max-width: 699px) { .hero-grid { --band: 250px; } }
+@media (max-width: 599px) { .hero-grid { --band: 168px; } }
+@media (max-width: 430px) {
+  .top .stand { display: none; }
+}
+@media (forced-colors: active) {
+  svg [fill="#131E30"], svg [fill="#4C5969"] { fill: CanvasText; }
+  svg [stroke="#131E30"] { stroke: CanvasText; }
+  svg [fill="#FF6A1A"], svg [fill="#B4470E"] { fill: Highlight; }
+  svg [stroke="#FF6A1A"], svg [stroke="#B4470E"] { stroke: Highlight; }
+  svg [stroke="#C3CDD5"] { stroke: GrayText; }
+  svg text, .strip text, .scheme text, .scheme .t2, .rings text { fill: CanvasText; }
+  svg text[fill="#B4470E"] { fill: Highlight; }
+  .netmap text { stroke: Canvas; }
+  .netmap text.model { fill: CanvasText; }
+  .netmap rect.knock { fill: Canvas; }
+  .scheme .n { fill: CanvasText; }
+  .rings circle[fill^="url"] { display: none; }
+  .keep-bar > span, .keep-bar > span::before, .keep-bar > span::after,
+  .path li::before, .path li:not(:last-child)::after, .specs-grid li::before { forced-color-adjust: none; background: CanvasText; }
+  .path.ahead li::before { background: Canvas; border-color: CanvasText; }
+  .path.ahead li:not(:last-child)::after { background: none; border-color: CanvasText; }
+  .stage-art img, .stage-art canvas.planet { display: none; }
+}
+@media (max-width: 360px) {
+  :root { --t-mega: 2.125rem; }
+}
+</style>
+</head>
+<body>
+<div style="background:#131E30;color:#fff;font:500 13px/1.5 system-ui,Segoe UI,Arial,sans-serif;padding:10px 16px;text-align:center">Архивная версия сайта J-Space «ЦУП» от 18 октября 2026 · <a href="../" style="color:#fff;text-decoration:underline;text-underline-offset:3px">актуальный сайт →</a></div>
+<a class="skip" href="#main">К содержанию</a>
+
+<header class="top">
+  <a class="brand" href="../" aria-label="J-Space, актуальный сайт"><span class="nw">J-Space</span></a>
+  <div class="top-r">
+    <nav aria-label="Разделы">
+      <ul>
+        <li><a href="#telemetry">Телеметрия</a></li>
+        <li><a href="#journal">Учёт</a></li>
+        <li><a href="#forecasts">Прогнозы</a></li>
+        <li><a href="#org">Организациям</a></li>
+        <li><a href="#program">Программа</a></li>
+        <li><a href="#faq">Вопросы</a></li>
+        <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать</a></li>
+      </ul>
+    </nav>
+    <details class="menu">
+      <summary>Разделы</summary>
+      <ul>
+        <li><a href="#telemetry">Телеметрия</a></li>
+        <li><a href="#journal">Учёт</a></li>
+        <li><a href="#forecasts">Прогнозы</a></li>
+        <li><a href="#org">Организациям</a></li>
+        <li><a href="#program">Программа</a></li>
+        <li><a href="#faq">Вопросы</a></li>
+        <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать</a></li>
+        <li><a href="https://srp-private.vercel.app/">Рабочий стенд</a></li>
+      </ul>
+    </details>
+    <a class="stand" href="https://srp-private.vercel.app/">Рабочий стенд</a>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" id="hero" aria-labelledby="hero-title">
+  <div class="hero-grid">
+    <h1 id="hero-title" data-clear><span class="big">Центр управления<br> полётами</span> <span class="small">для компьютерного парка</span></h1>
+    <p class="lede" data-clear><span class="nw">J-Space</span> принимает телеметрию с каждого Windows-ПК, принтера и узла сети, ведёт учёт, считает статистику и прогнозы и заранее показывает, где пора скорректировать курс. Работает на вашем сервере, в вашей сети.</p>
+    <div class="act" data-clear>
+      <p class="act-btn" data-clear-phone><a class="btn" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a></p>
+      <p class="act-alt" data-clear-phone>или <a href="../demo/">снимок экранов</a></p>
+      <p class="act-note">Настоящий сервер <span class="nw">J-Space</span> с демо-парком: 10 компьютеров, 3 принтера, 16 узлов сети, 45 дней истории. Стенд работает только на чтение, так что смело нажимайте всё. После паузы стенд просыпается чуть дольше.</p>
+    </div>
+    <div class="band"></div>
+    <p class="summary">Демо-парк сейчас: <span class="lg"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="6" height="6" fill="#131E30"/></svg>полёт нормальный — 4</span> · <span class="lg"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="3" height="6" fill="#131E30"/><rect x="10.6" y="2.6" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></svg>ранние признаки — 3</span> · <span class="lg"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="18" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="10" y="2" width="6" height="6" fill="#FF6A1A"/></svg>коррекция курса — 3</span>.</p>
+    <aside class="console" aria-label="Наземный комплекс J-Space">
+      <p class="con-title">Наземный комплекс <span class="nw">J-Space</span></p>
+      <p class="live" id="live"><b class="hot"><span class="nw">BUH-02</span></b> · предотказ · коррекция курса в течение 7 дней · накопитель: 124 переназначенных сектора, 18 в ожидании</p>
+      <ol class="log" id="log" aria-hidden="true"><li><span class="kadr">кадр </span>принят: <span class="hot"><span class="nw">BUH-02</span></span> · 09:41:12</li><li><span class="kadr">кадр </span>принят: <span class="hot"><span class="nw">PROD-01</span></span> · 09:41:01</li><li><span class="kadr">кадр </span>принят: <span class="nw">STARYI-PC</span> · 09:40:57</li></ol>
+    </aside>
+    <p class="honesty">Схема демо-парка, время ускорено: в жизни телеметрия приходит при включении и каждый час, сигнал связи — каждые 5 минут.</p>
+    <div class="stage">
+      <div class="stage-art" aria-hidden="true">
+        <canvas class="planet"></canvas>
+        <noscript>
+          <picture>
+            <source media="(max-width: 699px)" srcset="../img/hero-dawn-390.webp">
+            <img src="../img/hero-dawn-1440.webp" alt="" width="1440" height="900">
+          </picture>
+        </noscript>
+      </div>
+      <div class="fleet" role="group" aria-label="Демо-парк на орбите: выберите аппарат, стрелки переключают, Escape закрывает карточку"></div>
+      <div class="card" id="craft-card" role="region" aria-labelledby="craft-card-host" hidden></div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="telemetry" aria-labelledby="tm-h">
+  <div class="wrap grid">
+    <div class="open open-a">
+      <h2 class="h2" id="tm-h"><span class="kw">Телеметрия</span><span class="vh">: </span><span class="sub">каждый компьютер рассказывает о себе сам</span></h2>
+      <p class="lead">На каждом Windows-ПК работает лёгкий агент <span class="nw">J-Space</span> на чистом Python. При включении и затем каждый час он отправляет на ваш сервер пять пакетов телеметрии, а каждые 5 минут — короткий сигнал связи. Сбор идёт через CIM и числовые коды событий, поэтому русская и английская Windows дают одинаковые результаты.</p>
+    </div>
+
+    <ul class="channels" aria-label="Каналы телеметрии">
+      <li><h3 class="h3">Накопители</h3><p>SMART — 21 атрибут ATA, флаг предсказания отказа, журнал здоровья NVMe, износ SSD, наработка, температура, задержки чтения и записи p50/p95.</p></li>
+      <li><h3 class="h3">Стабильность</h3><p>Внезапные перезагрузки Kernel-Power 41, аварийные выключения 6008, BSOD, сбои приложений, аппаратные ошибки WHEA, индекс стабильности Windows, время загрузки.</p></li>
+      <li><h3 class="h3">Ресурсы</h3><p>Загрузка процессора и троттлинг, свободная память, файл подкачки, свободное место на системном диске, дескрипторы.</p></li>
+      <li><h3 class="h3">Оборудование и защита</h3><p>Модель, процессор, модули памяти, диски, BIOS, версия и дата установки ОС, проблемные драйверы, ожидающая перезагрузка; антивирус и свежесть его баз, последнее обновление Windows, BitLocker, TPM и Secure Boot, активация.</p></li>
+      <li><h3 class="h3">Сертификаты</h3><p>Сроки действия из хранилищ компьютера и пользователей.</p></li>
+      <li><h3 class="h3">Сеть</h3><p>Адаптеры, Wi-Fi и уровень сигнала, задержка и потери до шлюза и DNS, соседи по локальной сети.</p></li>
+      <li><h3 class="h3">Печать</h3><p>Каждое задание — принтер, страницы, пользователь.</p></li>
+      <li class="server"><span class="src">сервер · SNMP</span><h3 class="h3">Принтеры и сетевое оборудование</h3><p>Сервер опрашивает сам: по SNMP каждые 15 минут — тонер, барабан, счётчики страниц; LLDP, CDP и таблицы коммутаторов для карты сети.</p></li>
+    </ul>
+
+    <div class="tm-low">
+      <figure class="frame">
+        <figcaption><b><span class="nw">BUH-02</span></b><span>кадр телеметрии</span></figcaption>
+        <table role="table">
+          <tbody role="rowgroup">
+            <tr role="row" class="long"><th role="rowheader" scope="row"><span class="k">накопитель</span></th><td role="cell"><span class="nw">WDC WD10EZEX</span> · <span class="nw">1 ТБ HDD</span></td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">SMART 5</span> переназначено</th><td role="cell" class="hot n">124</td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">SMART 197</span> в ожидании</th><td role="cell" class="hot n">18</td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">SMART 198</span> сбойные сектора</th><td role="cell" class="hot n">6</td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">температура</span></th><td role="cell" class="n">44 °C</td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">наработка</span></th><td role="cell" class="n">41 740 ч</td></tr>
+            <tr role="row"><th role="rowheader" scope="row"><span class="k">чтение p95</span> задержка</th><td role="cell" class="n">188 мс</td></tr>
+            <tr role="row" class="long"><th role="rowheader" scope="row"><span class="k">прошивка</span></th><td role="cell" class="hot">сигнал о скором отказе</td></tr>
+          </tbody>
+        </table>
+      </figure>
+      <div class="tm-notes">
+        <p><span class="note-title">Бережно к данным.</span> Серийные номера дисков превращаются в хеш SHA‑256 ещё на компьютере, из адресов передаются только частные диапазоны локальной сети (RFC1918), у сертификатов — только сроки действия. Вся телеметрия хранится на вашем сервере.</p>
+        <div>
+          <p><span class="note-title">Достоверность.</span> Каждый источник проходит проверку — свежесть, допустимые диапазоны, согласованность счётчиков. В выводы попадают только проверенные данные, а полнота данных видна на экране в процентах.</p>
+          <a class="more" href="../demo/pipeline.html">Открыть внутренности сервера</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="journal" aria-labelledby="jr-h">
+  <div class="wrap grid">
+    <div class="open open-b">
+      <h2 class="h2" id="jr-h"><span class="kw">Бортовой журнал</span><span class="vh">: </span><span class="sub">учёт и статистика всего парка</span></h2>
+      <p class="lead"><span class="nw">J-Space</span> хранит историю и превращает её в учёт: дневные сводки — 2 года, задания печати — 400 дней, события — 90 дней, подробные показатели — 30 дней. Сроки хранения настраиваются.</p>
+      <figure class="keep" aria-label="Сроки хранения по умолчанию">
+      <div class="keep-row"><span class="keep-l">дневные сводки</span><span class="keep-bar"><span style="width:100%"></span><b class="mono" style="left:100%">2 года</b></span></div>
+      <div class="keep-row"><span class="keep-l">задания печати</span><span class="keep-bar"><span style="width:54.8%"></span><b class="mono" style="left:54.8%">400 дней</b></span></div>
+      <div class="keep-row"><span class="keep-l">события</span><span class="keep-bar"><span style="width:12.3%"></span><b class="mono out" style="left:12.3%">90 дней</b></span></div>
+      <div class="keep-row"><span class="keep-l">подробные показатели</span><span class="keep-bar"><span style="width:4.1%"></span><b class="mono out" style="left:4.1%">30 дней</b></span></div>
+      </figure>
+    </div>
+
+    <div class="entry entry-eq">
+      <div class="eq-text">
+        <h3 class="h3">Оборудование</h3>
+        <p>Карточка каждой машины: модель, процессор, память, диски со SMART, BIOS и ОС, проблемные драйверы.</p>
+        <a class="more" href="../demo/device/demo-buh-02.html">Карточка <span class="nw">BUH-02</span></a>
+      </div>
+      <figure class="eq-fig">
+        <img src="../img/journal-buh02-1x.webp" srcset="../img/journal-buh02-1x.webp 1x, ../img/journal-buh02-2x.webp 2x" width="560" height="192" loading="lazy" decoding="async" alt="Фрагмент карточки BUH-02 в дашборде J-Space: состояние предотказ, главный фактор накопитель">
+        <figcaption><span class="mono">что делать:</span> снять образ данных, планировать замену накопителя</figcaption>
+      </figure>
+    </div>
+
+    <div class="pair">
+      <div>
+        <h3 class="h3">Печать</h3>
+        <p>Каждое задание: компьютер, принтер, страницы, пользователь, отдел; аналитика по дням, принтерам, пользователям и отделам; две выгрузки в CSV. В демо-парке за 45 дней — 12&nbsp;680 страниц, в среднем 282 в день.</p>
+        <figure class="strip">
+<svg class="strip-wide" viewBox="0 0 540 132" role="img" aria-label="Страницы по дням за 45 дней: от 166 до 394 в день, в среднем 282"><rect x="1.5" y="29.1" width="9" height="82.9" fill="#131E30"/><rect x="13.5" y="51.1" width="9" height="60.9" fill="#131E30"/><rect x="25.5" y="49.7" width="9" height="62.3" fill="#131E30"/><rect x="37.5" y="50.6" width="9" height="61.4" fill="#131E30"/><rect x="49.5" y="30.3" width="9" height="81.7" fill="#131E30"/><rect x="61.5" y="38.2" width="9" height="73.8" fill="#131E30"/><rect x="73.5" y="40.5" width="9" height="71.5" fill="#131E30"/><rect x="85.5" y="24.2" width="9" height="87.8" fill="#131E30"/><rect x="97.5" y="66.2" width="9" height="45.8" fill="#131E30"/><rect x="109.5" y="33.1" width="9" height="78.9" fill="#131E30"/><rect x="121.5" y="70.2" width="9" height="41.8" fill="#131E30"/><rect x="133.5" y="72.3" width="9" height="39.7" fill="#131E30"/><rect x="145.5" y="38.7" width="9" height="73.3" fill="#131E30"/><rect x="157.5" y="52.9" width="9" height="59.1" fill="#131E30"/><rect x="169.5" y="60.4" width="9" height="51.6" fill="#131E30"/><rect x="181.5" y="39.6" width="9" height="72.4" fill="#131E30"/><rect x="193.5" y="33.5" width="9" height="78.5" fill="#131E30"/><rect x="205.5" y="29.6" width="9" height="82.4" fill="#131E30"/><rect x="217.5" y="35.6" width="9" height="76.4" fill="#131E30"/><rect x="229.5" y="55.5" width="9" height="56.5" fill="#131E30"/><rect x="241.5" y="55.5" width="9" height="56.5" fill="#131E30"/><rect x="253.5" y="71.8" width="9" height="40.2" fill="#131E30"/><rect x="265.5" y="40.1" width="9" height="71.9" fill="#131E30"/><rect x="277.5" y="41" width="9" height="71" fill="#131E30"/><rect x="289.5" y="49" width="9" height="63" fill="#131E30"/><rect x="301.5" y="33.8" width="9" height="78.2" fill="#131E30"/><rect x="313.5" y="51.3" width="9" height="60.7" fill="#131E30"/><rect x="325.5" y="43.8" width="9" height="68.2" fill="#131E30"/><rect x="337.5" y="35.4" width="9" height="76.6" fill="#131E30"/><rect x="349.5" y="56.4" width="9" height="55.6" fill="#131E30"/><rect x="361.5" y="61.1" width="9" height="50.9" fill="#131E30"/><rect x="373.5" y="45" width="9" height="67" fill="#131E30"/><rect x="385.5" y="34.7" width="9" height="77.3" fill="#131E30"/><rect x="397.5" y="61.6" width="9" height="50.4" fill="#131E30"/><rect x="409.5" y="34.7" width="9" height="77.3" fill="#131E30"/><rect x="421.5" y="56" width="9" height="56" fill="#131E30"/><rect x="433.5" y="56" width="9" height="56" fill="#131E30"/><rect x="445.5" y="37.5" width="9" height="74.5" fill="#131E30"/><rect x="457.5" y="45.7" width="9" height="66.3" fill="#131E30"/><rect x="469.5" y="50.1" width="9" height="61.9" fill="#131E30"/><rect x="481.5" y="20" width="9" height="92" fill="#131E30"/><rect x="493.5" y="73.2" width="9" height="38.8" fill="#131E30"/><rect x="505.5" y="52.2" width="9" height="59.8" fill="#131E30"/><rect x="517.5" y="47.6" width="9" height="64.4" fill="#131E30"/><rect x="529.5" y="24.4" width="9" height="87.6" fill="#131E30"/><line x1="0" y1="46.2" x2="540" y2="46.2" stroke="#131E30" stroke-opacity=".5" stroke-width="1" stroke-dasharray="4 3"/><line x1="0" y1="112.5" x2="540" y2="112.5" stroke="#131E30" stroke-width="1"/><text x="486" y="14" text-anchor="middle">394</text><text x="0" y="128">4 сен</text><text x="540" y="128" text-anchor="end">18 окт</text></svg><svg class="strip-narrow" viewBox="0 0 350 132" role="img" aria-label="Страницы по дням за 45 дней: от 166 до 394 в день, в среднем 282"><rect x="1.5" y="29.1" width="4.8" height="82.9" fill="#131E30"/><rect x="9.3" y="51.1" width="4.8" height="60.9" fill="#131E30"/><rect x="17.1" y="49.7" width="4.8" height="62.3" fill="#131E30"/><rect x="24.8" y="50.6" width="4.8" height="61.4" fill="#131E30"/><rect x="32.6" y="30.3" width="4.8" height="81.7" fill="#131E30"/><rect x="40.4" y="38.2" width="4.8" height="73.8" fill="#131E30"/><rect x="48.2" y="40.5" width="4.8" height="71.5" fill="#131E30"/><rect x="55.9" y="24.2" width="4.8" height="87.8" fill="#131E30"/><rect x="63.7" y="66.2" width="4.8" height="45.8" fill="#131E30"/><rect x="71.5" y="33.1" width="4.8" height="78.9" fill="#131E30"/><rect x="79.3" y="70.2" width="4.8" height="41.8" fill="#131E30"/><rect x="87.1" y="72.3" width="4.8" height="39.7" fill="#131E30"/><rect x="94.8" y="38.7" width="4.8" height="73.3" fill="#131E30"/><rect x="102.6" y="52.9" width="4.8" height="59.1" fill="#131E30"/><rect x="110.4" y="60.4" width="4.8" height="51.6" fill="#131E30"/><rect x="118.2" y="39.6" width="4.8" height="72.4" fill="#131E30"/><rect x="125.9" y="33.5" width="4.8" height="78.5" fill="#131E30"/><rect x="133.7" y="29.6" width="4.8" height="82.4" fill="#131E30"/><rect x="141.5" y="35.6" width="4.8" height="76.4" fill="#131E30"/><rect x="149.3" y="55.5" width="4.8" height="56.5" fill="#131E30"/><rect x="157.1" y="55.5" width="4.8" height="56.5" fill="#131E30"/><rect x="164.8" y="71.8" width="4.8" height="40.2" fill="#131E30"/><rect x="172.6" y="40.1" width="4.8" height="71.9" fill="#131E30"/><rect x="180.4" y="41" width="4.8" height="71" fill="#131E30"/><rect x="188.2" y="49" width="4.8" height="63" fill="#131E30"/><rect x="195.9" y="33.8" width="4.8" height="78.2" fill="#131E30"/><rect x="203.7" y="51.3" width="4.8" height="60.7" fill="#131E30"/><rect x="211.5" y="43.8" width="4.8" height="68.2" fill="#131E30"/><rect x="219.3" y="35.4" width="4.8" height="76.6" fill="#131E30"/><rect x="227.1" y="56.4" width="4.8" height="55.6" fill="#131E30"/><rect x="234.8" y="61.1" width="4.8" height="50.9" fill="#131E30"/><rect x="242.6" y="45" width="4.8" height="67" fill="#131E30"/><rect x="250.4" y="34.7" width="4.8" height="77.3" fill="#131E30"/><rect x="258.2" y="61.6" width="4.8" height="50.4" fill="#131E30"/><rect x="265.9" y="34.7" width="4.8" height="77.3" fill="#131E30"/><rect x="273.7" y="56" width="4.8" height="56" fill="#131E30"/><rect x="281.5" y="56" width="4.8" height="56" fill="#131E30"/><rect x="289.3" y="37.5" width="4.8" height="74.5" fill="#131E30"/><rect x="297.1" y="45.7" width="4.8" height="66.3" fill="#131E30"/><rect x="304.8" y="50.1" width="4.8" height="61.9" fill="#131E30"/><rect x="312.6" y="20" width="4.8" height="92" fill="#131E30"/><rect x="320.4" y="73.2" width="4.8" height="38.8" fill="#131E30"/><rect x="328.2" y="52.2" width="4.8" height="59.8" fill="#131E30"/><rect x="335.9" y="47.6" width="4.8" height="64.4" fill="#131E30"/><rect x="343.7" y="24.4" width="4.8" height="87.6" fill="#131E30"/><line x1="0" y1="46.2" x2="350" y2="46.2" stroke="#131E30" stroke-opacity=".5" stroke-width="1" stroke-dasharray="4 3"/><line x1="0" y1="112.5" x2="350" y2="112.5" stroke="#131E30" stroke-width="1"/><text x="315" y="14" text-anchor="middle">394</text><text x="0" y="128">4 сен</text><text x="350" y="128" text-anchor="end">18 окт</text></svg>
+          <figcaption><b>12 680</b> страниц за 45 дней · в среднем <b>282</b> в день (пунктир). По компьютерам впереди <span class="nw">SEKR-01</span>: 4 485 страниц.</figcaption>
+        </figure>
+        <a class="more" href="../demo/print.html">Учёт печати в снимке экранов</a>
+      </div>
+      <div>
+        <h3 class="h3">Принтеры</h3>
+        <p>Модель, серийный номер, счётчики страниц (цвет, ч/б, дуплекс), расходники и лотки — по SNMP, IPP и HTTP; профили HP, Canon, Kyocera, Ricoh, Xerox, Brother, Epson, Lexmark.</p>
+        <table class="ptable">
+          <thead><tr><th scope="col">модель</th><th scope="col" class="r">страниц всего</th><th scope="col" class="r">тонер</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">HP LaserJet M428</th><td class="r">124 650</td><td class="r hot">9 %<span class="sub hot">закончится примерно через 3 дня</span></td></tr>
+            <tr><th scope="row">Kyocera M2040dn</th><td class="r">345 000</td><td class="r">55 %</td></tr>
+            <tr><th scope="row">Canon iR C3226</th><td class="r">218 300<span class="sub">цвет 63 100 · ч/б 155 200</span></td><td class="r">C 18 / M 44 / Y 61 / K 70 %</td></tr>
+          </tbody>
+        </table>
+        <ul class="pblocks">
+          <li><b>HP LaserJet M428</b><span>страниц 124 650 · тонер <span class="hot nw">9 %</span></span><span class="hot">закончится примерно через 3 дня</span></li>
+          <li><b>Kyocera M2040dn</b><span>страниц 345 000 · тонер <span class="nw">55 %</span></span></li>
+          <li><b>Canon iR C3226</b><span>страниц 218 300 · <span class="nw">цвет 63 100</span> · <span class="nw">ч/б 155 200</span></span><span>тонер <span class="nw">C 18</span> · <span class="nw">M 44</span> · <span class="nw">Y 61</span> · <span class="nw">K 70 %</span></span></li>
+        </ul>
+        <a class="more" href="../demo/printers.html">Принтеры в снимке экранов</a>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div class="entry-h">
+        <h3 class="h3">Сеть</h3>
+        <p>Карта узлов и связей по SNMP, LLDP, CDP и по данным агентов; провод и Wi-Fi, уверенность каждой связи; журнал изменений и снимок топологии каждый час; выгрузка PNG и CSV. В демо — 16 узлов и 25 связей.</p>
+      </div>
+      <div class="net">
+        <figure class="netmap">
+<svg class="net-wide" viewBox="0 0 760 468" role="img" aria-label="Карта сети демо-парка: маршрутизатор GW-ROUTER, коммутатор SW-CORE, точка доступа AP-OFFICE, 10 компьютеров и 3 принтера; 16 узлов и 25 связей, две связи по Wi-Fi"><line x1="488.8" y1="395.9" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="554" y1="368.2" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="649.2" y1="280.1" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="271.2" y1="395.9" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="608.6" y1="328.8" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="151.4" y1="328.8" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="206" y1="368.2" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="417" y1="410.2" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="110.8" y1="280.1" x2="380" y2="46" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="488.8" y1="395.9" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="554" y1="368.2" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="649.2" y1="280.1" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="271.2" y1="395.9" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="608.6" y1="328.8" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="86.6" y1="225.1" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="343" y1="410.2" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="673.4" y1="225.1" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="151.4" y1="328.8" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="206" y1="368.2" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="417" y1="410.2" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="110.8" y1="280.1" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="580" y1="98" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="380" y1="46" x2="380" y2="176" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="688" y1="178" x2="380" y2="46" stroke="#131E30" stroke-opacity=".7" stroke-width="1.2" stroke-dasharray="5 4"/><line x1="580" y1="98" x2="688" y2="178" stroke="#131E30" stroke-opacity=".7" stroke-width="1.2" stroke-dasharray="5 4"/><rect x="574" y="92" width="12" height="12" fill="#131E30"/><g transform="translate(488.8 395.9)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(554 368.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(688 178)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(649.2 280.1)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(271.2 395.9)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(608.6 328.8)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><path d="M86.6 219.6 L92.1 225.1 L86.6 230.6 L81.1 225.1 Z" fill="#131E30"/><path d="M343 404.7 L348.5 410.2 L343 415.7 L337.5 410.2 Z" fill="#131E30"/><path d="M673.4 219.6 L678.9 225.1 L673.4 230.6 L667.9 225.1 Z" fill="#131E30"/><g transform="translate(151.4 328.8)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(206 368.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(417 410.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><g transform="translate(110.8 280.1)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><rect x="374" y="40" width="12" height="12" fill="#131E30"/><rect x="374" y="170" width="12" height="12" fill="#131E30"/><rect class="knock" x="393" y="39.5" width="82.1" height="15" fill="#EDF4F8"/><rect class="knock" x="393" y="57" width="123.8" height="15" fill="#EDF4F8"/><rect class="knock" x="301.9" y="169.5" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="238.5" y="187" width="128.5" height="15" fill="#EDF4F8"/><rect class="knock" x="593" y="91.5" width="82" height="15" fill="#EDF4F8"/><rect class="knock" x="593" y="109" width="102.5" height="15" fill="#EDF4F8"/><rect class="knock" x="23.3" y="218.6" width="48.3" height="15" fill="#EDF4F8"/><rect class="knock" x="22.2" y="273.6" width="73.6" height="15" fill="#EDF4F8"/><rect class="knock" x="71.3" y="322.3" width="65.2" height="15" fill="#EDF4F8"/><rect class="knock" x="125.8" y="361.7" width="65.2" height="15" fill="#EDF4F8"/><rect class="knock" x="234.4" y="406.9" width="73.6" height="15" fill="#EDF4F8"/><rect class="knock" x="310.4" y="385.2" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="384.5" y="421.2" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="460.5" y="406.9" width="56.7" height="15" fill="#EDF4F8"/><rect class="knock" x="569" y="361.7" width="56.7" height="15" fill="#EDF4F8"/><rect class="knock" x="623.6" y="322.3" width="82.1" height="15" fill="#EDF4F8"/><rect class="knock" x="664.2" y="273.6" width="48.3" height="15" fill="#EDF4F8"/><rect class="knock" x="640.9" y="236.1" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="659.7" y="189" width="56.7" height="15" fill="#EDF4F8"/><text x="396" y="50.5" text-anchor="start" fill="#131E30" font-weight="650">GW-ROUTER</text><text x="396" y="68" text-anchor="start" fill="#4C5969" font-weight="400" class="model">MikroTik RB760iGS</text><text x="364" y="180.5" text-anchor="end" fill="#131E30" font-weight="650">SW-CORE</text><text x="364" y="198" text-anchor="end" fill="#4C5969" font-weight="400" class="model">D-Link DGS-1210-28</text><text x="596" y="102.5" text-anchor="start" fill="#131E30" font-weight="650">AP-OFFICE</text><text x="596" y="120" text-anchor="start" fill="#4C5969" font-weight="400" class="model">TP-Link EAP225</text><text x="68.6" y="229.6" text-anchor="end" fill="#131E30" font-weight="500">Canon</text><text x="92.8" y="284.6" text-anchor="end" fill="#131E30" font-weight="500">SKLAD-01</text><text x="133.4" y="333.3" text-anchor="end" fill="#B4470E" font-weight="650">PROD-01</text><text x="188" y="372.7" text-anchor="end" fill="#131E30" font-weight="500">PROD-02</text><text x="271.2" y="417.9" text-anchor="middle" fill="#B4470E" font-weight="650">KADRY-01</text><text x="343" y="396.2" text-anchor="middle" fill="#131E30" font-weight="500">HP M428</text><text x="417" y="432.2" text-anchor="middle" fill="#131E30" font-weight="500">SEKR-01</text><text x="488.8" y="417.9" text-anchor="middle" fill="#131E30" font-weight="500">BUH-01</text><text x="572" y="372.7" text-anchor="start" fill="#B4470E" font-weight="650">BUH-02</text><text x="626.6" y="333.3" text-anchor="start" fill="#131E30" font-weight="500">STARYI-PC</text><text x="667.2" y="284.6" text-anchor="start" fill="#131E30" font-weight="500">IT-01</text><text x="673.4" y="247.1" text-anchor="middle" fill="#131E30" font-weight="500">Kyocera</text><text x="688" y="200" text-anchor="middle" fill="#131E30" font-weight="500">DIR-NB</text></svg>
+<svg class="net-narrow" viewBox="0 0 360 430" role="img" aria-label="Карта сети демо-парка: маршрутизатор GW-ROUTER, коммутатор SW-CORE, точка доступа AP-OFFICE, 10 компьютеров и 3 принтера; 16 узлов и 25 связей, две связи по Wi-Fi"><line x1="235.7" y1="363.5" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="268.9" y1="335.2" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="316.4" y1="245.5" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="124.3" y1="363.5" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="296.4" y1="295" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="63.6" y1="295" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="91.1" y1="335.2" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="199" y1="378.1" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="43.6" y1="245.5" x2="150" y2="34" stroke="#131E30" stroke-opacity=".13" stroke-width="1"/><line x1="235.7" y1="363.5" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="268.9" y1="335.2" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="316.4" y1="245.5" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="124.3" y1="363.5" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="296.4" y1="295" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="32.3" y1="189.9" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="161" y1="378.1" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="327.7" y1="189.9" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="63.6" y1="295" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="91.1" y1="335.2" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="199" y1="378.1" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="43.6" y1="245.5" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="292" y1="86" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="150" y1="34" x2="180" y2="150" stroke="#131E30" stroke-opacity=".42" stroke-width="1"/><line x1="322" y1="166" x2="150" y2="34" stroke="#131E30" stroke-opacity=".7" stroke-width="1.2" stroke-dasharray="5 4"/><line x1="292" y1="86" x2="322" y2="166" stroke="#131E30" stroke-opacity=".7" stroke-width="1.2" stroke-dasharray="5 4"/><rect x="286" y="80" width="12" height="12" fill="#131E30"/><g transform="translate(235.7 363.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(268.9 335.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(322 166)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(316.4 245.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(124.3 363.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(296.4 295)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><path d="M32.3 184.4 L37.8 189.9 L32.3 195.4 L26.8 189.9 Z" fill="#131E30"/><path d="M161 372.6 L166.5 378.1 L161 383.6 L155.5 378.1 Z" fill="#131E30"/><path d="M327.7 184.4 L333.2 189.9 L327.7 195.4 L322.2 189.9 Z" fill="#131E30"/><g transform="translate(63.6 295)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><g transform="translate(91.1 335.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><g transform="translate(199 378.1)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><g transform="translate(43.6 245.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><rect x="144" y="28" width="12" height="12" fill="#131E30"/><rect x="174" y="144" width="12" height="12" fill="#131E30"/><rect class="knock" x="163" y="27.5" width="82.1" height="15" fill="#EDF4F8"/><rect class="knock" x="193" y="143.5" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="251" y="61" width="82" height="15" fill="#EDF4F8"/><rect class="knock" x="31" y="270" width="65.1" height="15" fill="#EDF4F8"/><rect class="knock" x="35.7" y="357" width="73.6" height="15" fill="#EDF4F8"/><rect class="knock" x="283.9" y="328.7" width="56.7" height="15" fill="#EDF4F8"/><text x="166" y="38.5" text-anchor="start" fill="#131E30" font-weight="650">GW-ROUTER</text><text x="196" y="154.5" text-anchor="start" fill="#131E30" font-weight="650">SW-CORE</text><text x="292" y="72" text-anchor="middle" fill="#131E30" font-weight="650">AP-OFFICE</text><text x="63.6" y="281" text-anchor="middle" fill="#B4470E" font-weight="650">PROD-01</text><text x="106.3" y="368" text-anchor="end" fill="#B4470E" font-weight="650">KADRY-01</text><text x="286.9" y="339.7" text-anchor="start" fill="#B4470E" font-weight="650">BUH-02</text></svg>
+          <figcaption>Карта сети демо-парка: 16 узлов и 25 связей; пунктир — Wi-Fi. <a href="../demo/netmap.html">Открыть карту сети</a></figcaption>
+        </figure>
+        <aside>
+          <div><h3 class="h3">Статистика парка</h3><p>Распределение по состояниям, тепловая карта, топ-10 машин с ухудшением, самые рискованные модели оборудования; сравнение с машинами той же модели — например, «загрузка дольше, чем у 90 % похожих компьютеров»; массовые события по модели и по площадке.</p><a class="more" href="../demo/health.html">Статистика в снимке экранов</a></div>
+          <div><h3 class="h3">Сертификаты</h3><p>Сроки действия по каждой машине, плитка «истекают в ближайшие 30 дней», напоминание пользователю за 14 дней.</p><a class="more" href="../demo/">Парк в снимке экранов</a></div>
+        </aside>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section class="chapter" id="forecasts" aria-labelledby="bl-h">
+  <div class="wrap grid">
+    <div class="open open-a">
+      <h2 class="h2" id="bl-h"><span class="kw">Небесная механика</span><span class="vh">: </span><span class="sub">прогнозы там, где их даёт физика</span></h2>
+    </div>
+
+    <ul class="casts" aria-label="Три примера из демо">
+      <li>
+        <p class="who"><b class="hot"><span class="nw">PROD-01</span></b><span>износ SSD</span></p>
+        <p class="fig">89<small>%</small></p>
+        <div class="gauge"><span class="lim hot" style="left:100%;transform:translateX(-100%)">предел 100 %</span><svg viewBox="0 0 300 26" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="13" x2="300" y2="13" stroke="#C3CDD5" stroke-width="1" vector-effect="non-scaling-stroke"/><rect x="0" y="9" width="267" height="8" fill="#131E30"/><line x1="267" y1="13" x2="300" y2="13" stroke="#FF6A1A" stroke-width="2.2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><rect x="297" y="1" width="2.4" height="24" fill="#B4470E"/></svg><p class="scale"><span>0 %</span><span>100 %</span></p></div>
+        <p>Износ SSD 89 %, предел <span class="date">примерно через 97 дней</span>.</p>
+      </li>
+      <li>
+        <p class="who"><b>HP LaserJet M428</b><span>тонер</span></p>
+        <p class="fig">9<small>%</small></p>
+        <div class="gauge"><span class="lim" style="left:0%;transform:translateX(0)">предел 0 %</span><svg viewBox="0 0 300 26" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="13" x2="300" y2="13" stroke="#C3CDD5" stroke-width="1" vector-effect="non-scaling-stroke"/><rect x="0" y="9" width="27" height="8" fill="#131E30"/><line x1="0" y1="13" x2="27" y2="13" stroke="#131E30" stroke-width="2.2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><rect x="-1" y="1" width="2.4" height="24" fill="#131E30"/></svg><p class="scale"><span>0 %</span><span>100 %</span></p></div>
+        <p>Тонер 9 %, хватит <span class="date">примерно на 3 дня</span>.</p>
+      </li>
+      <li>
+        <p class="who"><b class="hot"><span class="nw">KADRY-01</span></b><span>свободно на диске</span></p>
+        <p class="fig">2<span class="cm">,</span>6<small>%</small></p>
+        <div class="gauge"><span class="lim hot" style="left:5%;transform:translateX(-6px)">предел 5 %</span><svg viewBox="0 0 300 26" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="13" x2="300" y2="13" stroke="#C3CDD5" stroke-width="1" vector-effect="non-scaling-stroke"/><rect x="0" y="9" width="7.8" height="8" fill="#131E30"/><line x1="7.8" y1="13" x2="15" y2="13" stroke="#FF6A1A" stroke-width="2.2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><rect x="14" y="1" width="2.4" height="24" fill="#B4470E"/></svg><p class="scale"><span>0 %</span><span>100 %</span></p></div>
+        <p>На системном диске 2,6 % свободного места, пора освободить место, чтобы обновления Windows устанавливались спокойно.</p>
+      </li>
+    </ul>
+    <p class="lead method"><span class="nw">J-Space</span> считает тренды устойчивыми методами — наклоном Тейла–Сена с проверкой значимости Манна–Кендалла — и ставит дату там, где у ресурса есть физический предел: износ SSD до 100 %, свободное место на системном диске до 5 %, тонер до нуля.</p>
+
+    <div class="ladder">
+      <figure class="rings" aria-label="Пять ступеней состояния как орбиты: чем ближе орбита к планете, тем короче срок реакции">
+<svg class="rings-wide" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 720 356" role="img" aria-label="Пять ступеней: здоров, ранняя деградация, компенсация 90 дней, ускоренная деградация 30 дней, предотказ 7 дней, или раньше, если прогноз ресурса короче; на орбитах машины демо-парка"><defs><pattern id="dots-rings-wide" width="6" height="5.2" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.05" fill="#131E30"/><circle cx="4.5" cy="4.1" r="1.05" fill="#131E30"/></pattern><clipPath id="clip-rings-wide"><rect x="0" y="0" width="720" height="356"/></clipPath></defs><g clip-path="url(#clip-rings-wide)"><circle cx="360" cy="1356" r="1090" fill="url(#dots-rings-wide)" opacity=".38"/><circle cx="360" cy="1356" r="1090" fill="none" stroke="#131E30" stroke-width="1.2"/></g><path id="rings-wide-ring-0" d="M4 84.9 A1320 1320 0 0 1 716 84.9" fill="none" stroke="#131E30" stroke-width="1" opacity=".6"/><text font-size="14" dy="-9" fill="#131E30" font-weight="500"><textPath href="#rings-wide-ring-0" xlink:href="#rings-wide-ring-0" startOffset="24">здоров</textPath></text><g transform="translate(305.6 37.1) rotate(-2.4)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="305.6" y="58.1" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">PROD-02</text><g transform="translate(418.9 37.3) rotate(2.6)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="418.9" y="58.3" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">BUH-01</text><g transform="translate(532.3 47.3) rotate(7.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="532.3" y="68.3" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">DIR-NB</text><g transform="translate(645.6 67.3) rotate(12.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="645.6" y="88.3" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">IT-01</text><path id="rings-wide-ring-1" d="M4 132.8 A1274 1274 0 0 1 716 132.8" fill="none" stroke="#131E30" stroke-width="1" opacity=".6"/><text font-size="14" dy="-9" fill="#131E30" font-weight="500"><textPath href="#rings-wide-ring-1" xlink:href="#rings-wide-ring-1" startOffset="24">ранняя деградация</textPath></text><g transform="translate(305.6 83.2) rotate(-2.4)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="305.6" y="104.2" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">SEKR-01</text><g transform="translate(475.6 87.3) rotate(5.2)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="475.6" y="108.3" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">SKLAD-01</text><g transform="translate(645.6 114.4) rotate(13)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="645.6" y="135.4" font-size="13" text-anchor="middle" fill="#131E30" font-weight="500">STARYI-PC</text><path id="rings-wide-ring-2" d="M4 180.7 A1228 1228 0 0 1 716 180.7" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text font-size="14" dy="-9" fill="#B4470E" font-weight="650"><textPath href="#rings-wide-ring-2" xlink:href="#rings-wide-ring-2" startOffset="24">компенсация · 90 дней</textPath></text><g transform="translate(523.2 138.9) rotate(7.6)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="523.2" y="159.9" font-size="13" text-anchor="middle" fill="#B4470E" font-weight="650">PROD-01</text><path id="rings-wide-ring-3" d="M4 228.9 A1182 1182 0 0 1 716 228.9" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text font-size="14" dy="-9" fill="#B4470E" font-weight="650"><textPath href="#rings-wide-ring-3" xlink:href="#rings-wide-ring-3" startOffset="24">ускоренная деградация · 30 дней</textPath></text><g transform="translate(564 191.7) rotate(9.9)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="564" y="212.7" font-size="13" text-anchor="middle" fill="#B4470E" font-weight="650">KADRY-01</text><path id="rings-wide-ring-4" d="M4 277.2 A1136 1136 0 0 1 716 277.2" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text font-size="14" dy="-9" fill="#B4470E" font-weight="650"><textPath href="#rings-wide-ring-4" xlink:href="#rings-wide-ring-4" startOffset="24">предотказ · 7 дней</textPath></text><g transform="translate(604.8 246.7) rotate(12.4)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="604.8" y="267.7" font-size="13" text-anchor="middle" fill="#B4470E" font-weight="650">BUH-02</text></svg>
+<svg class="rings-narrow" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 360 400" role="img" aria-label="Пять ступеней: здоров, ранняя деградация, компенсация 90 дней, ускоренная деградация 30 дней, предотказ 7 дней, или раньше, если прогноз ресурса короче; на орбитах машины демо-парка"><defs><pattern id="dots-rings-narrow" width="6" height="5.2" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.05" fill="#131E30"/><circle cx="4.5" cy="4.1" r="1.05" fill="#131E30"/></pattern><clipPath id="clip-rings-narrow"><rect x="0" y="0" width="360" height="400"/></clipPath></defs><g clip-path="url(#clip-rings-narrow)"><circle cx="180" cy="1500" r="1180" fill="url(#dots-rings-narrow)" opacity=".38"/><circle cx="180" cy="1500" r="1180" fill="none" stroke="#131E30" stroke-width="1.2"/></g><path id="rings-narrow-ring-0" d="M4 40.6 A1470 1470 0 0 1 356 40.6" fill="none" stroke="#131E30" stroke-width="1" opacity=".6"/><text x="12" y="21.9" font-size="13" fill="#131E30" font-weight="500">здоров</text><g transform="translate(94.4 32.5) rotate(-3.3)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="94.4" y="52.5" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">PROD-02</text><g transform="translate(168.2 30) rotate(-0.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="168.2" y="50" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">BUH-01</text><g transform="translate(242.1 31.3) rotate(2.4)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="242.1" y="51.3" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">DIR-NB</text><g transform="translate(316 36.3) rotate(5.3)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g><text x="316" y="56.3" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">IT-01</text><path id="rings-narrow-ring-1" d="M4 99 A1412 1412 0 0 1 356 99" fill="none" stroke="#131E30" stroke-width="1" opacity=".6"/><text x="12" y="75.3" font-size="13" fill="#131E30" font-weight="500">ранняя деградация</text><g transform="translate(79.2 91.6) rotate(-4.1)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="79.2" y="111.6" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">SEKR-01</text><g transform="translate(180 88) rotate(0)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="180" y="108" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">SKLAD-01</text><g transform="translate(280.8 91.6) rotate(4.1)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="3" height="6" fill="#131E30"/><rect x="-2.4" y="-2.4" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></g><text x="280.8" y="111.6" font-size="12" text-anchor="middle" fill="#131E30" font-weight="500">STARYI-PC</text><path id="rings-narrow-ring-2" d="M4 157.5 A1354 1354 0 0 1 356 157.5" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text x="12" y="135.3" font-size="13" fill="#B4470E" font-weight="650">компенсация</text><text x="348" y="142.6" font-size="13" text-anchor="end" fill="#B4470E" font-weight="650">90 дней</text><g transform="translate(198.1 146.1) rotate(0.8)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="198.1" y="166.1" font-size="12" text-anchor="middle" fill="#B4470E" font-weight="650">PROD-01</text><path id="rings-narrow-ring-3" d="M4 216 A1296 1296 0 0 1 356 216" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text x="12" y="191" font-size="13" fill="#B4470E" font-weight="650">ускоренная деградация</text><text x="348" y="200.8" font-size="13" text-anchor="end" fill="#B4470E" font-weight="650">30 дней</text><g transform="translate(238.4 205.3) rotate(2.6)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="238.4" y="225.3" font-size="12" text-anchor="middle" fill="#B4470E" font-weight="650">KADRY-01</text><path id="rings-narrow-ring-4" d="M4 274.6 A1238 1238 0 0 1 356 274.6" fill="none" stroke="#FF6A1A" stroke-width="1.6" /><text x="12" y="252.7" font-size="13" fill="#B4470E" font-weight="650">предотказ</text><text x="348" y="259.8" font-size="13" text-anchor="end" fill="#B4470E" font-weight="650">7 дней</text><g transform="translate(194.1 262.1) rotate(0.7)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#FF6A1A"/><rect x="-3" y="-3" width="6" height="6" fill="#FF6A1A"/></g><text x="194.1" y="282.1" font-size="12" text-anchor="middle" fill="#B4470E" font-weight="650">BUH-02</text></svg>
+        <figcaption>Срок реакции на орбитах: 90, 30 и 7 дней, или раньше, если прогноз ресурса короче.</figcaption>
+      </figure>
+      <div class="ladder-t">
+        <div>
+          <h3 class="h3">Пять ступеней и срок реакции</h3>
+          <p style="margin-top:10px">Машина сдаёт постепенно, и <span class="nw">J-Space</span> видит каждую ступень: здоров, ранняя деградация, компенсация, ускоренная деградация, предотказ. Для трёх последних он назначает срок реакции — 90, 30 и 7 дней, или раньше, если прогноз ресурса короче, — и подсказывает действие: снять образ данных, освободить место, перезагрузить, заменить накопитель.</p>
+        </div>
+        <div>
+          <h3 class="h3">Три координаты вместо одного числа</h3>
+          <ul class="coords" aria-label="Координаты BUH-02">
+            <li><b>100</b><span><strong>повреждения</strong> — накопленный износ железа</span></li>
+            <li><b>15</b><span><strong>устойчивость</strong> — запас прочности к новым сбоям</span></li>
+            <li><b>90</b><span><strong>наблюдаемость</strong> — полнота данных для оценки</span></li>
+          </ul>
+          <p style="margin-top:12px">У <span class="nw">BUH-02</span>: 100 · 15 · 90.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <div class="board-head"><h3 class="h3">Журнал демо-парка</h3><p>индекс здоровья за 45 дней, данные рабочего стенда</p></div>
+      <div class="b-cols" aria-hidden="true"><span>Машина</span><span>45 дней</span><span>Состояние</span><span>Индекс</span><span>Главный фактор</span><span>Курс</span></div>
+      <ol class="board" aria-label="Журнал демо-парка: 10 машин">
+        <li class="tone-strong"><a class="row" href="../demo/device/demo-buh-02.html"><span class="b-host"><span class="nw">BUH-02</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,10.2 4,11.2 8,17.4 12,19.4 16,24.5 20,24.5 24,24.5 28,24.5 32,24.5 36,24.5 40,24.5 44,24.5 48,24.5 52,24.5 56,24.5 60,24.5 64,25.4 68,25.4 72,25.4 76,25.9 80,25.9 84,26.5 88,26.5 92,26.5 96,26.5 100,26.5 104,26.5 108,26.5 112,26.5 116,26.5 120,26.5 124,26.5 128,26.5 132,26.5 136,26.5 140,26.5 144,26.5 148,26.5 152,26.5 156,26.5 160,26.5 164,26.5 168,26.5 172,26.5 176,26.5" fill="none" stroke="#FF6A1A" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="22.5" x2="176" y2="30.5" stroke="#FF6A1A" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="18" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="10" y="2" width="6" height="6" fill="#FF6A1A"/></svg><span><span class="vh">состояние: </span>предотказ</span></span><span class="b-idx"><span class="vh">индекс </span>2</span><span class="b-factor"><span class="vh">главный фактор: </span>накопитель</span><span class="b-course">коррекция за 7 дней</span></a></li>
+        <li class="tone-strong"><a class="row" href="../demo/device/demo-kadry-01.html"><span class="b-host"><span class="nw">KADRY-01</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,3 4,3 8,3 12,18.6 16,18.6 20,18.6 24,18.6 28,18.6 32,18.6 36,18.6 40,18.6 44,18.6 48,18.6 52,18.6 56,18.6 60,18.6 64,18.6 68,18.6 72,18.6 76,18.6 80,18.6 84,18.6 88,18.6 92,18.6 96,18.6 100,18.6 104,18.6 108,18.6 112,18.6 116,18.6 120,18.6 124,18.6 128,18.6 132,18.6 136,18.6 140,18.6 144,18.6 148,18.6 152,18.6 156,18.6 160,18.6 164,18.6 168,18.6 172,18.6 176,18.6" fill="none" stroke="#FF6A1A" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="14.6" x2="176" y2="22.6" stroke="#FF6A1A" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="18" y="3.4" width="8" height="3.2" fill="#FF6A1A"/><rect x="10" y="2" width="6" height="6" fill="#FF6A1A"/></svg><span><span class="vh">состояние: </span>ускоренная деградация</span></span><span class="b-idx"><span class="vh">индекс </span>35</span><span class="b-factor"><span class="vh">главный фактор: </span>заполнение диска</span><span class="b-course">коррекция за 7 дней</span></a></li>
+        <li class="tone-soft"><a class="row" href="../demo/device/demo-prod-01.html"><span class="b-host"><span class="nw">PROD-01</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,3 4,3 8,3 12,3 16,3 20,9.1 24,9.1 28,9.1 32,9.1 36,10 40,10 44,10 48,10 52,10 56,10 60,10 64,10 68,10 72,10 76,10 80,10 84,10 88,10 92,10 96,10 100,10 104,10 108,10 112,10 116,10 120,10 124,10 128,10 132,10 136,10 140,10 144,10 148,10 152,10 156,10 160,10 164,10 168,10 172,10 176,10" fill="none" stroke="#FF6A1A" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="6" x2="176" y2="14" stroke="#FF6A1A" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="6" height="6" fill="#FF6A1A"/></svg><span><span class="vh">состояние: </span>компенсация</span></span><span class="b-idx"><span class="vh">индекс </span>71</span><span class="b-factor"><span class="vh">главный фактор: </span>траектория ресурса</span><span class="b-course">коррекция за 90 дней</span></a></li>
+        <li class="tone-early"><a class="row" href="../demo/device/demo-sekr-01.html"><span class="b-host"><span class="nw">SEKR-01</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,3 4,3 8,10.9 12,10.9 16,10.9 20,10.9 24,10.9 28,10.9 32,10.9 36,10.9 40,10.9 44,10.9 48,10.9 52,10.9 56,10.9 60,10.9 64,10.9 68,10.9 72,10.9 76,10.9 80,10.9 84,10.9 88,10.9 92,10.9 96,10.9 100,10.9 104,10.9 108,10.9 112,10.9 116,10.9 120,10.9 124,10.9 128,10.9 132,10.9 136,10.9 140,10.9 144,10.9 148,10.9 152,10.9 156,10.9 160,10.9 164,10.9 168,10.9 172,10.9 176,10.9" fill="none" stroke="#131E30" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="6.9" x2="176" y2="14.9" stroke="#131E30" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="3" height="6" fill="#131E30"/><rect x="10.6" y="2.6" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></svg><span><span class="vh">состояние: </span>ранняя деградация</span></span><span class="b-idx"><span class="vh">индекс </span>67</span><span class="b-factor"><span class="vh">главный фактор: </span>старение ПО</span><span class="b-course">ранние признаки</span></a></li>
+        <li class="tone-early"><a class="row" href="../demo/device/demo-sklad-01.html"><span class="b-host"><span class="nw">SKLAD-01</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,4.2 4,4.2 8,4.2 12,4.2 16,4.2 20,4.2 24,4.2 28,4.2 32,4.8 36,4.8 40,6.3 44,6.3 48,6.3 52,6.3 56,6.3 60,6.3 64,6.3 68,6.3 72,6.3 76,6.3 80,6.3 84,6.3 88,6.3 92,6.3 96,6.3 100,6.3 104,6.3 108,6.3 112,6.3 116,6.3 120,6.3 124,6.3 128,6.3 132,7 136,7 140,7 144,7 148,8.9 152,8.9 156,8.9 160,8.9 164,8.9 168,8.9 172,8.9 176,8.9" fill="none" stroke="#131E30" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="4.9" x2="176" y2="12.9" stroke="#131E30" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="3" height="6" fill="#131E30"/><rect x="10.6" y="2.6" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></svg><span><span class="vh">состояние: </span>ранняя деградация</span></span><span class="b-idx"><span class="vh">индекс </span>76</span><span class="b-factor"><span class="vh">главный фактор: </span>операционная система</span><span class="b-course">ранние признаки</span></a></li>
+        <li class="tone-early"><a class="row" href="../demo/device/demo-old-pc.html"><span class="b-host"><span class="nw">STARYI-PC</span></span><span class="b-spark"><svg viewBox="0 0 176 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="3" x2="176" y2="3" stroke="#C3CDD5" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><polyline points="0,6 4,6 8,6 12,6 16,6 20,6 24,6 28,6 32,6 36,6 40,6 44,6 48,6 52,6 56,6 60,6 64,6 68,6 72,6 76,6 80,6 84,6 88,6.8 92,6.8 96,6.8 100,6.8 104,6.8 108,6.8 112,6.8 116,6.8 120,6.8 124,6.8 128,6.8 132,6.8 136,6.8 140,6.8 144,6.8 148,6.8 152,6.8 156,6.8 160,6.8 164,6.8 168,6.8 172,6.8 176,6.8" fill="none" stroke="#131E30" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><line x1="176" y1="2.8" x2="176" y2="10.8" stroke="#131E30" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="3" height="6" fill="#131E30"/><rect x="10.6" y="2.6" width="4.8" height="4.8" fill="none" stroke="#131E30" stroke-width="1.2"/></svg><span><span class="vh">состояние: </span>ранняя деградация</span></span><span class="b-idx"><span class="vh">индекс </span>84</span><span class="b-factor"><span class="vh">главный фактор: </span>операционная система</span><span class="b-course">ранние признаки</span></a></li>
+        <li class="tone-ok fold"><div class="row"><span class="b-host"><a href="../demo/device/demo-prod-02.html"><span class="nw">PROD-02</span></a>, <a href="../demo/device/demo-buh-01.html"><span class="nw">BUH-01</span></a>, <a href="../demo/device/demo-dir-nb.html"><span class="nw">DIR-NB</span></a>, <a href="../demo/device/demo-it-01.html"><span class="nw">IT-01</span></a></span><span class="b-state"><svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true"><rect x="0" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="18" y="3.4" width="8" height="3.2" fill="#131E30"/><rect x="10" y="2" width="6" height="6" fill="#131E30"/></svg><span><span class="vh">состояние: </span>здоров</span></span><span class="b-idx"><span class="vh">индекс </span>100</span><span class="b-factor" aria-hidden="true">–</span><span class="b-course">полёт нормальный</span></div></li>
+      </ol>
+      <p class="board-foot">Парк вымышленный, история телеметрии настоящая: те же цифры живут на рабочем стенде.</p>
+    </div>
+    <div class="vs">
+      <table>
+        <caption>Классический мониторинг и <span class="nw">J-Space</span></caption>
+        <colgroup><col class="c1"><col class="c2"><col></colgroup>
+        <thead><tr><th scope="col"><span class="vh">Вопрос</span></th><th scope="col">Классический мониторинг</th><th scope="col"><span class="nw">J-Space</span></th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Главный вопрос</th><td data-h="Классический мониторинг">Что сломано прямо сейчас</td><td data-h="J-Space">Какая машина начала сдавать и сколько времени на реакцию</td></tr>
+          <tr><th scope="row">Как срабатывает</th><td data-h="Классический мониторинг">По порогу: диск заполнен на 90 %</td><td data-h="J-Space">По тренду и его значимости, заранее</td></tr>
+          <tr><th scope="row">Оценка машины</th><td data-h="Классический мониторинг">Одно число или набор графиков</td><td data-h="J-Space">Пять состояний и три координаты</td></tr>
+          <tr><th scope="row">Качество данных</th><td data-h="Классический мониторинг">Берёт данные как есть</td><td data-h="J-Space">Проверяет достоверность каждого источника</td></tr>
+          <tr><th scope="row">Что ставится на ПК</th><td data-h="Классический мониторинг">Агент с зависимостями или опрос извне</td><td data-h="J-Space">Агент на чистом Python и PowerShell 5.1</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="on-stand">
+      <p>Всё это живёт на рабочем стенде: сортировки, переход в карточку машины, выгрузка CSV.</p>
+      <div><a class="btn" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a></div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="org" aria-labelledby="org-h">
+  <div class="wrap grid">
+    <div class="open open-a">
+      <h2 class="h2" id="org-h"><span class="kw">Для организации</span><span class="vh">: </span><span class="sub">развёртывание, обновления, интеграции</span></h2>
+      <p class="lead"><span class="nw">J-Space</span> разворачивается на вашем сервере с Windows или Linux, хранит всё в одном файле SQLite и спокойно встраивается в существующую инфраструктуру.</p>
+    </div>
+
+    <dl class="org-items">
+      <div><dt>Массовая установка</dt><dd>Скрытая общая папка <code>\\сервер\srp$</code> и одна команда <code>setup.exe</code> с кодами возврата для GPO и RMM; страница /deploy готовит строки установки для каждой организации и отдела.</dd></div>
+      <div><dt>Обновления агентов</dt><dd>Раз в час агент проверяет новую версию; пакет подписан Ed25519, сервер сверяет подпись и контрольную сумму; настройки сохраняются.</dd></div>
+      <div><dt>Организации и отделы</dt><dd>Коды едут вместе с телеметрией, названия живут в справочнике — переименование сразу применяется ко всей истории.</dd></div>
+      <div><dt>Zabbix</dt><dd>Четыре значения на компьютер — состояние, риск 0–100, срок реакции в сутках, главный фактор — по протоколу траппера каждые 5 минут.<br><a class="more" href="https://github.com/SergioTheFirst/srp/blob/main/docs/zabbix-export.md">Инструкция по Zabbix</a></dd></div>
+      <div><dt>API и выгрузки</dt><dd>41 маршрут <code>/api/v1</code> — машины, метрики, печать, принтеры, карта сети; выгрузки CSV и PNG.</dd></div>
+      <div><dt>Сетевое оборудование</dt><dd>По желанию — адаптеры MikroTik, UniFi, Redfish и NetFlow, только чтение.</dd></div>
+      <div><dt>Безопасность</dt><dd>Токен приёма телеметрии, отдельный токен администратора, TLS через обратный прокси, резервная копия одной командой <code>backup.bat</code>.</dd></div>
+    </dl>
+
+    <figure class="scheme">
+<svg viewBox="0 0 400 372" role="img" aria-label="Схема: агент на Windows передаёт телеметрию наземному комплексу J-Space на FastAPI и SQLite при включении и каждый час, сигнал связи каждые 5 минут; принтеры и сеть сервер опрашивает по SNMP каждые 15 минут; браузер открывает дашборд на порту 8000">
+<defs><pattern id="sg1" width="6" height="5" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.25" r="1.25" fill="#131E30"/><circle cx="4.5" cy="3.75" r="1.25" fill="#131E30"/></pattern><pattern id="sg2" width="6" height="5" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.25" r="0.95" fill="#131E30"/><circle cx="4.5" cy="3.75" r="0.95" fill="#131E30"/></pattern><pattern id="sg3" width="6" height="5" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.25" r="0.65" fill="#131E30"/><circle cx="4.5" cy="3.75" r="0.65" fill="#131E30"/></pattern></defs>
+<g transform="translate(56 34) scale(1.5)"><rect x="-13" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="5" y="-1.6" width="8" height="3.2" fill="#131E30"/><rect x="-0.6" y="-7" width="1.2" height="4" fill="#131E30"/><rect x="-3" y="-3" width="6" height="6" fill="#131E30"/></g>
+<text x="92" y="31" class="n">агент · Windows</text><text x="92" y="49" class="t2">Python и PowerShell 5.1</text>
+<line x1="56" y1="48" x2="56" y2="212" stroke="#131E30" stroke-width="1" stroke-dasharray="3 4"/>
+<rect x="53" y="100" width="6" height="6" fill="#131E30"/>
+<text x="76" y="86" class="t2">телеметрия: при включении</text><text x="76" y="104" class="t2">и каждый час</text><text x="76" y="126" class="t2">сигнал связи: каждые 5 минут</text>
+<text x="392" y="152" class="n" text-anchor="end">принтеры и сеть</text><text x="392" y="170" class="t2" text-anchor="end">SNMP 15 минут</text>
+<path d="M352 190.5 L357.5 196 L352 201.5 L346.5 196 Z" fill="#131E30"/><rect x="371" y="191" width="10" height="10" fill="#131E30"/>
+<line x1="344" y1="197" x2="64" y2="214" stroke="#131E30" stroke-width="1" stroke-dasharray="3 4"/>
+<rect x="196" y="203" width="5" height="5" fill="#131E30"/>
+<rect x="55" y="214" width="2" height="26" fill="#131E30"/><rect x="46" y="213" width="20" height="2" fill="#131E30"/>
+<text x="76" y="233" class="n">Наземный комплекс · FastAPI + SQLite</text>
+<rect x="0" y="239.5" width="400" height="1.5" fill="#131E30"/>
+<rect x="0" y="242" width="400" height="5" fill="url(#sg1)"/><rect x="0" y="247" width="400" height="5" fill="url(#sg2)"/><rect x="0" y="252" width="400" height="5" fill="url(#sg3)"/>
+<text x="76" y="276" class="t2">ваша машина, Windows или Linux</text>
+<line x1="56" y1="260" x2="56" y2="318" stroke="#131E30" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="76" y="300" class="t2">порт 8000</text>
+<rect x="36" y="320" width="40" height="30" fill="none" stroke="#131E30" stroke-width="1.2"/><rect x="36" y="320" width="40" height="5" fill="#131E30"/>
+<text x="92" y="333" class="n">браузер</text><text x="92" y="351" class="t2">дашборд, CSV, API, Zabbix</text>
+</svg>
+      <figcaption>Схема: агент · Windows, сервер · FastAPI + SQLite, браузер.</figcaption>
+    </figure>
+
+    <div class="install">
+      <h3 class="h3">Установка, три шага</h3>
+      <ol class="steps">
+        <li><span><strong>Сервер:</strong> скачайте <code>srp-server-free.zip</code>, распакуйте и запустите <code>install-server.bat</code> (нужен Python 3.9 или новее).</span></li>
+        <li><span><strong>Агент:</strong> на компьютере запустите <code>srp-setup-free.exe</code> от администратора и укажите адрес сервера.</span></li>
+        <li><span><strong>Дашборд:</strong> откройте <code>http://адрес-сервера:8000</code> — данные приходят в первые минуты после установки.</span></li>
+      </ol>
+    </div>
+
+    <aside class="aside-demo" aria-label="Демо-версия">
+      <p><strong>Демо-версия 0.3.0</strong> от 29 августа 2026: до 3 компьютеров, открытый код под лицензией MIT.</p>
+      <a class="btn-line" href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать в GitHub Releases</a>
+      <p>Рабочий стенд работает на текущей сборке <span class="nw">J-Space</span> 0.3.8: подписанные обновления агентов, откалиброванный вердикт здоровья, телеметрия каждый час и проверка защиты каждой машины. Демо-версия для скачивания — 0.3.0.</p>
+      <p>Вопросы о внедрении — <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
+      <p>Или сначала <a href="https://srp-private.vercel.app/">открыть рабочий стенд</a>.</p>
+    </aside>
+
+    <div class="specs">
+      <h3 class="h3">Характеристики</h3>
+      <div class="specs-grid">
+        <div><h4>Анализ</h4><ul><li>срок реакции и главная причина по каждой машине — словами</li><li>пять состояний и три координаты</li><li>весь парк на одном экране</li><li>дневные сводки до 2 лет, виден тренд</li><li>честная оценка достоверности каждого источника</li></ul></div>
+        <div><h4>Телеметрия</h4><ul><li>SMART (21 атрибут ATA и журнал NVMe)</li><li>BSOD и внезапные перезагрузки (KP41)</li><li>журналы событий на любом языке Windows</li><li>память, свободное место, задержки и температура дисков</li><li>сроки действия сертификатов</li><li>антивирус, обновления Windows, BitLocker, TPM и Secure Boot</li></ul></div>
+        <div><h4>Принтеры и сеть</h4><ul><li>тонер, барабан и счётчики по SNMP</li><li>учёт печати в страницах: кто, где и сколько</li><li>карта сети: узлы, связи, узкие места</li><li>коммутаторы, точки доступа и новые узлы</li></ul></div>
+        <div><h4>Развёртывание</h4><ul><li>агент на чистом Python ставится за минуту</li><li>агенты по всему парку обновляются сами, пакеты подписаны</li><li>self-hosted, всё в одном файле SQLite</li><li>работает в вашей сети без облака, регистрации и лицензионных ключей</li></ul></div>
+        <div><h4>Данные</h4><ul><li>серийные номера хешируются, ключи сертификатов остаются на машине</li><li>фильтры, сортировки, выгрузка в CSV</li><li>вердикты в Zabbix</li><li>открытый код под лицензией MIT</li></ul></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="program" aria-labelledby="pr-h">
+  <div class="wrap grid">
+    <div class="open open-c">
+      <h2 class="h2" id="pr-h"><span class="kw">Программа полёта</span><span class="vh">: </span><span class="sub">что уже на орбите и что впереди</span></h2>
+      <p class="lead"><span class="nw">J-Space</span> развивается как исследовательская программа: сначала измерения, потом выводы. Каждый следующий этап стартует, когда накоплены данные для честной проверки.</p>
+      <div class="side plan">
+        <div>
+          <h3 class="h3">На орбите</h3>
+          <ol class="path">
+            <li>телеметрия Windows-ПК</li>
+            <li>принтеры и учёт печати</li>
+            <li>карта сети и машина времени</li>
+            <li>проверка достоверности данных</li>
+            <li>вердикт здоровья, откалиброванный по полевым исследованиям (Backblaze, Google), октябрь 2026</li>
+            <li>подписанные обновления агентов</li>
+          </ol>
+        </div>
+        <div>
+          <h3 class="h3">Впереди</h3>
+          <ol class="path ahead">
+            <li>учёт подтверждённых отказов и проверка прогнозов на фактах</li>
+            <li>статистические контрольные карты по каждой машине</li>
+            <li>модели выживания по статистике всего парка</li>
+            <li>сводная статистика и учёт для крупных организаций</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="faq" aria-labelledby="faq-h">
+  <div class="wrap grid">
+    <div class="open open-c">
+      <h2 class="h2" id="faq-h"><span class="kw">Вопросы</span></h2>
+      <div class="side faq">
+      <details><summary><span class="q">Что такое <span class="nw">J-Space</span>?</span></summary><p><span class="nw">J-Space</span> — система телеметрии, учёта и раннего предупреждения для компьютерного парка организации: Windows-ПК, принтеры и сеть на одном экране. Она работает на вашем сервере, код открыт по лицензии MIT.</p></details>
+      <details><summary><span class="q">Как часто приходит телеметрия?</span></summary><p>При включении компьютера и затем каждый час агент отправляет пять пакетов телеметрии, а каждые 5 минут — сигнал связи. Принтеры сервер опрашивает сам каждые 15 минут, доступность сети — каждые 10 минут, топологию — раз в час.</p></details>
+      <details><summary><span class="q">Какие прогнозы строит <span class="nw">J-Space</span>?</span></summary><p>Дату он ставит там, где у ресурса есть физический предел: износ SSD до 100 %, свободное место на системном диске до 5 %, тонер до нуля. Для состояния машины он назначает срок реакции — 90, 30 или 7 дней, или раньше, если прогноз ресурса короче, — и пишет, что сделать.</p></details>
+      <details><summary><span class="q">Чем <span class="nw">J-Space</span> отличается от Zabbix?</span></summary><p>Они отлично дополняют друг друга: Zabbix по порогам сообщает, что сломано сейчас, а <span class="nw">J-Space</span> по тренду и истории показывает, какая машина начала сдавать и сколько времени на реакцию. Вердикт <span class="nw">J-Space</span> приходит в Zabbix четырьмя значениями на компьютер.</p></details>
+      <details><summary><span class="q">Где хранятся данные?</span></summary><p>На вашем сервере, в одном файле SQLite. Серийные номера дисков хешируются ещё на компьютере, из адресов передаются только частные диапазоны, у сертификатов — только сроки действия.</p></details>
+      <details><summary><span class="q">Работает ли это на русской Windows?</span></summary><p>Да, и это проверено на живых машинах: агент читает счётчики через CIM и разбирает числовые коды событий, а установщик назначает права по идентификаторам групп. Результат одинаков на любом языке системы.</p></details>
+      <details><summary><span class="q">Сколько трафика расходует агент?</span></summary><p>Обычно меньше мегабайта в сутки на компьютер: сигнал связи весит сотни байт, полный пакет телеметрии раз в час — единицы килобайт плюс события журналов. Сотня машин укладывается в десятки мегабайт в сутки, а пакет обновления агента скачивается только с выходом новой версии.</p></details>
+      <details><summary><span class="q">Что нужно для установки и сколько это стоит?</span></summary><p>Сервер на Windows или Linux с Python 3.9 или новее; на компьютерах — Windows 10 или 11 и права администратора для установки агента. Демо-версия доступна свободно: до 3 компьютеров, открытый код под лицензией MIT, проект развивается на добровольные взносы.</p></details>
+      <details><summary><span class="q">Чем рабочий стенд отличается от снимка экранов?</span></summary><p>Рабочий стенд — запущенный сервер <span class="nw">J-Space</span> с демо-парком: всё нажимается, цифры считает настоящий движок; после паузы первая страница открывается чуть дольше. Снимок экранов — 36 страниц того же дашборда прямо на этом сайте: открываются мгновенно. Парк один: 10 компьютеров, 3 принтера, 16 узлов сети, 45 дней истории.</p></details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="crew" aria-labelledby="cr-h">
+  <div class="wrap grid">
+    <div class="open open-c">
+      <h2 class="h2" id="cr-h"><span class="kw">Экипаж</span><span class="vh">: </span><span class="sub">кто делает <span class="nw">J-Space</span></span></h2>
+      <p class="lead crew-text"><span class="nw">J-Space</span> создаёт инженер, который сам ведёт парк офисных компьютеров и знает цену утреннего звонка «у меня всё зависло». Проект открытый и развивается на добровольные взносы: каждый взнос превращается во время — разбор присланных ошибок, поддержку новых моделей принтеров и сетевого оборудования, проверку сборок на живом парке.</p>
+      <div class="side support">
+        <div class="boosty">
+          <img src="../img/boosty_qr.svg" width="132" height="132" loading="lazy" decoding="async" alt="QR-код для перевода через Boosty">
+          <div class="txt">
+            <h3 class="h3">Boosty</h3>
+            <p>Отсканируйте код или откройте ссылку. Любая сумма помогает.</p>
+          </div>
+          <a class="btn-line" href="https://boosty.to/personalbot/donate?qr=true">Поддержать через Boosty</a>
+        </div>
+        <div>
+          <h3 class="h3">Картой или через СБП</h3>
+          <a class="btn-line" href="https://pay.cloudtips.ru/p/00d77c6a">Поддержать через CloudTips</a>
+        </div>
+        <div>
+          <h3 class="h3">Помочь делом</h3>
+          <ul class="deeds">
+            <li><a href="https://github.com/SergioTheFirst/srp">Звезда на GitHub</a> — проект становится заметнее.</li>
+            <li><a href="https://github.com/SergioTheFirst/srp/issues">Issue с ошибкой или идеей</a> — самая ценная помощь.</li>
+            <li>Расскажите коллеге, который отвечает за парк компьютеров.</li>
+          </ul>
+          <p style="margin-top:14px">Вопросы о внедрении — <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="finale">
+      <p>10 компьютеров, 3 принтера, 45 дней истории, вход свободный.</p>
+      <div><a class="btn" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a><a class="link" href="../demo/">снимок экранов</a></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-cols">
+      <div><p class="foot-brand"><span class="nw">J-Space</span></p></div>
+      <div>
+        <h2>Продукт</h2>
+        <ul>
+          <li><a href="https://srp-private.vercel.app/">Рабочий стенд</a></li>
+          <li><a href="../demo/">Снимок экранов</a></li>
+          <li><a href="https://github.com/SergioTheFirst/srp/releases/latest">Скачать демо-версию</a></li>
+          <li><a href="https://github.com/SergioTheFirst/srp">Код на GitHub</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Поддержать</h2>
+        <ul>
+          <li><a href="https://boosty.to/personalbot/donate?qr=true">Boosty</a></li>
+          <li><a href="https://pay.cloudtips.ru/p/00d77c6a">CloudTips</a></li>
+          <li><a href="https://github.com/SergioTheFirst/srp/issues">Сообщить об ошибке</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Автор</h2>
+        <ul>
+          <li><a href="mailto:mss777@mail.ru">mss777@mail.ru</a></li>
+          <li><a href="https://github.com/SergioTheFirst">github.com/SergioTheFirst</a></li>
+          <li><a href="../privacy.html">Политика обработки данных</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p>Владелец сайта и оператор персональных данных указан в <a href="../privacy.html">Политике обработки персональных данных</a>; связь — <a href="mailto:mss777@mail.ru">mss777@mail.ru</a>.</p>
+      <p>Сайт свободен от рекламы: все ссылки и изображения относятся к собственному продукту автора и его страницам на сторонних сервисах и размещены безвозмездно, поэтому маркировка erid здесь лишняя. Сайт работает без cookies.</p>
+    </div>
+    <p class="colophon">© 2026 <span class="nw">J-Space</span> · лицензия MIT · демо-версия 0.3.0 от 29 августа 2026 · страница обновлена 18 октября 2026 · j-space.ru · <a class="vh-link" href="../vertu-high/">vertu-high style</a></p>
+  </div>
+</footer>
+
+<script>
+// Lazy screenshots: once the page has loaded, fetch the rest quietly so every figure is ready before it is reached.
+window.addEventListener("load", () => {
+  for (const img of document.querySelectorAll('img[loading="lazy"]')) img.loading = "eager";
+}, { once: true });
+
+// The phone menu closes when a section is chosen, on Escape (focus returns to «Разделы») and on a tap outside it.
+(() => {
+  const menu = document.querySelector(".menu");
+  if (!menu) return;
+  const summary = menu.querySelector("summary");
+  for (const a of menu.querySelectorAll("a")) a.addEventListener("click", () => { menu.open = false; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.open) { menu.open = false; summary.focus(); } });
+  document.addEventListener("pointerdown", (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
+})();
+
+(() => {
+  "use strict";
+  const hero = document.getElementById("hero");
+  const stage = hero && hero.querySelector(".stage");
+  const cv = stage && stage.querySelector("canvas");
+  // two sheets: the planet below, redrawn a few times a second; the fleet above it, cleared every frame
+  const pctx = cv && cv.getContext && cv.getContext("2d");
+  if (!pctx) return;
+  const ov = document.createElement("canvas");
+  ov.setAttribute("aria-hidden", "true");
+  cv.after(ov);
+  const ctx = ov.getContext("2d");
+  document.documentElement.classList.add("js-hero");
+  const consoleEl = hero.querySelector(".console");
+  const css = getComputedStyle(document.documentElement), tok = (n) => css.getPropertyValue(n).trim();
+  let INK = "", ORANGE = "";
+  // Windows High Contrast and other forced palettes: the halftone steps aside, craft and arc take system colours
+  const forced = matchMedia("(forced-colors: active)");
+  function palette() {
+    if (!forced.matches) { INK = tok("--ink"); ORANGE = tok("--orange"); return; }
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;color:CanvasText;background:Highlight";
+    document.body.append(probe);
+    const cs = getComputedStyle(probe);
+    INK = cs.color; ORANGE = cs.backgroundColor;
+    probe.remove();
+  }
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)");
+  const TAU = Math.PI * 2;
+  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 400 }) : setTimeout(fn, 16));
+  const FLEET = [{"label":"SKLAD-01","name":"SKLAD-01","kind":"pc","tone":"early","seq":0,"note":"","state":"ранняя деградация · индекс 76","dro":[["повреждения","29"],["устойчивость","100"],["наблюдаемость","90"]],"lines":["Главный фактор: операционная система","Переустановка/восстановление ОС при повторении."],"href":"../demo/device/demo-sklad-01.html","linkText":"Карточка SKLAD-01 в снимке экранов","live":"ранняя деградация · операционная система: переустановка/восстановление ОС при повторении","dateHot":false,"aria":"SKLAD-01: ранняя деградация, индекс 76. Главный фактор: операционная система. Переустановка/восстановление ОС при повторении."},{"label":"PROD-02","name":"PROD-02","kind":"pc","tone":"ok","seq":1,"note":"","state":"здоров · индекс 100","dro":[["повреждения","0"],["устойчивость","100"],["наблюдаемость","75"]],"lines":["Полёт нормальный."],"href":"../demo/device/demo-prod-02.html","linkText":"Карточка PROD-02 в снимке экранов","live":"здоров · полёт нормальный","dateHot":false,"aria":"PROD-02: здоров, индекс 100. Полёт нормальный."},{"label":"Kyocera","name":"Kyocera M2040dn","kind":"printer","tone":"ok","seq":2,"note":"","dateHot":false,"state":"принтер · опрос по SNMP каждые 15 минут","lines":["Тонер 55 %."],"href":"../demo/printers/demo-prn-kyo.html","linkText":"Принтер в снимке экранов","live":"принтер Kyocera M2040dn · тонер 55 %","aria":"Kyocera: принтер Kyocera M2040dn, тонер 55 %"},{"label":"STARYI-PC","name":"STARYI-PC","kind":"pc","tone":"early","seq":3,"note":"","state":"ранняя деградация · индекс 84","dro":[["повреждения","17"],["устойчивость","90"],["наблюдаемость","90"]],"lines":["Главный фактор: операционная система","Переустановка/восстановление ОС при повторении."],"href":"../demo/device/demo-old-pc.html","linkText":"Карточка STARYI-PC в снимке экранов","live":"ранняя деградация · операционная система: переустановка/восстановление ОС при повторении","dateHot":false,"aria":"STARYI-PC: ранняя деградация, индекс 84. Главный фактор: операционная система. Переустановка/восстановление ОС при повторении."},{"label":"BUH-01","name":"BUH-01","kind":"pc","tone":"ok","seq":4,"note":"","state":"здоров · индекс 100","dro":[["повреждения","0"],["устойчивость","100"],["наблюдаемость","75"]],"lines":["Полёт нормальный."],"href":"../demo/device/demo-buh-01.html","linkText":"Карточка BUH-01 в снимке экранов","live":"здоров · полёт нормальный","dateHot":false,"aria":"BUH-01: здоров, индекс 100. Полёт нормальный."},{"label":"BUH-02","name":"BUH-02","kind":"pc","tone":"strong","seq":5,"note":"до 7 дней","home":true,"sag":-9,"state":"предотказ · индекс 2","dro":[["повреждения","100"],["устойчивость","15"],["наблюдаемость","90"]],"lines":["Срок реакции: до 7 дней · главный фактор: накопитель","Снять образ данных, планировать замену накопителя."],"href":"../demo/device/demo-buh-02.html","linkText":"Карточка BUH-02 в снимке экранов","live":"предотказ · коррекция курса в течение 7 дней · накопитель: 124 переназначенных сектора, 18 в ожидании","dateHot":true,"aria":"BUH-02, до 7 дней: предотказ, индекс 2. Срок реакции: до 7 дней · главный фактор: накопитель. Снять образ данных, планировать замену накопителя."},{"label":"DIR-NB","name":"DIR-NB","kind":"pc","tone":"ok","seq":6,"note":"","state":"здоров · индекс 100","dro":[["повреждения","0"],["устойчивость","100"],["наблюдаемость","90"]],"lines":["Полёт нормальный."],"href":"../demo/device/demo-dir-nb.html","linkText":"Карточка DIR-NB в снимке экранов","live":"здоров · полёт нормальный","dateHot":false,"aria":"DIR-NB: здоров, индекс 100. Полёт нормальный."},{"label":"HP M428","name":"HP LaserJet M428","kind":"printer","tone":"ok","seq":7,"note":"тонер на 3 дня","dateHot":true,"state":"принтер · опрос по SNMP каждые 15 минут","lines":["Тонер 9 %, хватит примерно на 3 дня."],"href":"../demo/printers/demo-prn-hp.html","linkText":"Принтер в снимке экранов","live":"принтер HP LaserJet M428 · тонер 9 %, хватит примерно на 3 дня","aria":"HP M428, тонер на 3 дня: принтер HP LaserJet M428, тонер 9 %, хватит примерно на 3 дня"},{"label":"PROD-01","name":"PROD-01","kind":"pc","tone":"soft","seq":8,"note":"до 90 дней","state":"компенсация · индекс 71","dro":[["повреждения","25"],["устойчивость","70"],["наблюдаемость","90"]],"lines":["Срок реакции: до 90 дней · главный фактор: траектория ресурса","Ресурс близок к исчерпанию — планировать обслуживание."],"href":"../demo/device/demo-prod-01.html","linkText":"Карточка PROD-01 в снимке экранов","live":"компенсация · коррекция курса в течение 90 дней · траектория ресурса: износ SSD 89 %, предел примерно через 97 дней","dateHot":true,"aria":"PROD-01, до 90 дней: компенсация, индекс 71. Срок реакции: до 90 дней · главный фактор: траектория ресурса. Ресурс близок к исчерпанию — планировать обслуживание."},{"label":"SEKR-01","name":"SEKR-01","kind":"pc","tone":"early","seq":9,"note":"","state":"ранняя деградация · индекс 67","dro":[["повреждения","0"],["устойчивость","61"],["наблюдаемость","90"]],"lines":["Главный фактор: старение ПО","Перезагрузить; если повторится — искать утечку в ПО."],"href":"../demo/device/demo-sekr-01.html","linkText":"Карточка SEKR-01 в снимке экранов","live":"ранняя деградация · старение ПО: перезагрузить; если повторится — искать утечку в ПО","dateHot":false,"aria":"SEKR-01: ранняя деградация, индекс 67. Главный фактор: старение ПО. Перезагрузить; если повторится — искать утечку в ПО."},{"label":"Canon","name":"Canon iR C3226","kind":"printer","tone":"ok","seq":10,"note":"","dateHot":false,"state":"принтер · опрос по SNMP каждые 15 минут","lines":["Тонер C 18, M 44, Y 61, K 70 %."],"href":"../demo/printers/demo-prn-canon.html","linkText":"Принтер в снимке экранов","live":"принтер Canon iR C3226 · тонер C 18, M 44, Y 61, K 70 %","aria":"Canon: принтер Canon iR C3226, тонер C 18, M 44, Y 61, K 70 %"},{"label":"KADRY-01","name":"KADRY-01","kind":"pc","tone":"strong","seq":11,"note":"до 7 дней","state":"ускоренная деградация · индекс 35","dro":[["повреждения","0"],["устойчивость","24"],["наблюдаемость","75"]],"lines":["Срок реакции: до 7 дней · главный фактор: заполнение диска","Освободить место для обновлений Windows."],"href":"../demo/device/demo-kadry-01.html","linkText":"Карточка KADRY-01 в снимке экранов","live":"ускоренная деградация · коррекция курса в течение 7 дней · заполнение диска: освободить место для обновлений Windows","dateHot":true,"aria":"KADRY-01, до 7 дней: ускоренная деградация, индекс 35. Срок реакции: до 7 дней · главный фактор: заполнение диска. Освободить место для обновлений Windows."},{"label":"IT-01","name":"IT-01","kind":"pc","tone":"ok","seq":12,"note":"","state":"здоров · индекс 100","dro":[["повреждения","0"],["устойчивость","100"],["наблюдаемость","75"]],"lines":["Полёт нормальный."],"href":"../demo/device/demo-it-01.html","linkText":"Карточка IT-01 в снимке экранов","live":"здоров · полёт нормальный","dateHot":false,"aria":"IT-01: здоров, индекс 100. Полёт нормальный."}];
+  const NC = FLEET.length;
+  const HOME = FLEET.findIndex((c) => c.home);
+  const hot = (c) => c.tone === "strong" || c.tone === "soft";
+
+  // ---- 3D value noise sampled on the sphere: seamless clouds, sea and land
+  const perm = new Uint8Array(512);
+  { const p = Array.from({ length: 256 }, (_, i) => i); let s = 1977;
+    for (let i = 255; i > 0; i--) { s = (s * 16807) % 2147483647; const j = s % (i + 1); [p[i], p[j]] = [p[j], p[i]]; }
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255]; }
+  const val = new Float32Array(256).map((_, i) => perm[(i * 7 + 3) & 255] / 255);
+  function noise(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const xf = x - xi, yf = y - yi, zf = z - zi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf);
+    const X0 = xi & 255, Y0 = yi & 255, Z0 = zi & 255;
+    const pa = perm[X0], pb = perm[X0 + 1];
+    const aa = perm[pa + Y0], ab = perm[pa + Y0 + 1], ba = perm[pb + Y0], bb = perm[pb + Y0 + 1];
+    const x00 = val[perm[aa + Z0]] + (val[perm[ba + Z0]] - val[perm[aa + Z0]]) * u;
+    const x10 = val[perm[ab + Z0]] + (val[perm[bb + Z0]] - val[perm[ab + Z0]]) * u;
+    const x01 = val[perm[aa + Z0 + 1]] + (val[perm[ba + Z0 + 1]] - val[perm[aa + Z0 + 1]]) * u;
+    const x11 = val[perm[ab + Z0 + 1]] + (val[perm[bb + Z0 + 1]] - val[perm[ab + Z0 + 1]]) * u;
+    const y0 = x00 + (x10 - x00) * v, y1 = x01 + (x11 - x01) * v;
+    return y0 + (y1 - y0) * w;
+  }
+  function fbm(x, y, z, oct) {
+    let a = 0.5, f = 1, s = 0, n = 0;
+    for (let i = 0; i < oct; i++) { s += a * noise(x * f, y * f, z * f); n += a; a *= 0.5; f *= 2.03; }
+    return s / n;
+  }
+
+  // ---- the fleet as real buttons: the label text lives in the DOM, the canvas draws only craft and lines
+  const fleetEl = hero.querySelector(".fleet"), card = document.getElementById("craft-card");
+  const live = document.getElementById("live"), logEl = document.getElementById("log");
+  const liveDefault = live.innerHTML;
+  const buttons = FLEET.map((c, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "craft" + (hot(c) ? " hot" : ""); b.tabIndex = i === HOME ? 0 : -1;
+    b.setAttribute("aria-label", c.aria);
+    b.setAttribute("aria-controls", "craft-card");
+    b.setAttribute("aria-expanded", "false");
+    if (c.note) { const t = document.createElement("span"); t.className = "tag"; t.textContent = c.note; b.append(t); }
+    const h = document.createElement("span"); h.className = "host"; h.textContent = c.label; b.append(h);
+    fleetEl.append(b);
+    return b;
+  });
+
+  // ---- geometry: the band between the copy and the console is reserved in CSS; the drawing fits into it
+  let W = 0, H = 0, DPR = 1, mob = false, G = null, N = 0, planetAt = -1;
+  let X, Y, KIND, BAY, FADE, CF, PH, U0, V0, GRD, TOP, LOW, HOR, AIR, TEX = null;
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const TURN = 90;                                   // seconds per revolution of the globe
+  const PLANET_DT = 0.2;                             // the planet sheet is redrawn five times a second
+  const CLEAR = 24;                                  // the log sits in a clearing this much larger than its text
+
+  const at = (r, th) => [G.cx + r * Math.sin(th), G.cy - r * Math.cos(th)];
+  const slot = (i) => G.t0 + ((i + 0.5) / NC) * (G.t1 - G.t0);
+  const limbY = (x) => G.cy - Math.sqrt(Math.max(0, G.R * G.R - (x - G.cx) * (x - G.cx)));
+
+  function fit() {
+    const sb = stage.getBoundingClientRect();
+    W = Math.round(sb.width); H = Math.round(sb.height);
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    mob = W < 700;
+    const narrow = W < 600;
+    const R0 = mob ? Math.max(760, W * 2.2) : Math.max(1500, W * 1.3);
+    const g = {
+      pitch: mob ? 5 : 6,
+      air: mob ? [3.5, 7, 11] : [4, 8.5, 13.5],
+      airR: mob ? [0.85, 0.6, 0.42] : [1, 0.72, 0.5],
+      airStep: mob ? 4 : 4.5,
+      fade: mob ? 40 : 80,
+      Ro: R0 + (mob ? 84 : 112),                     // the orbit; the planet's radius is fitted below
+      cx: mob ? W * 0.55 : W * 0.6,
+      mx: mob ? 14 : Math.max(36, W * 0.03),
+    };
+    // which craft carry a visible label: below 600 px only the three that need a course correction
+    buttons.forEach((b, i) => b.classList.toggle("bare", narrow && !hot(FLEET[i])));
+    g.bw = buttons.map((b) => b.offsetWidth);
+    g.bh = buttons.map((b) => b.offsetHeight);
+    const labelled = buttons.map((b) => !b.classList.contains("bare"));
+    const maxH = Math.max(...g.bh.filter((_, i) => labelled[i]));
+    const per = (W - 2 * g.mx) / NC;
+    // a lane count fits when every pair of labels that share a lane clears its neighbour by 8 px
+    const fits = (lanes) => g.bw.every((w, i) => i + lanes >= NC || (w + g.bw[i + lanes]) / 2 + 8 <= lanes * per);
+    g.lanes = narrow ? 1 : fits(1) ? 1 : fits(2) ? 2 : 3;
+    g.rows = mob || g.lanes > 1;
+    g.rowStep = maxH + 4;
+    // the orbit apex: below the copy, with room for the label rows above the arc
+    const above = g.rows ? 18 + g.lanes * g.rowStep : maxH + 30;
+    let apex = 0;
+    for (const el of hero.querySelectorAll("[data-clear], [data-clear-phone]")) {
+      for (const r of el.getClientRects()) if (r.width) apex = Math.max(apex, r.bottom - sb.top + above);
+    }
+    g.cy = apex + g.Ro;
+    [g.t0, g.t1] = [Math.asin(Math.max(-1, (g.mx - g.cx) / g.Ro)), Math.asin(Math.min(1, (W - g.mx - g.cx) / g.Ro))];
+    const cr = consoleEl.getBoundingClientRect();
+    const box = { l: cr.left - sb.left, t: cr.top - sb.top, r: cr.right - sb.left, b: cr.bottom - sb.top };
+    g.clear = { l: box.l - CLEAR, t: box.t - CLEAR, r: box.r + CLEAR, b: box.b + CLEAR };
+    // a sliver of dots between the clearing and the frame edge reads as a mistake: open the clearing to the edge
+    if (W - g.clear.r < 72) g.clear.r = W + 8;
+    if (g.clear.l < 72) g.clear.l = -8;
+    let h;
+    if (mob) {
+      // phone: the planet's edge 44 px above the clearing, the globe ends 40 px under it
+      h = g.clear.t - 44 - apex;
+    } else {
+      // desktop: the limb passes 48 px above the log's top-left corner
+      const dx = box.l - g.cx, dy = g.cy - (box.t - 48);
+      h = g.Ro - Math.sqrt(dy * dy + dx * dx);
+    }
+    g.h = Math.min(Math.max(h, mob ? 40 : 56), 240);
+    g.R = g.Ro - g.h;
+    g.bottom = mob ? Math.min(H, Math.round(g.clear.b + 40)) : H;
+    G = g;
+    for (const c of [cv, ov]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+    planetAt = -1;
+    if (mob) {
+      // phone: the mast stands on the log's top edge, straight under BUH-02, so the downlink falls through open sky
+      const sx = at(g.Ro, slot(HOME))[0];
+      g.station = [sx, box.t - 6];
+      g.dock = box.t - 6;
+    } else {
+      // desktop: the mast stands on the limb at the log's corner and runs down into the clearing's top edge
+      const sx = Math.min(Math.max(box.l + 26, 20), W - 20);
+      g.station = [sx, limbY(sx)];
+      g.dock = g.clear.t + 6;
+    }
+    g.shift = rowShifts(g, labelled);
+    build();
+    placeButtons(labelled);
+  }
+
+  // one sweep each way per label row: 10 px between neighbours, 4 px from the frame edges
+  function rowShifts(g, labelled) {
+    const shift = new Array(NC).fill(0);
+    if (!g.rows) return shift;
+    const GAP = 10, EDGE = 4;
+    for (let l = 0; l < g.lanes; l++) {
+      const row = [];
+      let k = 0;
+      for (let i = 0; i < NC; i++) {
+        if (!labelled[i]) continue;
+        if (k++ % g.lanes !== l) continue;
+        const x = at(g.Ro, slot(i))[0], half = g.bw[i] / 2;
+        row.push({ i, x, half, pos: Math.min(Math.max(x, half + EDGE), W - half - EDGE) });
+      }
+      row.sort((a, b) => a.x - b.x);
+      for (let j = 1; j < row.length; j++) row[j].pos = Math.max(row[j].pos, row[j - 1].pos + row[j - 1].half + GAP + row[j].half);
+      for (let j = row.length - 1; j >= 0; j--) {
+        row[j].pos = Math.min(row[j].pos, W - row[j].half - EDGE);
+        if (j < row.length - 1) row[j].pos = Math.min(row[j].pos, row[j + 1].pos - row[j + 1].half - GAP - row[j].half);
+      }
+      for (const r of row) { shift[r.i] = r.pos - r.x; g["lane" + r.i] = l; }
+    }
+    return shift;
+  }
+
+  // label boxes: where each button's bottom-centre sits, and where its leader starts
+  function labelBox(i) {
+    const g = G, [x, y] = at(g.Ro, slot(i)), c = FLEET[i];
+    if (g.rows) {
+      const l = g["lane" + i] || 0;
+      return { x: x + g.shift[i], bottom: g.cy - g.Ro - 14 - l * g.rowStep, cx: x, cy: y };
+    }
+    const lx = Math.min(Math.max(x, g.bw[i] / 2 + 4), W - g.bw[i] / 2 - 4);
+    return { x: lx, bottom: y - 10 - (c.tone === "strong" ? 14 : 0), cx: x, cy: y };
+  }
+
+  function placeButtons(labelled) {
+    buttons.forEach((b, i) => {
+      if (!labelled[i]) {
+        const [x, y] = at(G.Ro, slot(i));
+        b.style.transform = `translate(${Math.round(x - 22)}px, ${Math.round(y - 22)}px)`;
+        return;
+      }
+      const L = labelBox(i);
+      b.style.transform = `translate(${Math.round(L.x - G.bw[i] / 2)}px, ${Math.round(L.bottom - G.bh[i])}px)`;
+    });
+    fleetEl.classList.add("placed");
+    if (sel >= 0) placeCard(sel);
+  }
+
+  // ---- the dot screen: concentric rows that follow the limb, the way engraving follows a form
+  function ringSpan(r, pad) {
+    const g = G, c = (g.cy - (g.bottom + pad)) / r;
+    if (c > 1) return null;
+    const lim = c < -1 ? Math.PI : Math.acos(c);
+    const lo = Math.asin(Math.max(-1, Math.min(1, (-pad - g.cx) / r)));
+    const hi = Math.asin(Math.max(-1, Math.min(1, (W + pad - g.cx) / r)));
+    const a = Math.max(lo, -lim), b = Math.min(hi, lim);
+    return a < b ? [a, b] : null;
+  }
+
+  // the log's clearing: no dots inside, and around it the dots shrink to nothing over 32 px (a soft edge, no cut)
+  const SOFT = 32;
+  function clearing(x, y) {
+    const c = G.clear;
+    const dx = Math.max(c.l - x, 0, x - c.r), dy = Math.max(c.t - y, 0, y - c.b);
+    return dx === 0 && dy === 0 ? 0 : smooth(0, SOFT, Math.hypot(dx, dy));
+  }
+
+  // the dawn light is fixed; the globe turns under it, so every dot's lighting is computed once
+  const SUN = (() => { const v = [-1, -0.15, 0.22], l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; })();
+  const TMAX = 0.35;                                  // the darkest dots stop at about a third of ink
+
+  function build() {
+    const g = G, p = g.pitch, dr = p * 0.8660254, pts = [];
+    for (let j = 0; ; j++) {
+      const r = g.R - (j + 0.5) * dr;
+      if (r <= 0 || g.cy - r > g.bottom + p) break;
+      const sp = ringSpan(r, p); if (!sp) continue;
+      const step = p / r, off = j & 1 ? step / 2 : 0;
+      const i1 = Math.floor((sp[1] - off) / step);
+      for (let i = Math.ceil((sp[0] - off) / step); i <= i1; i++) {
+        const th = off + i * step;
+        const cf = clearing(g.cx + r * Math.sin(th), g.cy - r * Math.cos(th));
+        if (cf > 0) pts.push(th, r, (i & 3) + ((j & 3) << 2), 0, cf);
+      }
+    }
+    g.air.forEach((alt, a) => {
+      const r = g.R + alt, sp = ringSpan(r, p); if (!sp) return;
+      const step = g.airStep / r, i1 = Math.floor(sp[1] / step);
+      for (let i = Math.ceil(sp[0] / step); i <= i1; i++) {
+        const cf = clearing(g.cx + r * Math.sin(i * step), g.cy - r * Math.cos(i * step));
+        if (cf > 0) pts.push(i * step, r, 0, a + 1, cf);
+      }
+    });
+    N = pts.length / 5;
+    X = new Float32Array(N); Y = new Float32Array(N); KIND = new Uint8Array(N); BAY = new Float32Array(N);
+    FADE = new Float32Array(N); CF = new Float32Array(N); PH = new Float32Array(N); U0 = new Float32Array(N); V0 = new Float32Array(N);
+    GRD = new Float32Array(N); TOP = new Float32Array(N); LOW = new Float32Array(N); HOR = new Float32Array(N); AIR = new Float32Array(N);
+    const LAT = new Float32Array(N), LON = new Float32Array(N);
+    const [Lx, Ly, Lz] = SUN;
+    let la0 = 9, la1 = -9, lo0 = 9, lo1 = -9;
+    for (let k = 0; k < N; k++) {
+      const th = pts[k * 5], r = pts[k * 5 + 1], kind = pts[k * 5 + 3];
+      const x = g.cx + r * Math.sin(th), y = g.cy - r * Math.cos(th);
+      X[k] = x; Y[k] = y; KIND[k] = kind; BAY[k] = (BAYER[pts[k * 5 + 2]] + 0.5) / 16; CF[k] = pts[k * 5 + 4];
+      FADE[k] = smooth(g.bottom + 2, g.bottom - g.fade, y);
+      PH[k] = (((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) + 1) * TAU;
+      if (kind) {
+        const lit = smooth(-0.25, 0.3, Math.sin(th) * Lx - Math.cos(th) * Ly);
+        AIR[k] = g.airR[kind - 1] * (0.22 + 0.78 * lit) * FADE[k];
+        continue;
+      }
+      const dx = (x - g.cx) / g.R, dy = (y - g.cy) / g.R, nz = Math.sqrt(Math.max(0, 1 - dx * dx - dy * dy));
+      const d = dx * Lx + dy * Ly + nz * Lz;
+      GRD[k] = smooth(-0.05, 0.16, d); TOP[k] = smooth(-0.15, 0.03, d);
+      LOW[k] = 1 + 1.1 * (1 - smooth(0, 0.42, d));    // long shadows of a low sun
+      HOR[k] = 0.24 * smooth(9, 0, g.R - r);           // the horizon row, inked a touch firmer
+      // planet frame: the pole points off to the right, so the visible cap is mid-latitude and seamless
+      const lat = Math.asin(Math.max(-1, Math.min(1, dx))), lon = Math.atan2(nz, -dy);
+      LAT[k] = lat; LON[k] = lon;
+      if (lat < la0) la0 = lat; if (lat > la1) la1 = lat;
+      if (lon < lo0) lo0 = lon; if (lon > lo1) lo1 = lon;
+    }
+    texture(la0, la1, lo0, lo1);
+    const tx = TEX;
+    for (let k = 0; k < N; k++) {
+      if (KIND[k]) continue;
+      U0[k] = LON[k] / tx.dl;
+      V0[k] = Math.max(0, Math.min(tx.th - 1.001, (LAT[k] - tx.la0) / tx.dl));
+    }
+  }
+
+  // clouds, sea and land on the band of latitudes we can see, all the way round: the columns in view are made
+  // at once, the rest in idle time in the direction the globe turns; the globe starts turning when all are there
+  let texKey = "", texJob = 0;
+  function texture(la0, la1, lo0, lo1) {
+    const dl = mob ? 0.01 : 0.008;
+    const key = `${dl}|${la0.toFixed(3)}|${la1.toFixed(3)}`;
+    if (key !== texKey || !TEX) {
+      texKey = key;
+      const tw = Math.ceil(TAU / dl), th = Math.ceil((la1 - la0) / dl) + 3;
+      TEX = { td: new Float32Array(tw * th), tc: new Float32Array(tw * th), tw, th, la0: la0 - dl, dl, ready: new Uint8Array(tw), done: false, spinFrom: -1 };
+    }
+    const tx = TEX, tw = tx.tw;
+    if (tx.done) return;
+    const wrap = (i) => ((i % tw) + tw) % tw;
+    const c0 = Math.floor(lo0 / tx.dl) - 2, c1 = Math.ceil(lo1 / tx.dl) + 2;
+    for (let i = c0; i <= c1; i++) column(tx, wrap(i));
+    const queue = [];
+    for (let i = c1 + 1; i <= c1 + tw; i++) if (!tx.ready[wrap(i)]) queue.push(wrap(i));
+    let q = 0;
+    const job = ++texJob;
+    const step = (deadline) => {
+      if (job !== texJob || tx !== TEX) return;
+      const until = performance.now() + (deadline && deadline.timeRemaining ? Math.max(3, deadline.timeRemaining() - 2) : 8);
+      while (q < queue.length && performance.now() < until) column(tx, queue[q++]);
+      if (q < queue.length) idle(step); else tx.done = true;
+    };
+    idle(step);
+  }
+  function column(tx, i) {
+    if (tx.ready[i]) return;
+    const { tw, th, dl, td, tc } = tx, lon = (i / tw) * TAU, sL = Math.sin(lon), cL = Math.cos(lon);
+    for (let j = 0; j < th; j++) {
+      const lat = tx.la0 + j * dl, cl = Math.cos(lat), y = Math.sin(lat), x = cl * sL, z = cl * cL;
+      const land = smooth(0.5, 0.56, fbm(x * 3 + 11, y * 3 + 3, z * 3 + 7, 4));
+      const q = fbm(x * 4.5 + 5, y * 4.5 + 1, z * 4.5 + 9, 3);
+      const cloud = smooth(0.45, 0.63, fbm(x * 11 + q * 3.2, y * 11 + q * 2.4, z * 11 + q * 3.2, 4));
+      const k = j * tw + i;
+      tc[k] = cloud;
+      td[k] = (0.17 - 0.08 * land) * (1 - cloud) + 0.008 * cloud;   // ink in full sun: sea 17 %, land 9 %, cloud tops near paper
+    }
+    tx.ready[i] = 1;
+  }
+
+  function drawPlanet(ts) {
+    const g = G, p = g.pitch, tx = TEX, tw = tx.tw, td = tx.td, tc = tx.tc;
+    if (tx.done && tx.spinFrom < 0) tx.spinFrom = ts;
+    const du = tx.done ? ((ts - tx.spinFrom) / TURN) * (TAU / tx.dl) : 0;
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
+    pctx.clearRect(0, 0, cv.width, cv.height);
+    pctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const tmin = 0.034, rmin = p * Math.sqrt(tmin * 0.2757);
+    pctx.fillStyle = INK; pctx.beginPath();
+    for (let k = 0; k < N; k++) {
+      let r;
+      if (KIND[k]) {
+        r = AIR[k] * (0.8 + 0.2 * Math.sin(ts * 0.7 + PH[k]));
+        if (r < 0.3) continue;
+      } else {
+        let u = U0[k] + du; u -= Math.floor(u / tw) * tw;
+        const v = V0[k], i0 = u | 0, i1 = i0 + 1 === tw ? 0 : i0 + 1, j0 = v | 0, fu = u - i0, fv = v - j0, a = j0 * tw, b = a + tw;
+        const s = (td[a + i0] * (1 - fu) + td[a + i1] * fu) * (1 - fv) + (td[b + i0] * (1 - fu) + td[b + i1] * fu) * fv;
+        const cl = (tc[a + i0] * (1 - fu) + tc[a + i1] * fu) * (1 - fv) + (tc[b + i0] * (1 - fu) + tc[b + i1] * fu) * fv;
+        const night = 0.46 - 0.06 * cl, lit = GRD[k] > TOP[k] * cl ? GRD[k] : TOP[k] * cl;
+        let T = night + (s * LOW[k] - night) * lit;
+        if (T < HOR[k]) T = HOR[k];
+        T *= FADE[k];
+        if (T <= 0.004) continue;
+        if (T < tmin) { if (T / tmin <= BAY[k]) continue; r = rmin; }
+        else r = p * Math.sqrt(Math.min(T, TMAX) * 0.2757);
+      }
+      r *= CF[k];
+      if (r < 0.25) continue;
+      pctx.moveTo(X[k] + r, Y[k]); pctx.arc(X[k], Y[k], r, 0, TAU);
+    }
+    pctx.fill();
+  }
+
+  // ---- craft, leaders, the ground station and the telemetry frames
+  function drawCraft(c, x, y, chosen) {
+    const s = (mob ? 0.86 : 1) * (chosen ? 1.3 : 1);
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+    if (c.kind === "printer") {
+      ctx.fillStyle = INK; ctx.beginPath(); ctx.moveTo(0, -4.6); ctx.lineTo(4.6, 0); ctx.lineTo(0, 4.6); ctx.lineTo(-4.6, 0); ctx.closePath(); ctx.fill();
+      ctx.restore(); return;
+    }
+    const body = hot(c) ? ORANGE : INK, wings = c.tone === "strong" ? ORANGE : INK;
+    ctx.fillStyle = wings; ctx.fillRect(-13, -1.6, 8, 3.2); ctx.fillRect(5, -1.6, 8, 3.2);
+    ctx.fillRect(-0.6, -7, 1.2, 4);
+    if (c.tone === "early") {
+      ctx.fillStyle = INK; ctx.fillRect(-3, -3, 3, 6);
+      ctx.lineWidth = 1.2; ctx.strokeStyle = INK; ctx.strokeRect(-2.4, -2.4, 4.8, 4.8);
+    } else { ctx.fillStyle = body; ctx.fillRect(-3, -3, 6, 6); }
+    ctx.restore();
+  }
+
+  function drawBurn(c, th, x, y) {
+    // the sagging trail and the burn that brings the craft back up
+    const g = G;
+    ctx.save(); ctx.strokeStyle = ORANGE; ctx.lineWidth = 1.3;
+    if (c.sag) {
+      ctx.setLineDash([3, 3]); ctx.beginPath();
+      for (let s = 0; s <= 1.0001; s += 0.1) {
+        const a = th - (1 - s) * (46 / g.Ro), r = g.Ro + c.sag * s * s, [px, py] = at(r, a);
+        s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.translate(x, y); ctx.rotate(th);
+    ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, -15); ctx.stroke();
+    ctx.fillStyle = ORANGE; ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-3.8, -13.5); ctx.lineTo(3.8, -13.5); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStation() {
+    const g = G, [sx, sy] = g.station;
+    ctx.save(); ctx.fillStyle = INK; ctx.strokeStyle = INK; ctx.lineWidth = 1;
+    // a short mast on the limb and a hairline down to the console
+    ctx.fillRect(sx - 0.75, sy - 9, 1.5, 9);
+    ctx.beginPath(); ctx.moveTo(sx - 4, sy - 9); ctx.lineTo(sx + 4, sy - 9); ctx.stroke();
+    if (g.dock > sy + 2) { ctx.globalAlpha = 0.5; ctx.fillRect(sx - 0.5, sy, 1, g.dock - sy); }
+    ctx.restore();
+  }
+
+  const FRAME_EVERY = 4, FLIGHT = 1.6, TRAIL = 0.9, FIRST = 0.8;
+  const SEQ = FLEET.map((c, i) => [c.seq, i]).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
+  const ORDER = [];
+  for (let n = 0; n < SEQ.length * 3; n++) ORDER.push(n % 3 === 0 ? HOME : SEQ[(n * 5) % SEQ.length]);
+  const sender = (n) => ORDER[n % ORDER.length];
+
+  function drawFrames(tf) {
+    const g = G, [sx, sy] = g.station;
+    const n1 = Math.floor((tf - FIRST) / FRAME_EVERY);
+    for (let n = Math.max(0, n1 - 1); n <= n1; n++) {
+      const t = tf - FIRST - n * FRAME_EVERY;
+      if (t < 0 || t > FLIGHT + TRAIL) continue;
+      const i = sender(n), c = FLEET[i], [x0, y0] = at(g.Ro, slot(i));
+      const k = Math.min(1, t / FLIGHT), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      const x = x0 + (sx - x0) * e, y = y0 + 6 + (sy - 9 - y0 - 6) * e;
+      const fade = t > FLIGHT ? 1 - (t - FLIGHT) / TRAIL : 1;
+      const col = hot(c) ? ORANGE : INK;
+      ctx.save(); ctx.globalAlpha = 0.55 * fade; ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, y0 + 6); ctx.lineTo(x, y); ctx.stroke(); ctx.restore();
+      if (t <= FLIGHT) { ctx.fillStyle = col; ctx.fillRect(x - 3, y - 3, 6, 6); }
+    }
+  }
+
+  function drawFleet(tf) {
+    const g = G;
+    ctx.lineWidth = 1; ctx.strokeStyle = INK; ctx.globalAlpha = 0.5;
+    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.Ro, -Math.PI / 2 + g.t0 - 0.5, -Math.PI / 2 + g.t1 + 0.5); ctx.stroke();
+    ctx.globalAlpha = 1;
+    drawStation();
+    // leaders from a craft to its label when the label sits in a row above the arc
+    if (g.rows) {
+      ctx.save(); ctx.strokeStyle = INK; ctx.globalAlpha = 0.45; ctx.lineWidth = 1;
+      for (let i = 0; i < NC; i++) {
+        if (buttons[i].classList.contains("bare")) continue;
+        const L = labelBox(i), half = g.bw[i] / 2;
+        const tx = Math.min(Math.max(L.cx, L.x - half + 6), L.x + half - 6);
+        ctx.beginPath(); ctx.moveTo(L.cx, L.cy - 8 - (FLEET[i].tone === "strong" ? 12 : 0)); ctx.lineTo(tx, L.bottom); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (tf !== null) drawFrames(tf);
+    for (let i = 0; i < NC; i++) {
+      const c = FLEET[i], th = slot(i);
+      const bob = tf === null ? 0 : 0.8 * Math.sin(tf * 0.9 + i * 1.7);   // station-keeping: under a pixel
+      const [x, y] = at(g.Ro + (c.sag || 0), th);
+      if (c.tone === "strong") drawBurn(c, th, x, y + bob);
+      drawCraft(c, x, y + bob, i === sel);
+    }
+  }
+
+  function draw(ts, tf) {
+    if (!forced.matches && (planetAt < 0 || Math.abs(ts - planetAt) >= PLANET_DT)) { drawPlanet(ts); planetAt = ts; }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    drawFleet(tf);
+  }
+
+  // ---- the ground console: a line prints when a frame lands, with the same host and time
+  const clock = (d) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const log = [];
+  function renderLog() {
+    logEl.replaceChildren(...log.map((e) => {
+      const li = document.createElement("li"), h = document.createElement("span");
+      h.textContent = FLEET[e.i].label; if (hot(FLEET[e.i])) h.className = "hot";
+      const k = document.createElement("span"); k.className = "kadr"; k.textContent = "кадр ";
+      li.append(k, "принят: ", h, " · " + clock(e.when));
+      return li;
+    }));
+  }
+  function seedLog() {
+    log.length = 0;
+    for (let n = 1; n <= 3; n++) log.push({ i: sender(ORDER.length - n), when: new Date(Date.now() - n * FRAME_EVERY * 1000) });
+    renderLog();
+  }
+  let landed = -1;
+  function arrivals(tf) {
+    const n = Math.floor((tf - FIRST - FLIGHT) / FRAME_EVERY);
+    if (n < 0 || n <= landed) return;
+    landed = n;
+    log.unshift({ i: sender(n), when: new Date() }); log.length = Math.min(log.length, 3); renderLog();
+  }
+
+  // ---- interaction: one tab stop, arrows inside, a compact card with the real verdict.
+  // A hover card waits 300 ms before it closes, so the pointer can travel into it (WCAG 1.4.13).
+  let sel = -1, pinned = false, closeT = 0;
+  const cancelClose = () => { clearTimeout(closeT); closeT = 0; };
+  const closeSoon = () => {
+    cancelClose();
+    closeT = setTimeout(() => { if (!pinned && !card.matches(":hover") && !buttons.includes(document.activeElement) && !card.contains(document.activeElement)) deselect(); }, 300);
+  };
+  buttons.forEach((b, i) => {
+    b.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") { cancelClose(); select(i); } });
+    b.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && !pinned && document.activeElement !== b) closeSoon(); });
+    b.addEventListener("focus", () => { buttons.forEach((o, j) => { o.tabIndex = j === i ? 0 : -1; }); cancelClose(); select(i); });
+    b.addEventListener("blur", (e) => { if (!pinned && !card.contains(e.relatedTarget) && !buttons.includes(e.relatedTarget) && !b.matches(":hover")) deselect(); });
+    b.addEventListener("click", () => { if (pinned && sel === i) { pinned = false; deselect(); } else { pinned = true; select(i); } });
+  });
+  card.addEventListener("pointerenter", cancelClose);
+  card.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && !pinned) closeSoon(); });
+  fleetEl.addEventListener("keydown", (e) => {
+    const k = buttons.indexOf(document.activeElement); if (k < 0) return;
+    const keys = { ArrowRight: k + 1, ArrowDown: k + 1, ArrowLeft: k - 1, ArrowUp: k - 1, Home: 0, End: NC - 1 };
+    if (!(e.key in keys)) return;
+    e.preventDefault(); buttons[(keys[e.key] + NC) % NC].focus();
+  });
+  card.addEventListener("focusout", (e) => { if (!pinned && !card.contains(e.relatedTarget) && !buttons.includes(e.relatedTarget)) deselect(); });
+  document.addEventListener("pointerdown", (e) => { if (sel >= 0 && !card.contains(e.target) && !buttons.some((b) => b.contains(e.target))) { pinned = false; deselect(); } });
+  // Escape closes the card; focus that was inside the card goes back to its craft
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || sel < 0) return;
+    const i = sel;
+    pinned = false;
+    if (card.contains(document.activeElement)) buttons[i].focus();
+    deselect();
+  });
+
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
+  function fillCard(c) {
+    const host = el("p", "c-host" + (hot(c) ? " hot" : ""), c.name);
+    host.id = "craft-card-host";
+    const parts = [host, el("p", "c-state", c.state)];
+    if (c.dro) { const d = el("p", "c-dro"); c.dro.forEach(([k, v], j) => { if (j) d.append(" · "); d.append(k + " ", el("b", "", v)); }); parts.push(d); }
+    c.lines.forEach((line, j) => parts.push(el("p", "c-act" + (j === 0 && c.dateHot ? " hot" : ""), line)));
+    const a = el("a", "", c.linkText); a.href = c.href;
+    const p = el("p", "c-link"); p.append(a); parts.push(p);
+    card.replaceChildren(...parts);
+  }
+  function placeCard(i) {
+    const g = G, [x, y] = at(g.Ro, slot(i)), cw = card.offsetWidth, ch = card.offsetHeight;
+    let left, top;
+    if (mob) { left = 16; top = Math.min(y + 24, H - ch - 10); }
+    else {
+      left = Math.min(Math.max(x - 36, 16), W - cw - 16);
+      top = y + 24 + ch > H - 12 ? y - 80 - ch : y + 24;
+    }
+    card.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+  }
+  function select(i) {
+    if (sel === i) return;
+    sel = i;
+    const c = FLEET[i];
+    fillCard(c); card.hidden = false; placeCard(i);
+    buttons.forEach((b, j) => b.setAttribute("aria-expanded", j === i ? "true" : "false"));
+    const b = el("b", hot(c) ? "hot" : "", c.label);
+    live.replaceChildren(b, " · " + c.live);
+    redrawIfStill();
+  }
+  function deselect() {
+    cancelClose();
+    if (sel < 0) return;
+    sel = -1; card.hidden = true;
+    buttons.forEach((b) => b.setAttribute("aria-expanded", "false"));
+    live.innerHTML = liveDefault;
+    redrawIfStill();
+  }
+
+  // ---- run: capped at 30 fps, paused off-screen and in hidden tabs; reduced motion gets one still frame
+  const STILL = 0;
+  let raf = 0, last = 0, visible = true, t0 = 0, tPaused = 0;
+  function now() { return (performance.now() - t0) / 1000; }
+  function tick(ms) {
+    raf = requestAnimationFrame(tick);
+    if (ms - last < 33) return;
+    last = ms;
+    const t = now();
+    arrivals(t);
+    draw(t, t);
+  }
+  function stop() { if (raf) { cancelAnimationFrame(raf); raf = 0; tPaused = now(); } }
+  function still() { planetAt = -1; draw(STILL, null); }
+  function redrawIfStill() { if (!raf && G) (reduce.matches ? still() : draw(tPaused, tPaused)); }
+  function go() {
+    if (!G) return;
+    if (reduce.matches) { stop(); still(); return; }
+    if (!raf && visible && !document.hidden) {
+      t0 = performance.now() - tPaused * 1000;
+      raf = requestAnimationFrame(tick);
+    }
+  }
+  function refit() {
+    const b = stage.getBoundingClientRect();
+    if (Math.round(b.width) === W && Math.round(b.height) === H) return;
+    fit();
+    if (!raf) redrawIfStill();
+  }
+  function start() {
+    palette();
+    fit();
+    seedLog();
+    reduce.matches ? still() : draw(0, 0);
+    go();
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; visible ? go() : stop(); }).observe(hero);
+    document.addEventListener("visibilitychange", () => (document.hidden ? stop() : go()));
+    reduce.addEventListener("change", () => { stop(); go(); });
+    forced.addEventListener("change", () => { palette(); planetAt = -1; redrawIfStill(); });
+    let pend = 0;
+    new ResizeObserver(() => { clearTimeout(pend); pend = setTimeout(refit, 140); }).observe(stage);
+  }
+  // start after the first paint: the page's own layout is done by then, so the geometry reads below are cheap
+  (document.fonts && document.fonts.load ? Promise.all([
+    document.fonts.load('500 13px "Martian Mono"', "BUH-02 KADRY-01"),
+    document.fonts.load('650 13px "Martian Mono"', "BUH-02"),
+    document.fonts.load("650 13px Commissioner", "до 7 дней"),
+  ]).catch(() => {}) : Promise.resolve()).then(() => requestAnimationFrame(() => setTimeout(start, 0)));
+})();
+
+</script>
+</body>
+</html>

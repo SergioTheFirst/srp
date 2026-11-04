@@ -1,6 +1,14 @@
 Шрифты витрины j-space.ru распространяются по лицензии SIL Open Font License 1.1.
 Файлы — подмножества (кириллица, латиница) из сборок Fontsource; авторские права ниже.
 
+=== Onest ===
+Copyright 2021 The Onest Project Authors (https://github.com/simpals/onest)
+Licensed under the SIL Open Font License, Version 1.1 (full text below).
+
+=== JetBrains Mono ===
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Licensed under the SIL Open Font License, Version 1.1 (full text below).
+
 === Commissioner ===
 Copyright 2019 The Commissioner Project Authors (github.com/kosbarts/Commissioner)
 

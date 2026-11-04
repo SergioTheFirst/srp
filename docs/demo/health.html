@@ -596,7 +596,7 @@ window.srpEsc = function (s) {
 </script>
 </head>
 <body>
-<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-10-18 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
+<div style="background:#0b1828;border-bottom:1px solid #1d3250;color:#7aa8c4;font:12px/1.5 'JetBrains Mono',Consolas,monospace;padding:8px 16px;text-align:center">Снимок экранов от 2026-11-05 — нажимать здесь нечего. <a style="color:#0ea5e9" href="https://srp-private.vercel.app/">Открыть рабочий стенд</a> · <a style="color:#0ea5e9" href="./../index.html">на главную j-space.ru</a> · <a style="color:#0ea5e9" href="./../privacy.html">политика обработки данных</a></div>
 <script id="mirror-data" type="application/json">{}</script>
 <script>
 (function () {
@@ -650,7 +650,7 @@ window.srpEsc = function (s) {
 <div class="section-label">Здоровье флота — обзор</div>
 <div class="cards" style="margin-bottom:16px">
   <div class="stat"><div class="n bad">1</div><div class="l">Критичные (≤7д)</div></div>
-  <div class="stat"><div class="n warn">1</div><div class="l">Ухудшились за неделю</div></div>
+  <div class="stat"><div class="n warn">2</div><div class="l">Ухудшились за неделю</div></div>
   <div class="stat"><div class="n warn">0</div><div class="l">Видимость &lt;40%</div></div>
   <div class="stat"><div class="n na">0</div><div class="l">Данные устарели</div></div>
 </div>
@@ -690,8 +690,15 @@ window.srpEsc = function (s) {
     <tr>
       <td><a href="./device/demo-prod-01.html">PROD-01</a></td>
       <td>ранняя деградация → компенсация</td>
-      <td>траектория ресурса</td>
-      <td class="muted">ресурс близок к исчерпанию — планировать обслуживание</td>
+      <td>накопитель</td>
+      <td class="muted">проверить накопитель — повышенные показатели без подтверждённых повреждений</td>
+    </tr>
+  
+    <tr>
+      <td><a href="./device/demo-sklad-01.html">SKLAD-01</a></td>
+      <td>компенсация → ускоренная деградация</td>
+      <td>операционная система</td>
+      <td class="muted">причина не установлена — собрать дампы, проверить драйверы, обновления, память</td>
     </tr>
   
   </tbody>
@@ -727,9 +734,9 @@ window.srpEsc = function (s) {
       <td>Atlas H336</td>
       <td>1</td>
       <td>0</td>
-      <td>24</td>
+      <td>32</td>
       <td>75</td>
-      <td>35</td>
+      <td>42</td>
     </tr>
   
     <tr>
@@ -746,7 +753,7 @@ window.srpEsc = function (s) {
 
 
 
-<script id="health-data" type="application/json">{"heatmap": {"cols": ["\u0421\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435", "\u041f\u043e\u0432\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f (D)", "\u0423\u0441\u0442\u043e\u0439\u0447\u0438\u0432\u043e\u0441\u0442\u044c (R)", "\u0412\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c (O)", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0434\u0438\u0441\u043a\u0430 (SMART)", "\u0421\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u041e\u0421", "\u0417\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430 / \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u043d\u0438\u0435 Windows", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0441\u0435\u0442\u0438", "\u0420\u0438\u0441\u043a \u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u0438"], "device_ids": ["demo-buh-02", "demo-kadry-01", "demo-prod-01", "demo-sekr-01", "demo-sklad-01", "demo-old-pc", "demo-buh-01", "demo-dir-nb", "demo-it-01", "demo-prod-02"], "dominant_labels": ["\u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c", "\u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430", "\u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u044f \u0440\u0435\u0441\u0443\u0440\u0441\u0430", "\u0441\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u0441\u0435\u0442\u044c"], "hostnames": ["BUH-02", "KADRY-01", "PROD-01", "SEKR-01", "SKLAD-01", "STARYI-PC", "BUH-01", "DIR-NB", "IT-01", "PROD-02"], "state_labels": ["\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432"], "z": [[2, 2, 2, 0, 2, 3, 1, 0, 0, 0], [2, 0, 2, 0, 0, 3, 0, 2, 0, 2], [1, 1, 1, 0, 1, 3, 0, 0, 0, 1], [1, 0, 1, 0, 0, 2, 0, 0, 0, 0], [1, 1, 0, 0, 0, 3, 2, 0, 0, 0], [1, 1, 0, 0, 0, 0, 1, 1, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 1, 0]]}, "state_dist": [{"band": "bad", "count": 1, "label": "\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "state": "h4"}, {"band": "bad", "count": 1, "label": "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h3"}, {"band": "watch", "count": 1, "label": "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "state": "h2"}, {"band": "watch", "count": 3, "label": "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h1"}, {"band": "good", "count": 4, "label": "\u0437\u0434\u043e\u0440\u043e\u0432", "state": "h0"}, {"band": "unknown", "count": 0, "label": "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438", "state": "unknown"}]}</script>
+<script id="health-data" type="application/json">{"heatmap": {"cols": ["\u0421\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435", "\u041f\u043e\u0432\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f (D)", "\u0423\u0441\u0442\u043e\u0439\u0447\u0438\u0432\u043e\u0441\u0442\u044c (R)", "\u0412\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c (O)", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0434\u0438\u0441\u043a\u0430 (SMART)", "\u0421\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u041e\u0421", "\u0417\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430 / \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u043d\u0438\u0435 Windows", "\u0417\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u0441\u0435\u0442\u0438", "\u0420\u0438\u0441\u043a \u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u0438"], "device_ids": ["demo-buh-02", "demo-sklad-01", "demo-kadry-01", "demo-prod-01", "demo-sekr-01", "demo-old-pc", "demo-dir-nb", "demo-it-01", "demo-buh-01", "demo-prod-02"], "dominant_labels": ["\u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0434\u0438\u0441\u043a\u0430", "\u043d\u0430\u043a\u043e\u043f\u0438\u0442\u0435\u043b\u044c", "\u0441\u0442\u0430\u0440\u0435\u043d\u0438\u0435 \u041f\u041e", "\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043e", "\u0441\u0435\u0442\u044c"], "hostnames": ["BUH-02", "SKLAD-01", "KADRY-01", "PROD-01", "SEKR-01", "STARYI-PC", "DIR-NB", "IT-01", "BUH-01", "PROD-02"], "older_counts": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "state_labels": ["\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u0437\u0434\u043e\u0440\u043e\u0432", "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438", "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438"], "z": [[2, 2, 2, 0, 2, 3, 1, 0, 0, 0], [1, 1, 0, 0, 0, 0, 2, 0, 0, 0], [2, 0, 2, 0, 0, 0, 0, 2, 0, 2], [1, 1, 1, 0, 1, 0, 0, 0, 0, 1], [1, 0, 1, 0, 0, 2, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 1, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0, 1, 0]]}, "state_dist": [{"band": "bad", "count": 1, "label": "\u043f\u0440\u0435\u0434\u043e\u0442\u043a\u0430\u0437", "state": "h4"}, {"band": "watch", "count": 1, "label": "\u0443\u0441\u043a\u043e\u0440\u0435\u043d\u043d\u0430\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h3"}, {"band": "bad", "count": 2, "label": "\u043a\u043e\u043c\u043f\u0435\u043d\u0441\u0430\u0446\u0438\u044f", "state": "h2"}, {"band": "watch", "count": 1, "label": "\u0440\u0430\u043d\u043d\u044f\u044f \u0434\u0435\u0433\u0440\u0430\u0434\u0430\u0446\u0438\u044f", "state": "h1"}, {"band": "good", "count": 3, "label": "\u0437\u0434\u043e\u0440\u043e\u0432", "state": "h0"}, {"band": "unknown", "count": 2, "label": "\u043d\u0435\u0442 \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u0438", "state": "unknown"}]}</script>
 <script>
   /* Контрастный hoverlabel для всех Plotly-графиков печати (обе/все темы).
      Читает текущие CSS-токены темы -- при переключении темы возвращает верные
@@ -770,7 +777,7 @@ window.srpEsc = function (s) {
   var elHeat = document.getElementById("chart-heatmap");
   if (!elDonut || !elHeat) return;
   var data = JSON.parse(document.getElementById("health-data").textContent || "{}");
-  var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: []};
+  var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: [], older_counts: []};
   var sd = data.state_dist || [];
   var BAND_WORDS = ["хорошо", "наблюдение", "плохо", "неизвестно"];
 
@@ -819,7 +826,9 @@ window.srpEsc = function (s) {
       var host = window.srpEsc(hm.hostnames[i]);
       return row.map(function (val, j) {
         if (j === 0) {
-          return host + ": " + hm.state_labels[i] + " · доминирующий фактор: " + hm.dominant_labels[i];
+          var older = (hm.older_counts || [])[i] || 0;
+          return host + ": " + hm.state_labels[i] + " · доминирующий фактор: " + hm.dominant_labels[i]
+            + (older > 0 ? " · ещё старых записей: " + Number(older) + " (клик → карточка)" : "");
         }
         return host + ": " + hm.cols[j] + " = " + BAND_WORDS[val];
       });
