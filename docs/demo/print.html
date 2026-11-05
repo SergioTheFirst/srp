@@ -707,7 +707,7 @@ window.srpEsc = function (s) {
     <button id="theme-toggle" onclick="(function(){
       var h=document.documentElement;
       var themes=['','meta','vercel'];
-      var labels={'':'Meta','meta':'Vercel','vercel':'Тёмный'};
+      var labels={'':'Айс','meta':'Vercel','vercel':'Тёмный'};
       var cur=h.getAttribute('data-theme')||'';
       var next=themes[(themes.indexOf(cur)+1)%themes.length];
       h.setAttribute('data-theme',next);
@@ -1248,9 +1248,9 @@ window.srpEsc = function (s) {
 <script>
 (function () {
   var btn = document.getElementById("theme-toggle");
-  var labels = {'': 'Meta', 'meta': 'Vercel', 'vercel': 'Тёмный'};
+  var labels = {'': 'Айс', 'meta': 'Vercel', 'vercel': 'Тёмный'};
   var cur = document.documentElement.getAttribute('data-theme') || '';
-  btn.textContent = labels[cur] || 'Meta';
+  btn.textContent = labels[cur] || 'Айс';
 })();
 </script>
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "11d5e6f0db134a9ca8c002759822bfbb"}'></script>
