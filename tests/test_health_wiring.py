@@ -13,6 +13,7 @@ file covers only the wiring T6.2 adds:
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -156,6 +157,165 @@ def test_ratchet_disk_replacement_permits_full_reset(client) -> None:
     after = _latest_health(HEALTHY_DEVICE)
     assert after["state"] == "h0"  # full reset to the naive state, not held/capped
     assert _RANK[after["state"]] < _RANK["h2"]  # strictly more than one step from h3
+
+
+def test_time_release_uses_pipeline_clock(client, monkeypatch) -> None:
+    """health never reads the clock: the observed-time release runs on the clock
+    pipeline passes (its module-level ``datetime``, which the harness patches too)."""
+    fixed = datetime.now(timezone.utc).replace(microsecond=0)
+
+    class _FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.astimezone(tz)
+
+    monkeypatch.setattr(pipeline, "datetime", _FixedClock)
+    _ingest(client, HEALTHY_DEVICE)
+    held = {
+        "state": "h3",
+        "below_h": 46.0,
+        "below_seen_at": (fixed - timedelta(hours=4)).isoformat(),
+        "worst_disk": "Samsung SSD 980",
+    }
+    db.store_scores(HEALTHY_DEVICE, _iso(fixed), {"risk": {"health": held}})
+    pipeline.recompute_scores(HEALTHY_DEVICE)
+    after = _latest_health(HEALTHY_DEVICE)
+    assert after["state"] == "h2"  # 46 h + 4 h observed >= 48 h -> exactly one level down
+    assert after["below_h"] == 0.0
+    assert after["below_seen_at"] == fixed.isoformat()
+
+
+def test_pipeline_persists_new_health_keys(client) -> None:
+    _ingest(client, HEALTHY_DEVICE)
+    h = _latest_health(HEALTHY_DEVICE)
+    keys = ("horizon_kind", "below_h", "below_seen_at", "worst_disk_id", "disk_ids")
+    for key in (*keys, "attr_disk_ids", "had_disk"):
+        assert key in h, f"health blob missing {key!r}"
+    # the visible disk's identity is stored so the next cycle can tell a swap from a gap
+    assert h["worst_disk_id"] and h["disk_ids"]
+    assert h["had_disk"] is True  # a later SMART-less cycle still knows a disk existed
+    # review R2: the Get-PhysicalDisk serial hashes ride in the storage lineage, so a disk
+    # dropped from the SMART rows while still installed reads blind, not vanished
+    storage = db.get_score_series(HEALTHY_DEVICE, limit=1)[0]["risk"]["score100"]["storage_risk"]
+    assert storage["source_lineage"]["inventory_disk_ids"] == ["feedface00001111"]
+
+
+# --------------------------------------------------------------------------- #
+# 0.3.4 -- removable (USB/1394) disks never feed the verdict
+# --------------------------------------------------------------------------- #
+_USB_HASH, _USB_NAME = "usbstick00000001", "Kingston DataTraveler 3.0"
+_USB_ROW = {
+    "disk": _USB_NAME,
+    "bus_type": "USB",
+    "serial_hash": _USB_HASH,
+    "smart_predict_fail": True,
+    "reallocated_sectors": 500,
+    "wear_pct": 90.0,
+}
+
+
+def _with_usb(usb_first: bool, internal: bool = True):
+    """healthy() plus a dying USB stick in the inventory and SMART rows, first or last."""
+
+    def order(usb: dict, fixed: list) -> list:
+        fixed = fixed if internal else []
+        return [usb, *fixed] if usb_first else [*fixed, usb]
+
+    def source(msg: str) -> dict:
+        p = healthy(msg)
+        if msg == "inventory":
+            usb = {"model": _USB_NAME, "serial_hash": _USB_HASH, "bus_type": "USB"}
+            p["disks"] = order(usb, p["disks"])
+        elif msg == "historical":
+            nvme = {**p["storage"][0], "serial_hash": "feedface00001111", "bus_type": "NVMe"}
+            p["storage"] = order(_USB_ROW, [nvme])
+        return p
+
+    return source
+
+
+@pytest.mark.parametrize("usb_first", [True, False])
+def test_usb_disk_never_scores_next_to_a_clean_internal_disk(client, usb_first) -> None:
+    """USB listed first was the disk the gate and the day-1 [:1] aggregates read; listed
+    last it still won the storage engine's worst-disk ranking."""
+    _ingest(client, "dev-usb", _with_usb(usb_first))
+    risk = db.get_score_series("dev-usb", limit=1)[0]["risk"]
+    storage = risk["score100"]["storage_risk"]
+    lineage = storage["source_lineage"]
+    assert storage["value"] == 0.0
+    assert lineage["worst_disk_id"] == "feedface00001111"
+    ids = {*lineage["disk_ids"], *lineage["inventory_disk_ids"], *risk["health"]["disk_ids"]}
+    assert not ids & {_USB_HASH, _USB_NAME}
+    assert "износ ssd 90%" not in json.dumps(risk, ensure_ascii=False).lower()
+    assert risk["health"]["state"] == "h0"
+
+
+def test_usb_only_device_storage_axis_is_unknown_not_healthy(client) -> None:
+    _ingest(client, "dev-usbonly", _with_usb(True, internal=False))
+    storage = db.get_score_series("dev-usbonly", limit=1)[0]["risk"]["score100"]["storage_risk"]
+    assert storage["value"] is None and storage["band"] == "unknown"
+    assert any("нет данных SMART" in m for m in storage["missing_evidence"])
+
+
+def test_hold_is_not_blind_when_the_previous_worst_disk_was_a_usb_stick(client) -> None:
+    """A verdict stored before 0.3.4 names the USB stick as its worst disk and inventory
+    still lists the stick: counting it as 'listed but unscored' (blind) would freeze
+    the release for as long as the stick stays plugged in."""
+    _ingest(client, "dev-usbhold", _with_usb(True))
+    prev = {
+        "state": "h3",
+        "worst_disk_id": _USB_HASH,
+        "disk_ids": sorted({_USB_HASH, _USB_NAME, "feedface00001111", "Samsung SSD 980"}),
+        "attr_disk_ids": [],
+        "had_disk": True,
+        "below_h": 46.0,
+        "below_seen_at": _iso(_now() - timedelta(hours=4)),
+    }
+    db.store_scores("dev-usbhold", _iso(_now()), {"risk": {"health": prev}})
+    pipeline.recompute_scores("dev-usbhold")
+    after = _latest_health("dev-usbhold")
+    assert "SMART недоступен" not in after["blind_spots"]
+    assert after["state"] == "h2"  # the release clock ran: 46 h + 4 h >= 48 h, one level down
+
+
+def _usb_smart_only():
+    """The internal disk is listed (inventory) but gives no SMART row (RAID/VM); only the
+    USB stick does -- before 0.3.4 the stick was scored and latched the verdict."""
+
+    def source(msg: str) -> dict:
+        p = healthy(msg)
+        if msg == "inventory":
+            usb = {"model": _USB_NAME, "serial_hash": _USB_HASH, "bus_type": "USB"}
+            p["disks"] = [usb, *p["disks"]]
+        elif msg == "historical":
+            p["storage"] = [_USB_ROW]
+        return p
+
+    return source
+
+
+def test_hold_latched_on_a_usb_disk_releases_when_no_fixed_disk_is_scored(client) -> None:
+    """Ревью 0.3.4: no fixed SMART row -> axis absent -> «SMART lost» kept the USB-era h3
+    frozen forever. The old worst disk is missing from a non-empty FIXED inventory: that is
+    a vanished disk, not lost SMART -- the release clock runs."""
+    _ingest(client, "dev-usblatch", _usb_smart_only())
+    prev = {
+        "state": "h3",
+        "worst_disk_id": _USB_HASH,
+        "disk_ids": [_USB_HASH],
+        "attr_disk_ids": [],
+        "had_disk": True,
+        "below_h": 46.0,
+        "below_seen_at": _iso(_now() - timedelta(hours=4)),
+    }
+    db.store_scores("dev-usblatch", _iso(_now()), {"risk": {"health": prev}})
+    pipeline.recompute_scores("dev-usblatch")
+    after = _latest_health("dev-usblatch")
+    _ingest(client, "dev-usbfresh", _usb_smart_only())  # the same PC without the USB-era verdict
+    fresh = _latest_health("dev-usbfresh")
+    assert after["state"] != "h3"  # was frozen at h3 forever
+    # converges to what the same data gives a PC that never latched on the stick
+    assert (after["state"], after["blind_spots"]) == (fresh["state"], fresh["blind_spots"])
 
 
 # --------------------------------------------------------------------------- #

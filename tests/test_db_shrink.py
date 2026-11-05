@@ -305,19 +305,21 @@ def test_prune_aged_historical_leg_zero_disables(db_init):
 # --------------------------------------------------------------------------- #
 
 
-def test_historical_default_retain_is_500():
+def test_historical_default_retain_is_2000():
     import inspect
 
     from server import db
 
-    assert inspect.signature(db.init_db).parameters["retain_historical"].default == 500
+    assert (
+        inspect.signature(db.init_db).parameters["retain_historical"].default == 2000
+    )  # 0.3.8: 1 ч цикл
 
 
 def test_config_passes_retain_historical_and_scores_days(tmp_path):
     from server.config import ServerConfig
 
     cfg = ServerConfig()
-    assert cfg.retain_historical == 500
+    assert cfg.retain_historical == 2000
     assert cfg.scores_raw_days == 120
     assert cfg.historical_raw_days == 180
 

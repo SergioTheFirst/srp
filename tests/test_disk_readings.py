@@ -15,9 +15,15 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def db_init(tmp_path):
+def db_init(tmp_path, monkeypatch):
     from server import db
 
+    # The readings below carry fixed July-2026 timestamps, while the disk-key
+    # activity window is measured from the wall clock: once those dates fell
+    # out of the 90-day window (2026-10-06) every store evicted the previous
+    # key. These tests cover series/retention/ceiling, not eviction -- pin the
+    # window wide so the fixed timestamps never age out.
+    monkeypatch.setattr(db, "_DISK_KEY_ACTIVE_DAYS", 36500)
     db.init_db(tmp_path / "t.db")
     return db
 

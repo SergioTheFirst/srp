@@ -6,7 +6,7 @@ model, event message) is HTML-escaped -- no stored XSS from telemetry.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,7 +15,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
-from server import db, limits, org_directory
+from server import db, fleet_canon, limits, org_directory
+from server.analytics.disk_bus import disk_reading, is_removable_disk
 from server.analytics.errchain import CRASH as _CRASH_EVENT_IDS
 from server.analytics.health import (
     _STATE_LABELS,
@@ -30,14 +31,18 @@ from server.netdisco.cache import GraphCache
 from server.netdisco.unified import historical_graph_from_snapshot
 from server.printers import forecast as printer_forecast
 from server.scoring.score100 import band_for_health_score, band_for_risk_score
-from server.updates import get_update_info
+from server.updates import get_update_info, problem
+from server.web.disk_card import SMART_ATTR_RU, disk_spare_color, nvme_cw_flags, smart_fallback
 from server.web.health_view import router as _health_router
+from server.web.security_flags import security_flags
+from server.web.trust_labels import PS_ENGINE_TOKENS, collector_failures, identity_reason_ru
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 # Регистрирован ВЫЗЫВАЕМЫМ (не снимком значения на импорте): снимок не поддаётся
 # monkeypatch в тестах, а health_view.py читает тот же _TEMPLATES без второй
 # регистрации (единственная точка Jinja2Templates( в репозитории).
 _TEMPLATES.env.globals["demo_mode"] = lambda: limits.DEMO_MODE
+_TEMPLATES.env.globals["security_flags"] = security_flags
 
 _EMPTY_GRAPH = {
     "nodes": [],
@@ -64,16 +69,34 @@ def _unified_map_graph(request: Request) -> dict:
     return cache.get() or _EMPTY_GRAPH
 
 
-def _fleet_available_version(request: Request) -> Optional[str]:
-    """Version currently offered by the update package in ``server/updates``
-    (``request.app.state.updates_dir``). No token/HMAC involved -- this is a
-    read-only version comparison for the dashboard, not package authentication.
-    None when no updates_dir is configured or no valid package is staged."""
+def _fleet_available_version(request: Request, arch: str = "x64") -> Optional[str]:
+    """Version currently offered by the *arch* update package in ``server/updates``
+    (x86: ``server/updates/x86``; ``request.app.state.updates_dir``). No token/HMAC
+    involved -- this is a read-only version comparison for the dashboard, not package
+    authentication. None when no updates_dir is configured or no valid package is staged."""
     updates_dir = getattr(request.app.state, "updates_dir", None)
     if updates_dir is None:
         return None
-    info = get_update_info(Path(updates_dir))
+    info = get_update_info(Path(updates_dir), arch=arch)
     return info["version"] if info else None
+
+
+def _device_arch(d: dict) -> str:
+    """0.3.6: разрядность сборки агента; NULL (агент до 0.3.6) = x64."""
+    return "x86" if d.get("agent_arch") == "x86" else "x64"
+
+
+def _current_versions(
+    devices: list, parsed: list, available: Optional[str], available_x86: Optional[str]
+) -> dict:
+    """Per-arch "latest": the staged package of that arch, else the newest version
+    present among the fleet's devices of that arch (an x86 agent never compares
+    with the x64 package -- it could not take it)."""
+    out = {}
+    for arch, staged in (("x64", available), ("x86", available_x86)):
+        seen = [v for d, v in zip(devices, parsed) if v is not None and _device_arch(d) == arch]
+        out[arch] = parse_version(staged) or max(seen, default=None)
+    return out
 
 
 def health_color(v: Optional[float]) -> str:
@@ -244,8 +267,10 @@ def tray_status_badge(status: Optional[int]) -> Optional[tuple[str, str]]:
 # points. Caps the per-disk query AND how many disks get history at all (the
 # card itself, drawn straight from the already-in-memory envelope, stays
 # unbounded -- only the DB fan-out is capped).
-_DISK_HISTORY_POINTS_MAX = 60
+_DISK_HISTORY_POINTS_MAX = 240  # 0.3.8: 1 ч цикл -> ~10 дней, как 60 при 4 ч
 _DISK_HISTORY_DISKS_MAX = 16
+# График индекса здоровья: ~3 строки scores на часовой цикл агента 0.3.8 -> ~11 дней.
+_SCORE_CHART_ROWS = 800
 
 
 # B4: disk SMART chip colours -- boundaries copied verbatim from
@@ -368,6 +393,7 @@ def net_change_ru(kind: Optional[str]) -> str:
 
 
 _TEMPLATES.env.globals.update(
+    identity_reason_ru=identity_reason_ru,
     health_color=health_color,
     risk_color=risk_color,
     level_color=level_color,
@@ -386,12 +412,20 @@ _TEMPLATES.env.globals.update(
     net_status_ru=net_status_ru,
     net_conf_color=net_conf_color,
     net_change_ru=net_change_ru,
+    is_removable_disk=is_removable_disk,
     disk_temp_color=disk_temp_color,
     disk_wear_color=disk_wear_color,
     disk_poh_color=disk_poh_color,
     disk_pending_color=disk_pending_color,
     disk_realloc_color=disk_realloc_color,
     disk_uncorrected_color=disk_uncorrected_color,
+    # S2/X5/S13 (2026-11-02): the counter's zeros read «—», raw SMART 194/9 as a marked
+    # fallback, NVMe spare/CW in the engine's own terms (server/web/disk_card.py)
+    disk_reading=disk_reading,
+    smart_fallback=smart_fallback,
+    smart_attr_ru=SMART_ATTR_RU,
+    nvme_cw_flags=nvme_cw_flags,
+    disk_spare_color=disk_spare_color,
 )
 
 
@@ -424,13 +458,30 @@ def _device_flags(d: dict) -> list[str]:
         flags.append("expiring")
     if d.get("device_trust") == "untrusted":
         flags.append("untrusted")
+    if _ps_broken(d):
+        flags.append("ps_broken")
     if d.get("version_outdated"):
         flags.append("outdated")
-    if d.get("update_available_version"):
+    if _update_pending(d):
         flags.append("update_pending")
+    if d.get("update_state") == "failed":
+        flags.append("update_failed")
     if d.get("is_new"):
         flags.append("new")
     return flags
+
+
+def _ps_broken(d: dict) -> bool:
+    """Агент 0.3.5: PowerShell на ПК не грузит модули (токен из инвентаризации).
+    Только живые ПК: у молчащего вердикт замёрз, а rc_* (EDR/OOM) сюда не входит."""
+    reason = (d.get("identity_trust") or {}).get("collector_reason")
+    return not d.get("stale") and reason in PS_ENGINE_TOKENS
+
+
+def _update_pending(d: dict) -> bool:
+    """D3 -- агент проверил, видит версию и НЕ применяет её. available_version едет и
+    в «updating»/«failed» (VR-7): те ПК обновляются или упали, а не «не применяют»."""
+    return bool(d.get("update_available_version")) and d.get("update_state") == "ok"
 
 
 def _fleet_summary(devices: list) -> dict:
@@ -443,10 +494,12 @@ def _fleet_summary(devices: list) -> dict:
         "stale": sum(1 for d in devices if d.get("stale")),
         "expiring": sum(1 for d in devices if d.get("cert_expiring")),
         "untrusted": sum(1 for d in devices if d.get("device_trust") == "untrusted"),
+        "ps_broken": sum(1 for d in devices if _ps_broken(d)),
         "new7d": sum(1 for d in devices if d.get("is_new")),
         "outdated": sum(1 for d in devices if d.get("version_outdated")),
         # D3: агент видит обновление, но не применяет его (dev-сборка/нет секрета).
-        "update_pending": sum(1 for d in devices if d.get("update_available_version")),
+        "update_pending": sum(1 for d in devices if _update_pending(d)),
+        "update_failed": sum(1 for d in devices if d.get("update_state") == "failed"),
     }
 
 
@@ -487,7 +540,9 @@ def _is_recent(iso: Optional[str], *, days: int) -> bool:
     return age is not None and -days <= age <= 0
 
 
-def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
+def _enrich_fleet(
+    devices: list, available: Optional[str] = None, available_x86: Optional[str] = None
+) -> list:
     """Decorate each device with decoded identity labels + version/new flags.
 
     'Outdated' compares against ``available`` (the version staged in
@@ -496,7 +551,7 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
     so a half-finished rollout is still visible with no update channel configured.
     """
     parsed = [parse_version(d.get("agent_version")) for d in devices]
-    current = parse_version(available) or max([v for v in parsed if v is not None], default=None)
+    current = _current_versions(devices, parsed, available, available_x86)
     now = datetime.now(timezone.utc)
     # P3-7: reload the org directory ONCE per poll cycle here, then tell every
     # per-device _identity_labels call to skip its own reload check -- N
@@ -520,7 +575,7 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
                 **d,
                 **_identity_labels(d, check_reload=False),
                 "health": health,
-                "version_outdated": bool(current is not None and ver is not None and ver < current),
+                "version_outdated": _is_behind(ver, current[_device_arch(d)]),
                 "is_new": _is_recent(d.get("first_seen"), days=7),
                 "first_seen_age_sec": db.age_seconds(d.get("first_seen")),
             }
@@ -531,88 +586,105 @@ def _enrich_fleet(devices: list, available: Optional[str] = None) -> list:
 _DUPES_RENDER_CAP = 50  # ponytail: только предел рендера; поднять, если реальному парку мало
 
 
-def _dupe_key(d: dict) -> tuple:
-    """Ключ группировки тёзок: одинаковое имя В ПРЕДЕЛАХ одного объекта/орг/отдела.
-    Разные объекты с одинаковым generic-именем (PC-01, KASSA) -- РАЗНЫЕ машины,
-    не дубли (регистр/пробелы не в счёт)."""
-    return (
-        (d.get("org_code") or "").strip().casefold(),
-        (d.get("site_code") or "").strip().casefold(),
-        (d.get("dept_code") or "").strip().casefold(),
-        (d.get("hostname") or "").strip().casefold(),
-    )
-
-
 def _split_duplicates(devices: list) -> tuple[list, list]:
-    """(видимые, скрытые тёзки) для fleet-вида.
-
-    Переустановка агента с потерей config.json минтит новый device_id -> старая
-    строка того же ПК висит дублем. Свёртка ПРОИЗВОДНАЯ, ничего не пишется и не
-    удаляется (ingest НИКОГДА не трогает чужую строку, adversarial review
-    2026-08-27; удаление осталось на ✕ / bulk purge / 30-дневном clock-свипе);
-    вернувшееся устройство само выходит из блока следующим конвертом.
-
-    Строку прячем ТОЛЬКО когда это почти наверняка призрак переустановки, а не
-    другой реальный ПК:
-      * совпали (org, site, dept, hostname) -- один объект, не разные организации;
-      * есть ЖИВОЙ более свежий тёзка (keeper НЕ stale) -- доказательство, что
-        машина сейчас на связи под новым id; все offline -> не прячем (не
-        доказано, UNKNOWN over false confidence);
-      * строка stale ИЛИ является предшественником (замолчала до первого
-        появления keeper'а) -- флаги строки больше не спасают от скрытия:
-        молчащий призрак неизбежно набирает unknown/untrusted/regressed через
-        staleness и оставался бы на виду навсегда, хотя описывает тот же
-        физический ПК, что и keeper.
-    last_seen_age_sec is None (непарсибельно) -> строка вне сравнения. Скрытые
-    строки не удаляются -- остаются в блоке «Скрытые дубликаты имени» с ✕.
-    Порядок входа сохраняется в обоих списках.
-    """
-    groups: dict[tuple, list] = {}
-    for d in devices:
-        if (d.get("hostname") or "").strip():
-            groups.setdefault(_dupe_key(d), []).append(d)
-    hidden: set[int] = set()
-    for group in groups.values():
-        aged = [d for d in group if d.get("last_seen_age_sec") is not None]
-        if len(aged) < 2:
-            continue  # сравнивать не с чем -> скрывать нечего
-        keeper = min(aged, key=lambda d: d["last_seen_age_sec"])
-        if keeper.get("stale"):
-            continue  # нет живого преемника -> не доказано, что это переустановка
-        k_first = keeper.get("first_seen_age_sec")
-        for d in aged:
-            if d is keeper:
-                continue
-            # ponytail: предшественник = замолчал ДО первого конверта преемника;
-            # закрывает 10-минутное окно до STALE_AFTER_SEC сразу после переустановки.
-            predecessor = k_first is not None and d["last_seen_age_sec"] > k_first
-            if d.get("stale") or predecessor:
-                hidden.add(id(d))
-    live = [d for d in devices if id(d) not in hidden]
-    dupes = [d for d in devices if id(d) in hidden]
+    """(видимые, вытесненные) -- правило server/fleet_canon, одно на все срезы
+    (spec 2026-10-24-canonical-devices). Свёртка ПРОИЗВОДНАЯ: ничего не пишется и
+    не удаляется (ingest никогда не трогает чужую строку; удаление -- ✕ / purge /
+    30-дневный свип). Вытесненная строка несёт ``successor_id`` (каноническая
+    запись). Порядок входа сохраняется в обоих списках."""
+    ghosts = fleet_canon.superseded_by(devices)
+    live = [d for d in devices if d.get("device_id") not in ghosts]
+    dupes = [
+        {**d, "successor_id": ghosts[d["device_id"]]}
+        for d in devices
+        if d.get("device_id") in ghosts
+    ]
     return live, dupes
 
 
-def _live_devices(devices: list, available: Optional[str] = None) -> tuple[list, list]:
+def _local_dt(iso: Optional[str], fmt: str) -> Optional[str]:
+    """Серверная ISO-метка -> местное время сервера (оператор читает в своём поясе)."""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime(fmt)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None  # astimezone на Windows падает OSError за 3000-м годом
+
+
+def _dupe_why(d: dict, by_id: dict, retention_days: Optional[int]) -> dict:
+    """Почему строка свёрнута: когда замолчала, с какого момента новая запись и
+    когда её удалит автосвип (last_seen + device_retention_days; <=0 -- выключен)."""
+    succ = by_id.get(d["successor_id"]) or {}
+    purge = None
+    if retention_days and retention_days > 0 and d.get("last_seen"):
+        try:
+            last = datetime.fromisoformat(str(d["last_seen"]).replace("Z", "+00:00"))
+            last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+            purge = _local_dt((last + timedelta(days=retention_days)).isoformat(), "%d.%m.%Y")
+        except (ValueError, OverflowError):
+            purge = None  # срок «навсегда» вроде 999999 дн -- даты нет, страница жива
+    return {
+        "silent_since": _local_dt(d.get("last_seen"), "%d.%m %H:%M"),
+        "successor_since": _local_dt(succ.get("first_seen"), "%d.%m %H:%M"),
+        "successor_name": succ.get("display_name") or succ.get("hostname") or d["successor_id"],
+        "purge_after": purge,
+        "purge_off": not (retention_days and retention_days > 0),
+    }
+
+
+def _is_behind(ver: Optional[tuple], current: Optional[tuple]) -> bool:
+    return bool(current is not None and ver is not None and ver < current)
+
+
+def _live_devices(
+    devices: list, available: Optional[str] = None, available_x86: Optional[str] = None
+) -> tuple[list, list]:
     """(живые, скрытые тёзки) -- общий источник правды для /fleet summary и
     /deploy version_counts, чтобы обе страницы одинаково отвечали на «кого
     обновлять»: считать по СЫРОЙ таблице devices означало бы заново включать
     дублей-призраков переустановки, которых /fleet уже свернул на чтении
     (review B2, [[ingest-never-deletes-others]]).
 
+    Сначала свёртка, потом флаги: у вытесненной строки нет NEW и data-flags, чтобы
+    фильтры KPI её не поднимали. Тёзки (одно имя, жизни перекрываются, доказательства
+    переустановки нет) видны все с меткой ``namesakes`` = размер группы.
+
     Build enriched copies (do not mutate db-owned dicts) -- immutable pattern.
     """
-    decorated = _enrich_fleet(devices, available)
-    enriched = [{**d, "flags": _device_flags(d)} for d in decorated]
-    return _split_duplicates(enriched)
+    live, dupes = _split_duplicates(_enrich_fleet(devices, available, available_x86))
+    sizes: dict[tuple, int] = {}
+    for d in live:
+        if (d.get("hostname") or "").strip():
+            key = fleet_canon.dupe_key(d)
+            sizes[key] = sizes.get(key, 0) + 1
+    live = [
+        {
+            **d,
+            "flags": _device_flags(d),
+            "namesakes": sizes.get(fleet_canon.dupe_key(d), 1)
+            if (d.get("hostname") or "").strip()
+            else 1,
+        }
+        for d in live
+    ]
+    dupes = [{**d, "is_new": False, "flags": []} for d in dupes]
+    return live, dupes
 
 
-def _fleet_context(devices: list, available: Optional[str] = None) -> dict:
-    live, dupes = _live_devices(devices, available)
+def _fleet_context(
+    devices: list,
+    available: Optional[str] = None,
+    retention_days: Optional[int] = None,
+    available_x86: Optional[str] = None,
+) -> dict:
+    live, dupes = _live_devices(devices, available, available_x86)
+    by_id = {d["device_id"]: d for d in live}
+    shown = [{**d, **_dupe_why(d, by_id, retention_days)} for d in dupes[:_DUPES_RENDER_CAP]]
     return {
         "summary": _fleet_summary(live),
         "groups": _group_by_site(live),
-        "dupes": dupes[:_DUPES_RENDER_CAP],
+        "dupes": shown,
         "dupes_total": len(dupes),
         "device_limit": limits.MAX_DEVICES,
         # Задача 6 fix (review finding 1): guard в /ingest считает db.count_devices()
@@ -624,6 +696,14 @@ def _fleet_context(devices: list, available: Optional[str] = None) -> dict:
         # так что len() без лишнего запроса равен db.count_devices().
         "device_count_raw": len(devices),
     }
+
+
+def _retention_days(request: Request) -> Optional[int]:
+    """Срок автоочистки молчащих записей; в demo свип не работает -> None (выключен)."""
+    if limits.DEMO_MODE:
+        return None
+    cfg = getattr(request.app.state, "server_config", None)
+    return getattr(cfg, "device_retention_days", None)
 
 
 def _admin_token(request: Request) -> str:
@@ -681,7 +761,12 @@ router.include_router(_health_router)
 
 @router.get("/", response_class=HTMLResponse)
 def fleet(request: Request):
-    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    ctx = _fleet_context(
+        db.get_devices(),
+        available=_fleet_available_version(request),
+        retention_days=_retention_days(request),
+        available_x86=_fleet_available_version(request, "x86"),
+    )
     ctx["admin_token"] = _admin_token(request)
     return _TEMPLATES.TemplateResponse(request, "fleet.html", ctx)
 
@@ -689,7 +774,12 @@ def fleet(request: Request):
 @router.get("/fleet/fragment", response_class=HTMLResponse)
 def fleet_fragment(request: Request):
     """KPI + table partial, polled by the dashboard for near-real-time updates."""
-    ctx = _fleet_context(db.get_devices(), available=_fleet_available_version(request))
+    ctx = _fleet_context(
+        db.get_devices(),
+        available=_fleet_available_version(request),
+        retention_days=_retention_days(request),
+        available_x86=_fleet_available_version(request, "x86"),
+    )
     return _TEMPLATES.TemplateResponse(request, "_fleet_body.html", ctx)
 
 
@@ -720,7 +810,7 @@ def _device_health_context(
     health = apply_health_staleness(health_raw, score_ts, now)
     health_stale_msg = health_staleness(score_ts, now) if score_ts is not None else None
     health_series = (
-        _health_index_series(db.get_score_series(device_id, limit=200))
+        _health_index_series(db.get_score_series(device_id, limit=_SCORE_CHART_ROWS))
         if health.get("state") != "unknown"
         else []
     )
@@ -773,12 +863,15 @@ def device(request: Request, device_id: str):
         str(i): [
             {
                 "received_at": row.get("received_at"),
-                "temperature_c": row.get("temperature_c"),
+                # S2/X5: the same formula as the card header -- a counter 0 is no
+                # reading, a missing temperature falls back to raw SMART 194
+                "temperature_c": row.get("temperature_c") or smart_fallback(row, "194"),
                 "wear_pct": row.get("wear_pct"),
                 "nvme_percentage_used": row.get("nvme_percentage_used"),
             }
-            for row in db.get_disk_series(
-                device_id, disk["serial_hash"], limit=_DISK_HISTORY_POINTS_MAX
+            for row in map(
+                disk_reading,
+                db.get_disk_series(device_id, disk["serial_hash"], limit=_DISK_HISTORY_POINTS_MAX),
             )
         ]
         for i, disk in enumerate(disks[:_DISK_HISTORY_DISKS_MAX])
@@ -789,6 +882,8 @@ def device(request: Request, device_id: str):
     # get_cohort_slope_verdict's docstring for the full read-side design.
     trajectory = ((d.get("scores") or {}).get("risk") or {}).get("trajectory") or {}
     cohort_slope_verdict = db.get_cohort_slope_verdict(d.get("model"), trajectory)
+    available = _fleet_available_version(request, _device_arch(d))
+    offered, running = parse_version(available), parse_version(d.get("agent_version"))
     return _TEMPLATES.TemplateResponse(
         request,
         "device.html",
@@ -797,7 +892,9 @@ def device(request: Request, device_id: str):
             "net_subnet_note": net_note,
             "nd": nd,
             "card": card,
-            "available_version": _fleet_available_version(request),
+            "available_version": available,
+            "update_offered": offered is not None and running is not None and offered > running,
+            "collector_failures": collector_failures(db.get_source_trusts(device_id)),
             # ssd3 Ф5: 90d daily rollup for the disk-latency chart under "Прогноз".
             "heartbeat_rollups": db.get_heartbeat_rollups(device_id, 90),
             # B1: 30d daily event-count rollup for the "События в день" bar chart.
@@ -811,6 +908,7 @@ def device(request: Request, device_id: str):
             "state_labels": _STATE_LABELS,
             "disk_series": disk_series,
             "cohort_slope_verdict": cohort_slope_verdict,
+            "lineage": db.lineage(device_id),
         },
     )
 
@@ -1005,19 +1103,22 @@ def _version_counts(devices: list[dict]) -> list[dict]:
     а не сырой SQL COUNT по таблице devices -- иначе распределение на /deploy
     заново включает дублей-призраков переустановки, которых KPI «агенты
     устарели» на /fleet уже свернул (review B2, [[ingest-never-deletes-others]])."""
-    counts: dict[str, int] = {}
+    counts: dict[tuple[str, str], int] = {}
     for d in devices:
-        v = d.get("agent_version") or "—"
-        counts[v] = counts.get(v, 0) + 1
-    return sorted(({"v": v, "n": n} for v, n in counts.items()), key=lambda r: -r["n"])
+        key = (d.get("agent_version") or "—", _device_arch(d))  # 0.3.6: x86 -- отдельной строкой
+        counts[key] = counts.get(key, 0) + 1
+    rows = ({"v": v, "arch": arch, "n": n} for (v, arch), n in counts.items())
+    return sorted(rows, key=lambda r: -r["n"])
 
 
-def _deploy_version_rows(counts: list[dict], available: Optional[str]) -> list[dict]:
+def _deploy_version_rows(
+    counts: list[dict], available: Optional[str], available_x86: Optional[str] = None
+) -> list[dict]:
     """Attach a 0..100 CSS-bar width + 'behind the staged package' flag to each
     ``_version_counts()`` row. *available* is the version staged in
     server/updates (``_fleet_available_version``) -- None -> nothing to compare
     against, so every row stays neutral (UNKNOWN over false confidence)."""
-    current = parse_version(available)
+    current = {"x64": parse_version(available), "x86": parse_version(available_x86)}
     max_n = max((r["n"] for r in counts), default=0) or 1
     out = []
     for r in counts:
@@ -1026,7 +1127,7 @@ def _deploy_version_rows(counts: list[dict], available: Optional[str]) -> list[d
             {
                 **r,
                 "pct": round(r["n"] * 100 / max_n),
-                "outdated": bool(current is not None and ver is not None and ver < current),
+                "outdated": _is_behind(ver, current[r.get("arch", "x64")]),
             }
         )
     return out
@@ -1052,8 +1153,13 @@ def deploy(request: Request):
             "orgs": orgs,
             "default_server": default_server,
             "update_info": get_update_info(Path(updates_dir)),
+            "update_problem": problem(Path(updates_dir)),  # after get_update_info
+            "update_info_x86": get_update_info(Path(updates_dir), arch="x86"),
+            "update_problem_x86": problem(Path(updates_dir), arch="x86"),
             "version_counts": _deploy_version_rows(
-                _version_counts(live), _fleet_available_version(request)
+                _version_counts(live),
+                _fleet_available_version(request),
+                _fleet_available_version(request, "x86"),
             ),
         },
     )

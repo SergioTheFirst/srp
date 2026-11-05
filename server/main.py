@@ -12,16 +12,22 @@ import asyncio
 import contextlib
 import logging
 import random
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from shared.schema import utcnow_iso
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from server import db, limits, org_directory
+from server import db, health_journal, limits, org_directory
 from server.api import router as api_router
 from server.config import ServerConfig, load_config
+from server.external_access import ExternalAccessMiddleware
 from server.ingest_guards import count_reject
 from server.netdisco import reconcile as netdisco_reconcile
 from server.netdisco import scheduler as netdisco_scheduler
@@ -31,6 +37,8 @@ from server.trust import staleness as trust_staleness
 from server.web.dashboard import router as web_router
 from server.zabbix import export as zabbix_export
 from server.zabbix.config import ZabbixConfig
+
+_STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
 # Reject ingest bodies larger than this to prevent a single agent from
 # consuming unbounded memory during synchronous pydantic parsing.
@@ -149,6 +157,19 @@ def _run_maintenance_sweep(cfg: ServerConfig) -> None:
         _log.exception("maintenance sweep failed")
 
 
+_JOURNAL_RETENTION_DAYS = 730  # spec 2026-10-30 H18: outcome labels for calibration
+
+
+def _run_journal_sweep() -> None:
+    """Health journal upkeep (H18) as its OWN guarded step: a failed rollup in the
+    maintenance sweep must not skip the journal retention or the auto labels."""
+    try:
+        db.prune_health_journal(_JOURNAL_RETENTION_DAYS)
+        health_journal.mark_os_reinstalls(db.superseded_map(), utcnow_iso())
+    except Exception:  # never let a transient sweep error crash the caller
+        _log.exception("health journal sweep failed")
+
+
 def _run_disk_readings_backfill() -> None:
     """One-time seed of disk_readings from existing historical rows (ssd3 Ф2).
 
@@ -174,6 +195,7 @@ async def _retention_loop(cfg: ServerConfig) -> None:
         await asyncio.sleep(interval_sec)
         _run_retention_sweep(cfg)  # self-guards transient errors (see above)
         await asyncio.to_thread(_run_maintenance_sweep, cfg)
+        await asyncio.to_thread(_run_journal_sweep)
 
 
 _tlog = logging.getLogger("srp.trust")
@@ -498,6 +520,7 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             _run_disk_readings_backfill()  # seed disk_readings before any scoring reads it
             _run_retention_sweep(cfg)  # clear long-silent ghosts at startup
             await asyncio.to_thread(_run_maintenance_sweep, cfg)  # ssd3 Ф5: rollup+prune+vacuum
+            await asyncio.to_thread(_run_journal_sweep)  # H18: journal retention + labels
         tasks: list[asyncio.Task[None]] = []
         # NB: gated on purge_interval_hours alone (not device_retention_days too) --
         # _run_retention_sweep already no-ops when device_retention_days<=0, but the
@@ -582,6 +605,10 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             "административные запросы (delete/purge/update) БЕЗ аутентификации. "
             "Задайте ingest_token в server/config.json, чтобы включить проверку."
         )
+        _authlog.warning(
+            "ingest_token не задан — из интернета сервер закрыт целиком, "
+            "агенты за пределами локальной сети получают 404."
+        )
     elif not cfg.admin_token:
         # Без admin_token кнопки удаления/очистки на дашборде получают 401 и
         # оператору неоткуда узнать, что для них есть ОТДЕЛЬНЫЙ ключ (ingest_token
@@ -590,20 +617,6 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             "admin_token не задан — кнопки удаления и очистки машин на дашборде "
             "будут отвечать «отказано». Задайте admin_token в server/config.json "
             "(отдельный от ingest_token), чтобы они заработали."
-        )
-    # P0-4 (stoperrors.md): a dedicated signing key for update manifests, separate
-    # from ingest_token -- ingest_token also rides a plaintext bearer header on
-    # every request, so reusing it as the HMAC key let a passive LAN eavesdropper
-    # forge a signed update. Falls back to ingest_token (less safe) when unset.
-    app.state.update_hmac_secret = cfg.update_hmac_secret or cfg.ingest_token
-    # Separate flag (not "not app.state.update_hmac_secret" -- the fallback already
-    # collapsed it to a non-empty value): the dashboard banner needs to know WHY a
-    # secret is present, same visibility parity as P0-2's ingest_token banner.
-    app.state.update_hmac_fallback = not cfg.update_hmac_secret and bool(cfg.ingest_token)
-    if app.state.update_hmac_fallback:
-        _authlog.warning(
-            "update_hmac_secret не задан, используется ingest_token — менее "
-            "безопасно, т.к. этот токен также передаётся как bearer-заголовок."
         )
     app.state.updates_dir = cfg.resolved_updates_dir()  # agent auto-update package drop
     app.state.printer_config = cfg.printer_config()  # for the /printers/poll force button
@@ -626,19 +639,62 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     # on the first read (within the TTL) so a cold start never blocks on it.
     app.state.network_map_cache = GraphCache()
     app.add_middleware(_IngestBodySizeMiddleware)
+    # Последним = снаружи: чужой из интернета получает 404 раньше любой работы.
+    app.add_middleware(ExternalAccessMiddleware)
     app.include_router(api_router)
     app.include_router(web_router)
+    # Plotly — свой файл, не cdn.plot.ly: дашборд часто стоит в сети без интернета,
+    # а публичный стенд не должен отдавать IP посетителя чужому CDN.
+    # Сжатие только здесь: Plotly весит 4,56 МБ — больше лимита ответа функции на
+    # Vercel (4,5 МБ), в gzip ~1,4 МБ. Страницы с токеном в мете не сжимаем (BREACH).
+    app.mount(
+        "/static",
+        GZipMiddleware(StaticFiles(directory=_STATIC_DIR), minimum_size=1024),
+        name="static",
+    )
     return app
 
 
 app = create_app()
 
+_ENABLE_QUICK_EDIT_MODE = 0x0040
+_ENABLE_EXTENDED_FLAGS = 0x0080
+
+
+def _disable_quickedit() -> None:
+    """Switch off conhost QuickEdit for the start_server.bat window (QE-1).
+
+    A click or selection in that window blocks every console write, and uvicorn
+    writes its access log from the event loop -- one click froze the WHOLE
+    server (dashboard, ingest, agent update downloads) until a key press.
+    ponytail: Edit > Mark from the window menu still freezes it; route the logs
+    through a QueueHandler or into a file if that ever bites.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    k32 = ctypes.WinDLL("kernel32")
+    k32.GetStdHandle.restype = ctypes.c_void_p
+    k32.GetConsoleMode.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32))
+    k32.SetConsoleMode.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if k32.GetConsoleMode(handle, ctypes.byref(mode)):  # 0 = stdin is not a console
+        k32.SetConsoleMode(handle, (mode.value & ~_ENABLE_QUICK_EDIT_MODE) | _ENABLE_EXTENDED_FLAGS)
+
 
 def main() -> None:
     import uvicorn
 
+    _disable_quickedit()
     cfg = load_config()
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info")
+    # X-Forwarded-For -- только от прокси на этом же ПК (Caddy): иначе внешний клиент
+    # назвался бы «внутренним» (server/external_access.py). Явно, чтобы переменная
+    # окружения FORWARDED_ALLOW_IPS не расширила доверие.
+    uvicorn.run(
+        app, host=cfg.host, port=cfg.port, log_level="info", forwarded_allow_ips="127.0.0.1"
+    )
 
 
 if __name__ == "__main__":

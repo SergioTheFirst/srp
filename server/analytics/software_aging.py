@@ -17,9 +17,10 @@ engine only reprojects it onto an hourly unit and a (uptime_hours, value) axis
 instead of trends.py's (received_at, value) one.
 
 Output is the ``software_aging_risk`` axis in the W0.5 Score100 envelope
-(higher = worse): untrusted identity withholds; fewer than 4 points in the
-CURRENT session -> UNKNOWN (never a confident zero from a session too young to
-judge).
+(higher = worse): untrusted identity withholds; fewer than 4 usable
+(post-logon, post-warm-up) points in the CURRENT session -> UNKNOWN (never a
+confident zero from a session too young to judge). A leak is flagged only on a
+significant slope over >= ``_MIN_SPAN_H`` of usable rows (calibration D2).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-from server.analytics.trends import theil_sen_slope
+from server.analytics.trends import _MK_Z_CRIT, mann_kendall_z, theil_sen_slope
 from server.scoring.score100 import (
     Direction,
     Factor,
@@ -38,8 +39,15 @@ from server.scoring.score100 import (
 )
 
 _MIN_SESSION_POINTS = 4
-# Mirrors trends.py's own _HIGH_CONF_POINTS convention (each engine sets its own).
+# Each engine sets its own confidence depth (trends.py now gates on span instead).
 _HIGH_CONF_POINTS = 6
+# Post-logon application ramp: one 4 h agent cadence step.
+_WARMUP_H = 4.0
+# Calibration knob: the F13 Monte Carlo verified 72 h; 48 h keeps 3-day reboot
+# cycles assessable. With the warm-up drop and Mann-Kendall the design MC saw 0
+# false flags in 11 400 evaluations of stationary handles (sigma 700) and caught
+# >= 150 handles/h at the first evaluation after 52 h of uptime.
+_MIN_SPAN_H = 48.0
 
 _HANDLES_WATCH = 100.0  # handles/hour -> +25 "рост"
 _HANDLES_SEVERE = 300.0  # handles/hour -> +45 "утечка"
@@ -88,6 +96,24 @@ def _split_sessions(hb_series: list[dict[str, Any]]) -> list[list[dict[str, Any]
     return sessions
 
 
+def _usable_rows(session: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows that can speak to a leak.
+
+    (i) A session that saw a logged-on user drops its ``user_present`` False rows:
+    the pre-logon boot heartbeat and Fast-Startup resume heartbeats
+    (client/collectors/heartbeat.py: user_present = explorer.exe running). None
+    (old agents) stays; with no True row at all (kiosk / service PC) every row
+    stays. (ii) Rows under ``_WARMUP_H`` of uptime are the post-logon ramp.
+    """
+    logon = any(r.get("user_present") is True for r in session)
+    return [
+        r
+        for r in session
+        if not (logon and r.get("user_present") is False)
+        and (_num(r, "uptime_hours") or 0.0) >= _WARMUP_H
+    ]
+
+
 def _session_points(session: list[dict[str, Any]], field: str) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
     for row in session:
@@ -98,19 +124,30 @@ def _session_points(session: list[dict[str, Any]], field: str) -> list[tuple[flo
     return points
 
 
+def _assessable(points: list[tuple[float, float]]) -> bool:
+    """Enough usable readings over enough uptime for a slope to mean anything."""
+    if len(points) < _MIN_SESSION_POINTS:
+        return False
+    return points[-1][0] - points[0][0] >= _MIN_SPAN_H * 3600.0
+
+
 def _hourly_slope(session: list[dict[str, Any]], field: str) -> Optional[float]:
-    """Theil-Sen slope per HOUR for one field over one session.
+    """Significant Theil-Sen slope per HOUR for one field over one usable session.
 
     Reuses trends.theil_sen_slope (the only source of d/dt, §1.6), which
     returns value-per-DAY over (epoch_seconds, value) pairs; we feed it
     uptime-in-seconds and rescale, rather than duplicating the median-of-
-    pairwise-slopes primitive for a different unit.
+    pairwise-slopes primitive for a different unit. None unless the session is
+    assessable and Mann-Kendall agrees (|z| >= 1.96, same sign as the slope).
     """
     points = _session_points(session, field)
-    if len(points) < _MIN_SESSION_POINTS:
+    if not _assessable(points):
         return None
     slope_per_day = theil_sen_slope(points)
-    return None if slope_per_day is None else slope_per_day / _HOURS_PER_DAY
+    z = mann_kendall_z(points)
+    if slope_per_day is None or abs(z) < _MK_Z_CRIT or z * slope_per_day <= 0:
+        return None
+    return slope_per_day / _HOURS_PER_DAY
 
 
 def _percentile(values: list[float], p: float) -> Optional[float]:
@@ -165,6 +202,96 @@ def _reboot_restores(
     return new_first > prev_last
 
 
+def _leak_seen(h_slope: Optional[float], m_slope: Optional[float]) -> bool:
+    """A real, significant leak slope -- the only thing that may flag aging."""
+    handles = h_slope is not None and h_slope > _HANDLES_WATCH
+    return handles or (m_slope is not None and m_slope < _MEM_WATCH)
+
+
+def _accelerating(h_slope: Optional[float], prev_session: Optional[list[dict[str, Any]]]) -> bool:
+    """Both sessions leak handles above watch and the current one >= 2x faster."""
+    if h_slope is None or h_slope <= _HANDLES_WATCH or prev_session is None:
+        return False
+    prev = _hourly_slope(prev_session, "handle_count_total")
+    return prev is not None and prev > _HANDLES_WATCH and h_slope >= 2 * prev
+
+
+def _aging_factors(
+    last_session: list[dict[str, Any]],
+    prev_session: Optional[list[dict[str, Any]]],
+    h_slope: Optional[float],
+    m_slope: Optional[float],
+) -> tuple[list[Factor], list[str]]:
+    """Explainable factors (their deltas sum to the axis value) + coordinate flags."""
+    factors: list[Factor] = []
+    flags: list[str] = []
+    if h_slope is not None and h_slope > _HANDLES_SEVERE:
+        factors.append({"label": f"утечка дескрипторов (+{h_slope:.0f}/ч)", "delta": 45.0})
+    elif h_slope is not None and h_slope > _HANDLES_WATCH:
+        factors.append({"label": f"рост дескрипторов (+{h_slope:.0f}/ч)", "delta": 25.0})
+    if m_slope is not None and m_slope < _MEM_WATCH:
+        factors.append({"label": f"снижение свободной памяти ({m_slope:.0f} МБ/ч)", "delta": 20.0})
+    uptime = _num(last_session[-1], "uptime_hours")
+    if uptime is not None and uptime > _UPTIME_TWO_WEEKS_H:
+        factors.append(
+            {"label": f"{uptime / _HOURS_PER_DAY:.0f} дн. без перезагрузки", "delta": 10.0}
+        )
+    # Context (uptime, pagefile) only confirms a real leak -- never flags one alone.
+    if _leak_seen(h_slope, m_slope) and _pagefile_confirms_pressure(last_session):
+        factors.append(
+            {
+                "label": "рост pagefile во второй половине сессии — подтверждение утечки",
+                "delta": 10.0,
+            }
+        )
+    if _accelerating(h_slope, prev_session):
+        factors.append(
+            {"label": "утечка дескрипторов ускоряется от сессии к сессии", "delta": 10.0}
+        )
+        flags.append("aging_accelerating")
+    if _reboot_restores(prev_session, last_session):
+        factors.append(
+            {"label": "перезагрузка возвращает ресурс — утечка программная", "delta": 0.0}
+        )
+        flags.append("reboot_restores")
+    return factors, flags
+
+
+def _missing_notes(last_session: list[dict[str, Any]]) -> list[str]:
+    """What the axis cannot see. A healthy flat session is assessed, not missing."""
+    missing = [_NO_DAMAGE_NOTE]
+    for field, label in (
+        ("handle_count_total", "дескрипторов"),
+        ("mem_avail_mb", "свободной памяти"),
+    ):
+        if not _assessable(_session_points(last_session, field)):
+            missing.append(
+                f"наклон {label} не считается (мало истории сессии: нужно >= {_MIN_SPAN_H:g} ч)"
+            )
+    return missing
+
+
+def _confidence(last_session: list[dict[str, Any]]) -> ScoreConfidence:
+    """'high' needs ``_HIGH_CONF_POINTS`` usable rows AND an assessable slope: a session
+    too young for either slope cannot see a leak, so its zero is never 'high'."""
+    fields = ("handle_count_total", "mem_avail_mb")
+    seen = any(_assessable(_session_points(last_session, f)) for f in fields)
+    return "high" if seen and len(last_session) >= _HIGH_CONF_POINTS else "medium"
+
+
+def _unknown(missing: str, reason: str, lineage: Optional[dict[str, Any]] = None) -> Score100:
+    direction: Direction = "higher_is_worse"
+    return make_score100(
+        None,
+        direction,
+        "unknown",
+        "unknown",
+        missing_evidence=[missing],
+        source_lineage=lineage,
+        reason=reason,
+    )
+
+
 def compute_software_aging_risk(
     hb_series: list[dict[str, Any]],
     *,
@@ -173,100 +300,41 @@ def compute_software_aging_risk(
     """Deterministic software-aging (handle/memory leak) risk for one device.
 
     Higher = worse. Gating mirrors the other W4.2 engines: untrusted identity
-    withholds entirely; fewer than ``_MIN_SESSION_POINTS`` readings in the
+    withholds entirely; fewer than ``_MIN_SESSION_POINTS`` usable readings in the
     CURRENT session (since the last reboot) -> UNKNOWN -- a session too young
     to judge must not read as either healthy or leaking.
     """
-    direction: Direction = "higher_is_worse"
-
     if device_trust == "untrusted":
-        return make_score100(
-            None,
-            direction,
-            "unknown",
-            "unknown",
-            missing_evidence=["идентификация не подтверждена"],
-            source_lineage={"identity": "untrusted"},
-            reason=_UNTRUSTED_REASON,
-        )
-
-    sessions = _split_sessions(hb_series)
+        lineage = {"identity": "untrusted"}
+        return _unknown("идентификация не подтверждена", _UNTRUSTED_REASON, lineage)
+    sessions = [_usable_rows(s) for s in _split_sessions(hb_series)]
     last_session = sessions[-1] if sessions else []
     if len(last_session) < _MIN_SESSION_POINTS:
-        return make_score100(
-            None,
-            direction,
-            "unknown",
-            "unknown",
-            missing_evidence=[
-                f"текущая сессия короче {_MIN_SESSION_POINTS} показаний с последней перезагрузки"
-            ],
-            reason=(
-                "недостаточно истории текущей сессии (UNKNOWN — ложная уверенность недопустима)"
-            ),
+        # perf_rows: heartbeats DO arrive -- health's liveness witness, since throttle
+        # points count only a loaded CPU (H3) and free-space/latency may be missing
+        perf_rows = sum(1 for r in hb_series if r.get("cpu_perf_pct") is not None)
+        return _unknown(
+            f"текущая сессия короче {_MIN_SESSION_POINTS} показаний с последней перезагрузки",
+            "недостаточно истории текущей сессии (UNKNOWN — ложная уверенность недопустима)",
+            {"perf_rows": perf_rows},
         )
     prev_session = sessions[-2] if len(sessions) >= 2 else None
-
-    factors: list[Factor] = []
-    flags: list[str] = []
-    value = 0.0
-
-    def hit(delta: float, label: str) -> None:
-        nonlocal value
-        value += delta
-        factors.append({"label": label, "delta": round(delta, 1)})
-
     h_slope = _hourly_slope(last_session, "handle_count_total")
-    if h_slope is not None:
-        if h_slope > _HANDLES_SEVERE:
-            hit(45.0, f"утечка дескрипторов (+{h_slope:.0f}/ч)")
-        elif h_slope > _HANDLES_WATCH:
-            hit(25.0, f"рост дескрипторов (+{h_slope:.0f}/ч)")
-
     m_slope = _hourly_slope(last_session, "mem_avail_mb")
-    if m_slope is not None and m_slope < _MEM_WATCH:
-        hit(20.0, f"снижение свободной памяти ({m_slope:.0f} МБ/ч)")
-
-    current_uptime = _num(last_session[-1], "uptime_hours")
-    if current_uptime is not None and current_uptime > _UPTIME_TWO_WEEKS_H:
-        hit(10.0, f"{current_uptime / _HOURS_PER_DAY:.0f} дн. без перезагрузки")
-
-    if _pagefile_confirms_pressure(last_session):
-        hit(10.0, "рост pagefile во второй половине сессии — подтверждение утечки")
-
-    if h_slope is not None and h_slope > 0 and prev_session is not None:
-        prev_h_slope = _hourly_slope(prev_session, "handle_count_total")
-        if prev_h_slope is not None and prev_h_slope > 0 and h_slope >= 2 * prev_h_slope:
-            hit(10.0, "утечка дескрипторов ускоряется от сессии к сессии")
-            flags.append("aging_accelerating")
-
-    if _reboot_restores(prev_session, last_session):
-        factors.append(
-            {"label": "перезагрузка возвращает ресурс — утечка программная", "delta": 0.0}
-        )
-        flags.append("reboot_restores")
-
-    value = max(0.0, min(100.0, value))
+    factors, flags = _aging_factors(last_session, prev_session, h_slope, m_slope)
+    value = max(0.0, min(100.0, sum(f["delta"] for f in factors)))
     band = band_for_risk_score(value)
-    # T4.1/K8: band watch/bad is the ratchet-facing signal for Ф6, not any one factor.
-    if band in ("watch", "bad"):
+    # T4.1/K8: band watch/bad is the ratchet-facing signal for Ф6 -- and only a
+    # real leak slope may raise it (uptime / pagefile context alone never does).
+    if band in ("watch", "bad") and _leak_seen(h_slope, m_slope):
         flags.append("aging_leak")
-
-    confidence: ScoreConfidence = "high" if len(last_session) >= _HIGH_CONF_POINTS else "medium"
-
-    missing = [_NO_DAMAGE_NOTE]
-    if h_slope is None:
-        missing.append("наклон дескрипторов не считается (мало точек в сессии)")
-    if m_slope is None:
-        missing.append("наклон свободной памяти не считается (мало точек в сессии)")
-
     return make_score100(
         value,
-        direction,
+        "higher_is_worse",
         band,
-        confidence,
+        _confidence(last_session),
         factors=factors,
-        missing_evidence=missing,
+        missing_evidence=_missing_notes(last_session),
         source_lineage={
             "session_points": len(last_session),
             "sessions_seen": len(sessions),

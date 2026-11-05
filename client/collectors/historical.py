@@ -8,6 +8,9 @@ or missing counter yields a neutral gap, not a crash.
 
 from __future__ import annotations
 
+import re
+from typing import Any, Optional
+
 from client.collectors.inventory import hash_serial
 from client.collectors.network import collect_network
 from client.collectors.printer_ports import collect_printer_ports
@@ -38,19 +41,53 @@ $bc   = CountEv @{LogName='System'; ProviderName='Microsoft-Windows-WER-SystemEr
 $ac   = CountEv @{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$start}
 $whea = CountEv @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=$start}
 
-$bt = @()
+$bt = @(); $btNormal = @(); $lastBoot = $null
 # Перечисление журнала -- под своей защитой (журнал может отсутствовать на Server SKU),
 # иначе падение здесь уносит ВЕСЬ конверт historical (5 доменов в одном JSON).
 $btEvents = @()
 try { $btEvents = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Diagnostics-Performance/Operational'; Id=100; StartTime=$start} -MaxEvents 20 -ErrorAction SilentlyContinue) } catch { $btEvents = @() }
 foreach ($e in $btEvents) {
   try {
-    $x = [xml]$e.ToXml()
-    $v = ($x.Event.EventData.Data | Where-Object { $_.Name -eq 'BootTime' }).'#text'
-    if ($v) { $bt += [double]$v }
+    $d = ([xml]$e.ToXml()).Event.EventData.Data
+    $v = ($d | Where-Object { $_.Name -eq 'BootTime' }).'#text'
+    if ($v) {
+      $bt += [double]$v
+      # xs:boolean рендерится 'true'/'false' на любом языке Windows.
+      if (($d | Where-Object { $_.Name -eq 'BootIsRebootAfterInstall' }).'#text' -eq 'false') {
+        $btNormal += [double]$v
+        # agent 1.0.0 (H17): Get-WinEvent returns newest first -- the first normal boot
+        if ($null -eq $lastBoot) { $lastBoot = [int][double]$v }
+      }
+    }
   } catch { continue }
 }
-$avgBoot = if ($bt.Count) { [int][math]::Round(($bt | Measure-Object -Average).Average) } else { $null }
+# Медиана обычных загрузок: одна долгая перезагрузка после обновлений не тянет её вверх. Нет
+# обычных -- медиана всех (boot_time -- источник доверия, не должен уходить в EMPTY).
+$use = $bt; if ($btNormal.Count) { $use = $btNormal }
+$s = @($use | Sort-Object); $n = $s.Count
+$avgBoot = if ($n) { [int][math]::Round(($s[[math]::Floor(($n - 1) / 2)] + $s[[math]::Floor($n / 2)]) / 2) } else { $null }
+
+# agent 1.0.0 (H17): the BugCheck 1001 and Kernel-Power 41 records of 30 days, newest
+# first, at most 20 each. Properties[0] of a 1001 is the hex bug check line, [1] the dump
+# path (only its kind leaves the agent -- the parent maps it); KP41 by EventData names.
+$bugchecks = @(); $bcEvents = @()
+try { $bcEvents = @(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-WER-SystemErrorReporting'; Id=1001; StartTime=$start} -MaxEvents 20 -ErrorAction SilentlyContinue) } catch { $bcEvents = @() }
+foreach ($e in $bcEvents) {
+  try {
+    $bugchecks += [ordered]@{ ts = $e.TimeCreated.ToUniversalTime().ToString('o');
+      raw = "$($e.Properties[0].Value)"; dumpraw = "$($e.Properties[1].Value)" }
+  } catch { continue }
+}
+$kp41 = @(); $kpEvents = @()
+try { $kpEvents = @(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; Id=41; StartTime=$start} -MaxEvents 20 -ErrorAction SilentlyContinue) } catch { $kpEvents = @() }
+foreach ($e in $kpEvents) {
+  try {
+    $d = ([xml]$e.ToXml()).Event.EventData.Data
+    $kp41 += [ordered]@{ ts = $e.TimeCreated.ToUniversalTime().ToString('o');
+      code = ($d | Where-Object { $_.Name -eq 'BugcheckCode' }).'#text';
+      pb = ($d | Where-Object { $_.Name -eq 'PowerButtonTimestamp' }).'#text' }
+  } catch { continue }
+}
 
 $rsi = $null
 try {
@@ -87,6 +124,9 @@ try {
   app_crashes_30d     = $ac
   whea_errors_30d     = $whea
   avg_boot_ms         = $avgBoot
+  last_boot_ms        = $lastBoot
+  bugchecks           = @($bugchecks)
+  kp41                = @($kp41)
   storage             = $storage
   observation_days    = 30
 } | ConvertTo-Json -Depth 5 -Compress
@@ -112,14 +152,73 @@ foreach ($store in 'Cert:\LocalMachine\My','Cert:\CurrentUser\My') {
 """
 
 
+# agent 1.0.0 (H17): the caps of shared.schema (BUGCHECKS_MAX, KP41_MAX, BUGCHECK_PARAMS_MAX,
+# EVENT_TS_MAX, BUGCHECK_PARAM_MAX) -- the agent clips to them, a test pins the two
+_BUGCHECKS_MAX = 20
+_KP41_MAX = 20
+_BUGCHECK_PARAMS_MAX = 4
+_EVENT_TS_MAX = 40
+_BUGCHECK_PARAM_MAX = 18
+_HEX = re.compile(r"0x[0-9a-fA-F]{1,16}")
+
+
+def _dump_kind(path: Any) -> str:
+    """mini / full / none / other -- the dump path itself never leaves the agent."""
+    p = str(path or "").strip().lower()
+    if not p:
+        return "none"
+    if "minidump" in p:
+        return "mini"
+    return "full" if p.endswith("memory.dmp") else "other"
+
+
+def _bugcheck(item: Any) -> dict[str, Any]:
+    """One 1001: its bug check line «0x0000009f (0x.., 0x.., 0x.., 0x..)» -> code 0x%08x
+    (None when it is no 32-bit hex) and up to four hex parameters."""
+    d = item if isinstance(item, dict) else {}
+    hexes = _HEX.findall(str(d.get("raw") or ""))
+    code = int(hexes[0], 16) if hexes else None
+    params = [
+        h.lower() for h in hexes[1 : 1 + _BUGCHECK_PARAMS_MAX] if len(h) <= _BUGCHECK_PARAM_MAX
+    ]
+    return {
+        "ts": str(d.get("ts") or "")[:_EVENT_TS_MAX] or None,
+        "code": f"0x{code:08x}" if code is not None and code <= 0xFFFFFFFF else None,
+        "params": params,
+        "dump": _dump_kind(d.get("dumpraw")),
+    }
+
+
+def _uint(value: Any) -> Optional[int]:
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def _kp41(item: Any) -> dict[str, Any]:
+    """One Kernel-Power 41: the bug check code (0 = a power loss / reset, not a crash) and
+    whether the power button was held (PowerButtonTimestamp != 0)."""
+    d = item if isinstance(item, dict) else {}
+    code, pb = _uint(d.get("code")), _uint(d.get("pb"))
+    return {
+        "ts": str(d.get("ts") or "")[:_EVENT_TS_MAX] or None,
+        "bugcheck_code": code if code is not None and code <= 0xFFFFFFFF else None,
+        "power_button": None if pb is None else pb != 0,
+    }
+
+
 def collect_historical(active_scan: bool = False) -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=120)
     owned = [STORAGE_RELIABILITY, RELIABILITY, BOOT_TIME, CERTIFICATES, NETWORK]
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed(owned, status))
+        return CollectorResult(None, failed(owned, status, result.reason))
     raw = result.data
     raw["storage"] = as_list(raw.get("storage"))
+    raw["bugchecks"] = [_bugcheck(b) for b in as_list(raw.get("bugchecks"))[:_BUGCHECKS_MAX]]
+    raw["kp41"] = [_kp41(k) for k in as_list(raw.get("kp41"))[:_KP41_MAX]]
     for row in raw["storage"]:
         if isinstance(row, dict):
             # Raw serial hashed immediately -- it must never leave the agent
@@ -146,9 +245,9 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
 
     # Deep SMART (Tier A ATA via CIM + Tier B NVMe via IOCTL): its own script,
     # its own error domain, layered onto the base storage rows by serial_hash.
-    merged_storage, smart_status = collect_smart(raw["storage"])
+    merged_storage, smart_status, smart_reason = collect_smart(raw["storage"])
     raw["storage"] = merged_storage
-    sh[SMART] = health(smart_status)
+    sh[SMART] = health(smart_status, smart_reason)
 
     # Certificate metadata: separate script, separate error domain.
     cert_res = run_ps(_CERT_SCRIPT, timeout=60)
@@ -169,7 +268,7 @@ def collect_historical(active_scan: bool = False) -> CollectorResult:
     else:
         raw["certificates"] = []
         err_status = cert_res.status if cert_res.status != "ok" else "empty"
-        sh[CERTIFICATES] = health(err_status)
+        sh[CERTIFICATES] = health(err_status, cert_res.reason)
 
     # Personal certs spooled by per-user trays (stage 8): the SYSTEM agent can't see
     # CurrentUser\My, so the tray drops metadata into C:\SRP\spool. Untrusted, user-

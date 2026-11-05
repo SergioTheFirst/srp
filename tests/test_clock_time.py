@@ -86,6 +86,50 @@ def test_aligned_client_clock_has_no_drift_flag(client):
 
 
 # --------------------------------------------------------------------------- #
+# 0.3.4 #9: drift is measured at the agent's per-attempt sent_ts when present
+# --------------------------------------------------------------------------- #
+@pytest.mark.integration
+def test_replayed_envelope_drift_uses_sent_ts(client):
+    """A heartbeat collected 2 h ago and replayed from the offline buffer is no clock
+    problem: ts is collection time, sent_ts the moment this delivery attempt left."""
+    from server import db
+
+    now = datetime.now(timezone.utc)
+    env = _hb_with_ts("clock-replay", _iso(now - timedelta(hours=2)))
+    env["sent_ts"] = _iso(now)
+    assert client.post("/api/v1/ingest", json=env).status_code == 200
+
+    d = _device(client, "clock-replay")
+    assert d["clock_drift"] is False
+    assert abs(d["clock_drift_sec"]) < 60
+    hb = db.get_recent_heartbeats("clock-replay", limit=1)[0]
+    assert abs(hb["clock_drift_sec"]) < 60  # the score's clock factor reads this row
+    assert hb["ts"] == env["ts"]  # the client collection time is still kept
+
+
+@pytest.mark.integration
+def test_old_agent_without_sent_ts_keeps_the_ts_drift(client):
+    env = _hb_with_ts("clock-legacy", _iso(datetime.now(timezone.utc) - timedelta(hours=2)))
+    assert client.post("/api/v1/ingest", json=env).status_code == 200
+
+    d = _device(client, "clock-legacy")
+    assert d["clock_drift"] is True
+    assert d["clock_drift_sec"] == pytest.approx(7200, abs=60)
+
+
+@pytest.mark.integration
+def test_malformed_sent_ts_gives_no_drift(client):
+    """Like a malformed ts today: drift None (no flag), never a 500."""
+    env = _hb_with_ts("clock-bad-sent", _iso(datetime.now(timezone.utc) - timedelta(hours=2)))
+    env["sent_ts"] = "not-a-time"
+    assert client.post("/api/v1/ingest", json=env).status_code == 200
+
+    d = _device(client, "clock-bad-sent")
+    assert d["clock_drift_sec"] is None
+    assert d["clock_drift"] is False
+
+
+# --------------------------------------------------------------------------- #
 # Storage round-trips received_at + drift; both axes are queryable (unit)
 # --------------------------------------------------------------------------- #
 @pytest.fixture
@@ -112,6 +156,30 @@ def test_heartbeat_persists_received_at_and_keeps_client_ts(db_init):
 
 
 @pytest.mark.unit
+def test_heartbeat_payload_cannot_shadow_server_columns(db_init):
+    # The payload is stored raw (extra keys allowed), so a key named like a server
+    # column must not replace it: windows anchor on the server receipt (W0.2).
+    forged = {
+        "free_space_pct": 50.0,
+        "ts": "2099-01-01T00:00:00+00:00",
+        "received_at": "2099-01-01T00:00:00+00:00",
+        "clock_drift_sec": 0.0,
+    }
+    db_init.store_heartbeat(
+        "d",
+        "2020-01-01T00:00:00+00:00",
+        forged,
+        received_at="2026-06-03T12:00:00+00:00",
+        clock_drift_sec=12345.0,
+    )
+    row = db_init.get_recent_heartbeats("d", limit=1)[0]
+    assert row["received_at"] == "2026-06-03T12:00:00+00:00"
+    assert row["ts"] == "2020-01-01T00:00:00+00:00"
+    assert row["clock_drift_sec"] == 12345.0
+    assert row["free_space_pct"] == 50.0  # the telemetry itself is still read
+
+
+@pytest.mark.unit
 def test_historical_series_exposes_received_at(db_init):
     db_init.store_historical(
         "d",
@@ -121,6 +189,42 @@ def test_historical_series_exposes_received_at(db_init):
     )
     series = db_init.get_historical_series("d")
     assert series[0]["received_at"] == "2026-06-03T12:00:00+00:00"
+
+
+_FORGED_SERVER_KEYS = {
+    "ts": "2099-01-01T00:00:00+00:00",
+    "received_at": "2099-01-01T00:00:00+00:00",
+    "clock_drift_sec": 0.0,
+}
+
+
+@pytest.mark.unit
+def test_historical_payload_cannot_shadow_server_columns(db_init):
+    # Trends take their x-axis and span gates from the server receipt (W0.2,
+    # calibration D1): a raw payload key must not replace a server column.
+    db_init.store_historical(
+        "d",
+        "2020-01-01T00:00:00+00:00",
+        {"avg_boot_ms": 21000, **_FORGED_SERVER_KEYS},
+        received_at="2026-06-03T12:00:00+00:00",
+        clock_drift_sec=12345.0,
+    )
+    row = db_init.get_historical_series("d")[0]
+    assert row["received_at"] == "2026-06-03T12:00:00+00:00"
+    assert row["ts"] == "2020-01-01T00:00:00+00:00"
+    assert row["clock_drift_sec"] == 12345.0
+    assert row["avg_boot_ms"] == 21000  # the telemetry itself is still read
+
+
+@pytest.mark.unit
+def test_disk_series_payload_cannot_shadow_server_columns(db_init):
+    received = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    disk = {"serial_hash": "abc", "media_type": 4, "wear_pct": 5.0, **_FORGED_SERVER_KEYS}
+    db_init.store_disk_readings("d", [disk], "2020-01-01T00:00:00+00:00", received)
+    row = db_init.get_disk_series("d", "abc")[0]
+    assert row["received_at"] == received
+    assert row["ts"] == "2020-01-01T00:00:00+00:00"
+    assert row["wear_pct"] == 5.0
 
 
 @pytest.mark.unit

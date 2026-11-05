@@ -8,7 +8,10 @@ free-space depletion and the Windows-servicing collapse it causes downstream:
     job -- **distinguishing a cleanup rebound from true depletion**. A Windows
     Update stages several GB, free space dips, the update installs and cleanup
     reclaims it: a single low sample. The median ignores that one-off dip (rebound),
-    yet moves when a drive sits persistently full (true depletion). The fresh dip
+    yet moves when a drive sits persistently full (true depletion). A *sudden* fill
+    must not wait a week for the median: once the 4 newest readings all agree (about
+    one office day) the level is taken from them -- typical = min(median, max of the
+    4 newest), so a 1-3-reading staging dip stays ignored (F44). The fresh dip
     is never hidden -- it is surfaced as a possible transient for the operator.
   * **Servicing failures are the downstream confirmation.** Repeated
     WindowsUpdateClient install/download failures with a low disk confirm the fill
@@ -54,10 +57,19 @@ _SERVICING_MIN_FAILURES = 3
 # WindowsUpdateClient failure event ids (install / install / download failure).
 _WU_FAILURE_IDS = frozenset({20, 25, 31})
 _WU_PROVIDER = "windowsupdateclient"  # matched case-insensitively as a substring
+# Only failures received within this many days of the newest heartbeat count: the
+# pipeline passes the newest event rows with no time bound, so a failure from 40
+# days ago kept the collapse alarm on long after servicing recovered (F43).
+_SERVICING_WINDOW_DAYS = 30.0
+
+# A low level counts as soon as this many newest readings all sit low (about one
+# office day): typical = min(median, max of these). Fewer low readings in a row are a
+# Windows Update staging dip and stay rebound-guarded by the median (F44).
+_SUDDEN_FILL_READINGS = 16  # 0.3.8: цикл агента 1 ч -> x4 строк на то же время (~16 ч)
 
 # A median over fewer than this many samples cannot yet rule out a transient -> the
 # verdict stands but at reduced confidence.
-_MIN_HIGH_CONF_SAMPLES = 3
+_MIN_HIGH_CONF_SAMPLES = 12  # 0.3.8: часовой цикл -> ~12 ч, как 3 при 4 ч
 
 # Current-state recency: ignore free-space readings older than this (relative to the
 # newest sample). A drive that was full months ago but is clean now must not be
@@ -124,12 +136,25 @@ def _free_space_samples(series: list[dict[str, Any]]) -> list[float]:
     return [v for (_, v) in rows]
 
 
-def _servicing_failures(events: list[dict[str, Any]]) -> int:
-    """Count WindowsUpdateClient install/download failures.
+def _newest_receipt(*row_sets: list[dict[str, Any]]) -> Optional[datetime]:
+    """Newest parseable server ``received_at`` from the first row set that has one."""
+    for rows in row_sets:
+        stamps = [_parse_iso(r.get("received_at")) for r in rows or [] if isinstance(r, dict)]
+        dated = [s for s in stamps if s is not None]
+        if dated:
+            return max(dated)
+    return None
+
+
+def _servicing_failures(events: list[dict[str, Any]], ref: Optional[datetime]) -> int:
+    """Count WindowsUpdateClient install/download failures received within
+    ``_SERVICING_WINDOW_DAYS`` of ``ref`` (the newest heartbeat receipt).
 
     Matched by provider *and* event id -- a bare id 20 from another provider (e.g.
     "disk") is not a Windows Update failure, so identity is by source, not number.
+    A failure without a parseable ``received_at``, or with no ``ref``, still counts.
     """
+    window = timedelta(days=_SERVICING_WINDOW_DAYS)
     count = 0
     for ev in events or []:
         if not isinstance(ev, dict):
@@ -142,13 +167,26 @@ def _servicing_failures(events: list[dict[str, Any]]) -> int:
             eid_int = int(eid) if eid is not None else None
         except (TypeError, ValueError):
             eid_int = None
-        if eid_int in _WU_FAILURE_IDS:
-            count += 1
+        if eid_int not in _WU_FAILURE_IDS:
+            continue
+        when = _parse_iso(ev.get("received_at"))
+        # A difference of two datetimes cannot overflow, unlike ``ref - window``.
+        if ref is not None and when is not None and ref - when > window:
+            continue
+        count += 1
     return count
 
 
+def _typical_level(samples: list[float]) -> Optional[float]:
+    """Persistent free-space level: the window median, unless the newest readings all
+    sit lower (samples are newest-first) -- then the highest of those (F44)."""
+    if not samples:
+        return None
+    return min(median(samples), max(samples[:_SUDDEN_FILL_READINGS]))
+
+
 def _free_space_risk(typical: float) -> tuple[float, Optional[Factor]]:
-    """Current-state risk 0..100 from the persistent (median) free-space level."""
+    """Current-state risk 0..100 from the persistent (typical) free-space level."""
     if typical < _FREE_CRITICAL:
         return 75.0, {
             "label": f"системный диск: {typical:.0f}% свободно — критически заполнен",
@@ -179,8 +217,9 @@ def compute_disk_fill_risk(
     """Deterministic disk-fill / servicing-collapse risk for one device.
 
     Higher = a fuller system drive and/or a collapsing Windows-servicing pipeline.
-    Grades on the *median* recent free-space level (a cleanup rebound cannot move
-    the median); servicing failures confirm/amplify. Gating mirrors W0.5/W4.1:
+    Grades on the typical recent free-space level (a cleanup rebound cannot move the
+    median; 4 agreeing newest readings can); servicing failures within 30 days of the
+    newest heartbeat confirm/amplify. Gating mirrors W0.5/W4.1:
     untrusted withholds; no free-space data *and* no servicing collapse -> UNKNOWN.
     """
     direction: Direction = "higher_is_worse"
@@ -197,7 +236,7 @@ def compute_disk_fill_risk(
         )
 
     samples = _free_space_samples(heartbeat_series)
-    servicing_count = _servicing_failures(events)
+    servicing_count = _servicing_failures(events, _newest_receipt(heartbeat_series, events))
     collapse = servicing_count >= _SERVICING_MIN_FAILURES
 
     if not samples and not collapse:
@@ -229,7 +268,7 @@ def compute_disk_fill_risk(
             )
 
     current: Optional[float] = samples[0] if samples else None
-    typical: Optional[float] = median(samples) if samples else None
+    typical = _typical_level(samples)
 
     factors: list[Factor] = []
     notes: list[str] = []
@@ -287,6 +326,8 @@ def compute_disk_fill_risk(
             "n_samples": len(samples),
             "servicing_failures": servicing_count,
             "disk_low": disk_low,
+            # H11: the persistent level below the severe band -- the verdict's h1 floor
+            "below_severe": typical is not None and typical < _FREE_SEVERE,
         },
         reason=_verdict_reason(value, samples, collapse),
     )

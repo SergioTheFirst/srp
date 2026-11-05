@@ -8,5 +8,5 @@
 {% set whea_n = (whea_n|float) if whea_n is not none else none %}
 {% if whea_n is not none and whea_n > 0 %}
 <div class="chip accent" style="margin:4px 0 10px; display:inline-block"
-     title="Аппаратные ошибки (CPU/память/шина) — косвенный признак деградации железа">WHEA-ошибок за 30 дн: {{ whea_n|int }}</div>
+     title="Записи журнала WHEA-Logger за 30 дн (все коды, включая исправленные). Источник — CPU, шина PCIe, прошивка или драйвер диска; чаще всего это шум PCIe/ASPM. Своего балла риска не даёт; учитывается только при разборе индекса стабильности Windows: при WHEA падение RSI не списывается на одни сбои приложений">WHEA-ошибок за 30 дн: {{ whea_n|int }}</div>
 {% endif %}

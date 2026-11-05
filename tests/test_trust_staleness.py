@@ -64,16 +64,45 @@ def test_non_domain_source_never_goes_stale():
     assert reevaluate_staleness([row], _NOW, _THRESHOLD) == []
 
 
-def test_identity_source_goes_stale_like_a_periodic_source():
+def test_identity_source_goes_stale_after_its_own_floor():
     """KodSR L3: identity is collected every inventory cycle (client/collectors/
     inventory.py:161) even though it gates no domain of its own -- silence
     there is real ('gone silent'), not 'nothing happened' like the true
-    event-driven sources above, so it must age the same way."""
-    row = _row(source="identity", evidence_seen_at=(_NOW - timedelta(hours=13)).isoformat())
+    event-driven sources above, so it must still age. Its threshold is
+    IDENTITY_STALE_AFTER_SEC (3 days), not the shared 12h -- see below."""
+    row = _row(source="identity", evidence_seen_at=(_NOW - timedelta(hours=73)).isoformat())
     updates = reevaluate_staleness([row], _NOW, _THRESHOLD)
     assert len(updates) == 1
     assert updates[0].source == "identity"
     assert updates[0].state == "stale"
+    assert updates[0].reason == "источник молчит 73 ч (порог 72 ч)"
+
+
+def test_daily_inventory_identity_stays_ok_while_a_domain_source_goes_stale():
+    """2026-10-14 «untrusted у последней версии»: машины с конфигом до 2026-06-19
+    или с config.json, поправленным по README, собирают inventory раз в сутки
+    (обновление config.json не переписывает). Общий порог 12 ч делал их
+    untrusted половину суток. identity переживает 3 пропущенных суточных
+    прогона, а доменный источник по-прежнему стареет через 12 ч."""
+    identity = _row(source="identity", evidence_seen_at=(_NOW - timedelta(hours=25)).isoformat())
+    domain = _row(evidence_seen_at=(_NOW - timedelta(hours=13)).isoformat())
+    updates = reevaluate_staleness([identity, domain], _NOW, _THRESHOLD)
+    assert [(u.source, u.state) for u in updates] == [("storage_reliability", "stale")]
+
+
+def test_identity_stale_under_the_old_threshold_returns_to_ok_with_empty_reason():
+    """Строка, ушедшая в STALE по старому порогу 12 ч, после повышения порога
+    возвращается в OK -- без вводящей в заблуждение «источник молчит…»."""
+    row = _row(
+        source="identity",
+        state="stale",
+        evidence_seen_at=(_NOW - timedelta(hours=20)).isoformat(),
+    )
+    updates = reevaluate_staleness([row], _NOW, _THRESHOLD)
+    assert len(updates) == 1
+    assert updates[0].state == "ok"
+    assert updates[0].weight == 1.0
+    assert updates[0].reason == ""
 
 
 @pytest.mark.parametrize("worse_state", ["unavailable", "suspect"])
@@ -200,6 +229,7 @@ def test_apply_source_staleness_changes_only_state_weight_reason(client):
         weight=0.0,
         reason="источник молчит 13 ч (порог 12 ч)",
         evidence_seen_at=before["evidence_seen_at"],
+        prev_state=before["state"],
     )
     applied = db.apply_source_staleness([update])
     assert applied == 1
@@ -219,6 +249,35 @@ def test_apply_source_staleness_changes_only_state_weight_reason(client):
     assert after["collector_status"] == before["collector_status"]
     assert after["semantic_status"] == before["semantic_status"]
     assert after["ts"] == before["ts"]
+
+
+@pytest.mark.integration
+def test_revival_write_never_lands_on_a_fresh_gate_failed_row(client):
+    """Ревью 2026-10-14: проваленный ingest не двигает evidence_seen_at
+    (COALESCE), поэтому одного этого guard'а мало. Цикл прочитал identity в
+    STALE и решил вернуть OK; между чтением и записью пришёл сбой inventory
+    (unavailable/timeout). Запись цикла обязана отпасть -- иначе OK c весом
+    1.0 оживит gate-failed источник."""
+    from server import db
+
+    client.post(
+        "/api/v1/ingest",
+        json=_env("dev-revive", "inventory", healthy("inventory"), {"identity": _sh("ok")}),
+    )
+    evidence = db.get_source_trust_rows()[0]["evidence_seen_at"]
+    to_stale = StaleUpdate("dev-revive", "identity", "stale", 0.0, "молчит", evidence, "ok")
+    assert db.apply_source_staleness([to_stale]) == 1
+
+    # The job reads the STALE row and decides OK; a failing inventory lands first.
+    revive = StaleUpdate("dev-revive", "identity", "ok", 1.0, "", evidence, "stale")
+    client.post(
+        "/api/v1/ingest",
+        json=_env("dev-revive", "inventory", {}, {"identity": _sh("timeout")}),
+    )
+    assert db.get_source_trust_rows()[0]["evidence_seen_at"] == evidence  # COALESCE kept it
+
+    assert db.apply_source_staleness([revive]) == 0
+    assert db.get_source_trusts("dev-revive")["identity"]["state"] == "unavailable"
 
 
 @pytest.mark.integration
@@ -246,6 +305,7 @@ def test_apply_source_staleness_drops_write_when_evidence_moved(client):
         weight=0.0,
         reason="источник молчит 13 ч (порог 12 ч)",
         evidence_seen_at=stale_evidence,  # the OLD value the job read
+        prev_state="ok",
     )
     applied = db.apply_source_staleness([update])
     assert applied == 0  # guard drops it -- the row moved out from under it

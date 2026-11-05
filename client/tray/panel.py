@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from client.status_writer import candidate_ips
 from client.tray import state as st
@@ -25,7 +26,7 @@ def read_config_bits(config_path: Path) -> tuple[str, str]:
     file may be ACL-restricted; a read failure degrades to empty strings.
     """
     try:
-        data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        data = json.loads(Path(config_path).read_bytes())
     except (OSError, ValueError):
         return ("", "")
     if not isinstance(data, dict):
@@ -35,7 +36,7 @@ def read_config_bits(config_path: Path) -> tuple[str, str]:
 
 def _server_url(config_path: Path) -> str:
     try:
-        data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        data = json.loads(Path(config_path).read_bytes())
     except (OSError, ValueError):
         return ""
     return str(data.get("server_url", "")) if isinstance(data, dict) else ""
@@ -69,6 +70,16 @@ def _panel_rows(
         ("Агент", f"версия {view.agent_version}", False),
         ("Поддержка", helpdesk or "—", False),
     ]
+
+
+# the open panel re-reads status.json on its own: a manual «Обновить» read as «update»
+_PANEL_REFRESH_MS = 5_000
+
+
+def _every(root: Any, interval_ms: int, fn: Callable[[], None]) -> None:
+    """Run *fn* now and then every *interval_ms* on the Tk loop (Tk passes the args)."""
+    fn()
+    root.after(interval_ms, _every, root, interval_ms, fn)
 
 
 def run_panel(*, status_path: Path, config_path: Path, cert_text: str = "—") -> None:
@@ -112,13 +123,12 @@ def run_panel(*, status_path: Path, config_path: Path, cert_text: str = "—") -
             st.support_clipboard(view, cert_text=cert_text, ip=live_ip(config_path, view))
         )
 
-    render()
+    _every(root, _PANEL_REFRESH_MS, render)
     btns = ttk.Frame(outer)
     btns.grid(row=1, column=0, sticky="e", pady=(14, 0))
     ttk.Button(btns, text="Скопировать для поддержки", command=copy_support).grid(
         row=0, column=0, padx=4
     )
-    ttk.Button(btns, text="Обновить", command=render).grid(row=0, column=1, padx=4)
     root.mainloop()
 
 

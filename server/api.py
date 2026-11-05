@@ -12,12 +12,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, utcnow_iso
+from shared.schema import (
+    CONTRACT_VERSION,
+    AgentArch,
+    Envelope,
+    is_contract_compatible,
+    utcnow_iso,
+)
 
-from server import db, limits, org_directory, updates
+from server import db, health_journal, limits, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.health import apply_health_staleness
 from server.ingest_guards import (
@@ -84,12 +90,12 @@ def ingest(env: Envelope, request: Request) -> dict:
     # раньше флаг уходил только в тело ответа, которое агент не читает (тихая
     # потеря контракта). Совместимость по MINOR/PATCH не проверяется (контракт
     # аддитивный) -- останавливаем только реальный разрыв контракта.
-    if not is_contract_compatible(env.agent_version):
+    if not is_contract_compatible(env.spoken_contract):
         count_reject("incompatible")
         raise HTTPException(
             status_code=406,
             detail=(
-                f"agent_version {env.agent_version!r} incompatible with server "
+                f"contract {env.spoken_contract!r} incompatible with server "
                 f"contract {CONTRACT_VERSION} (MAJOR mismatch)"
             ),
         )
@@ -110,8 +116,14 @@ def ingest(env: Envelope, request: Request) -> dict:
 
 
 @router.get("/devices")
-def list_devices() -> list[dict]:
-    return db.get_devices()
+def list_devices(all: bool = False) -> list[dict]:  # noqa: A002 -- имя query-параметра
+    """Флот без записей, вытесненных переустановкой (spec 2026-10-24); ``?all=1`` --
+    все строки, как раньше (нужно для чистки призраков по API)."""
+    rows = db.get_devices()
+    if all:
+        return rows
+    ghosts = db.superseded_ids()
+    return [d for d in rows if d["device_id"] not in ghosts]
 
 
 @router.get("/devices/{device_id}")
@@ -153,15 +165,28 @@ def diagnostics(device_id: str) -> dict:
 
 class AckBody(BaseModel):
     note: str = Field(default="", max_length=1000)
+    # Spec 2026-10-30 H18: the outcome label of an alert. Optional -- a note-only body
+    # keeps the old behaviour (the open LAN ack, owner decision); a label goes to the
+    # append-only journal and needs the admin token + a rate limit (CWE-770).
+    outcome: Optional[health_journal.OperatorOutcome] = None
 
 
 @router.post("/devices/{device_id}/ack")
-def ack_device(device_id: str, body: AckBody) -> dict:
-    """Operator feedback: acknowledge a device + attach a note."""
+def ack_device(device_id: str, body: AckBody, request: Request) -> dict:
+    """Operator feedback: acknowledge a device, attach a note, optionally label the alert."""
     _demo_guard()
+    if body.outcome is not None:
+        _require_admin_token(request)
+        if not check_rate_limit("endpoint:ack_outcome"):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
     if db.get_device(device_id) is None:
         raise HTTPException(status_code=404, detail="device not found")
-    db.set_ack(device_id, body.note, utcnow_iso())
+    now = utcnow_iso()
+    db.set_ack(device_id, body.note, now)
+    if body.outcome is not None and not health_journal.record_operator_outcome(
+        device_id, body.outcome, body.note, now
+    ):
+        raise HTTPException(status_code=404, detail="device not found")  # deleted meanwhile
     return {"status": "ok"}
 
 
@@ -909,7 +934,7 @@ def _require_admin_token(request: Request) -> None:
 
     Принимает ingest-токен ИЛИ отдельный admin_token. Второй существует затем,
     чтобы страница «Флот» могла отдать браузеру рабочий секрет, не публикуя
-    ingest-ключ (он же запасной ключ подписи обновлений агента).
+    ingest-ключ (он же ключ подписи пакета обновления агента).
     """
     ingest = getattr(request.app.state, "ingest_token", "")
     admin = getattr(request.app.state, "admin_token", "")
@@ -927,8 +952,8 @@ def _require_update_auth(request: Request) -> str:
     return _require_ingest_token(request)
 
 
-def _get_update_info_or_404(request: Request) -> dict:
-    _require_update_auth(request)
+def _get_update_info_or_404(request: Request, arch: str) -> dict:
+    token = _require_update_auth(request)
     # U2-c: keyed per caller IP (not one shared fleet-wide bucket) so a single
     # noisy/misbehaving agent polling too fast can't starve every other agent's
     # update checks. Cardinality is bounded by the number of distinct LAN IPs
@@ -939,30 +964,36 @@ def _get_update_info_or_404(request: Request) -> dict:
     if not check_rate_limit(f"endpoint:agent_update:{caller}"):
         raise HTTPException(status_code=429, detail="rate limit exceeded")
     updates_dir = getattr(request.app.state, "updates_dir", None)
-    # P0-4: sign with update_hmac_secret (falls back to ingest_token server-side
-    # in main.py::create_app), NOT the bearer token used to reach this endpoint --
-    # keeping the two separate is the whole point of this fix.
-    hmac_secret = getattr(request.app.state, "update_hmac_secret", "")
-    info = updates.get_update_info(Path(updates_dir), hmac_secret) if updates_dir else None
+    # Authenticity for agents 0.3.3+ = the build's Ed25519 signature (signature +
+    # public_key, matched against client/update_trust.py in updates.get_update_info and
+    # verified by the agent). The hmac keyed by ingest_token stays only for agents
+    # 0.3.0-0.3.2 (K2, 2026-10-15): it is the one key those agents hold.
+    info = updates.get_update_info(Path(updates_dir), token, arch) if updates_dir else None
     if info is None:
         raise HTTPException(status_code=404, detail="no update package")
     return info
 
 
+# x86-агент (0.3.6+) шлёт ?arch=x86; без параметра = x64 -- старые агенты 0.3.x не меняются.
+# Literal на границе: чужое значение -> 422, путь к папке строится только из "x64"/"x86".
+_ARCH_QUERY = Query("x64")
+
+
 @router.get("/agent/update")
-def agent_update_info(request: Request) -> dict:
+def agent_update_info(request: Request, arch: AgentArch = _ARCH_QUERY) -> dict:
     """Hourly agent poll: latest validated package metadata. Never returns the
     filesystem path or file name as a download URL -- the agent always fetches the
     fixed ``/agent/update/package`` endpoint below to actually download."""
-    info = _get_update_info_or_404(request)
-    result = {"version": info["version"], "sha256": info["sha256"], "size": info["size"]}
-    if "hmac" in info:
+    info = _get_update_info_or_404(request, arch)
+    # signature + public_key: подпись сборки Ed25519, агенты 0.3.3+ проверяют её вшитым ключом.
+    result = {k: info[k] for k in ("version", "sha256", "size", "signature", "public_key", "arch")}
+    if "hmac" in info:  # агенты 0.3.0-0.3.2 проверяют только hmac(ingest_token)
         result["hmac"] = info["hmac"]
     return result
 
 
 @router.get("/agent/update/package")
-def agent_update_package(request: Request) -> FileResponse:
+def agent_update_package(request: Request, arch: AgentArch = _ARCH_QUERY) -> FileResponse:
     """Serves the validated update zip once the agent has decided to update."""
-    info = _get_update_info_or_404(request)
+    info = _get_update_info_or_404(request, arch)
     return FileResponse(info["path"], media_type="application/zip", filename=info["file"])

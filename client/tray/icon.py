@@ -41,7 +41,8 @@ MF_STRING, MF_SEPARATOR = 0x0000, 0x0800
 CW_USEDEFAULT = ctypes.c_int(0x80000000).value
 
 # Context-menu command ids.
-ID_OPEN, ID_REFRESH, ID_ABOUT, ID_EXIT = 0xE001, 0xE002, 0xE003, 0xE004
+# 0xE002 was «Обновить» (only redrew the icon, which the 60 s timer does): retired
+ID_OPEN, ID_ABOUT, ID_EXIT = 0xE001, 0xE003, 0xE004
 ID_OWNER = 0xE005  # «Мои данные» (o5 блок F, F11)
 
 _BALLOON_FLAG = {"ok": NIIF_INFO, "warn": NIIF_WARNING, "alert": NIIF_ERROR}
@@ -101,7 +102,6 @@ class TrayIcon:
         self,
         *,
         on_open: Callable[[], None],
-        on_refresh: Callable[[], None],
         on_about: Callable[[], None],
         on_exit: Callable[[], None],
         on_owner: Callable[[], None],
@@ -118,7 +118,6 @@ class TrayIcon:
         self._declare_signatures()  # ctypes defaults to c_int args -> handles overflow
         self._on = {
             ID_OPEN: on_open,
-            ID_REFRESH: on_refresh,
             ID_ABOUT: on_about,
             ID_EXIT: on_exit,
             ID_OWNER: on_owner,
@@ -292,7 +291,6 @@ class TrayIcon:
         u = self._u32
         menu = u.CreatePopupMenu()
         u.AppendMenuW(menu, MF_STRING, ID_OPEN, "Открыть панель")
-        u.AppendMenuW(menu, MF_STRING, ID_REFRESH, "Обновить")
         u.AppendMenuW(menu, MF_STRING, ID_OWNER, "Мои данные")
         u.AppendMenuW(menu, MF_STRING, ID_ABOUT, "О программе")
         u.AppendMenuW(menu, MF_SEPARATOR, 0, None)

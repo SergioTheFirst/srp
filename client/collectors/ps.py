@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess  # nosec B404
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 from client.winflags import NO_WINDOW
 
@@ -33,6 +34,20 @@ _PREAMBLE = (
 _NO_WINDOW = NO_WINDOW
 
 
+# Постамбула (агент 0.3.5): упал последний оператор сниппета ($? = false) -> в stderr
+# уходит FullyQualifiedErrorId последней ошибки, rc остаётся 1. Только язык и .NET --
+# работает, когда модули PowerShell не грузятся (Dietnew: битый .NET в GAC). Преамбула
+# глушит текст ошибок (SilentlyContinue), поэтому без постамбулы stderr пуст. Маркер
+# собран в рантайме: эхо скрипта в CLIXML не должно дать ложный «SRPERR:». Ведущий \n
+# несущий -- иначе хвостовой комментарий сниппета съест постамбулу.
+_POSTAMBLE = (
+    "\nif(-not $?){[Console]::Error.WriteLine('SRP'+'ERR:'+$Error[0].FullyQualifiedErrorId);exit 1}"
+)
+_MARKER = re.compile(r"(?m)^SRPERR:([^\r\n]*)")
+REASON_MAX = 64  # = shared/schema.py SOURCE_REASON_MAX (пин в тестах)
+_REASON_BAD_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
 class PsResult(NamedTuple):
     """Outcome of a PowerShell run.
 
@@ -43,15 +58,38 @@ class PsResult(NamedTuple):
       timeout -- the call exceeded its timeout
       blocked -- an OS error prevented the call (policy / ACL / etc.)
       absent  -- powershell.exe was not found
+    rc / reason -- только для пустого вывода: код выхода и ASCII-токен причины
+      (FQID до запятой или ``rc_<код>``); rc 0 = законная пустота, reason None.
     """
 
     status: str
     data: Any = None
+    rc: Optional[int] = None
+    reason: Optional[str] = None
+
+
+def sanitize_reason(value: Optional[str]) -> Optional[str]:
+    """Токен причины: алфавит ``[A-Za-z0-9_.-]``, не длиннее REASON_MAX; без букв и
+    цифр (кириллица, пусто) -> None. Тот же алфавит чистит сервер."""
+    token = _REASON_BAD_CHARS.sub("_", (value or "").strip())[:REASON_MAX]
+    return token if re.search(r"[A-Za-z0-9]", token) else None
+
+
+def _reason_from(rc: Optional[int], stderr: Optional[bytes]) -> Optional[str]:
+    """Причина пустого вывода: FQID из маркера постамбулы до первой запятой, а без
+    маркера (CLM, parse error, хост упал до скрипта) -- ``rc_<код>``."""
+    if not rc:
+        return None
+    marker = _MARKER.search((stderr or b"").decode("latin-1"))
+    token = sanitize_reason(marker.group(1).split(",", 1)[0]) if marker else None
+    return token or sanitize_reason(f"rc_{rc}")
 
 
 def run_ps(script: str, timeout: int = 30) -> PsResult:
     """Execute *script* in PowerShell; return a PsResult (status + parsed JSON)."""
-    encoded = base64.b64encode((_PREAMBLE + script).encode("utf-16-le")).decode("ascii")
+    encoded = base64.b64encode((_PREAMBLE + script + _POSTAMBLE).encode("utf-16-le")).decode(
+        "ascii"
+    )
     try:
         # B603/B607: static argv, no shell; "powershell" resolved from PATH, no user input.
         proc = subprocess.run(  # nosec B603 B607
@@ -77,7 +115,8 @@ def run_ps(script: str, timeout: int = 30) -> PsResult:
 
     out = proc.stdout.decode("utf-8", errors="replace").strip()
     if not out:
-        return PsResult("empty")
+        rc = proc.returncode
+        return PsResult("empty", rc=rc, reason=_reason_from(rc, proc.stderr))
     try:
         return PsResult("ok", json.loads(out))
     except json.JSONDecodeError:

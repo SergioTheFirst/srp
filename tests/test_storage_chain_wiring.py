@@ -20,6 +20,8 @@ from server.analytics.storage import compute_storage_risk
 pytestmark = pytest.mark.unit
 
 _NOW = datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc)
+# calib D9: only a WER BugCheck 1001 completes stage 3 (KP41/6008 = power loss).
+_BUGCHECK = "Microsoft-Windows-WER-SystemErrorReporting"
 
 
 def _event(source, event_id, days_ago):
@@ -45,7 +47,7 @@ def test_chain_alone_never_overrides_full_unknown_gate():
     """A device with genuinely zero SMART fields anywhere stays UNKNOWN even
     with a real stage-3 chain -- errchain is R-side evidence for a reporting
     disk, never a replacement for missing telemetry (К5)."""
-    events = [_event("disk", 51, 10), _event("System", 41, 5)]
+    events = [_event("disk", 51, 10), _event(_BUGCHECK, 1001, 5)]
     chain = analyze_events(events, now=_NOW)
     assert chain.stage == 3
     no_smart_disk = {"disk": "PhysicalDisk0", "media_type": "SSD"}
@@ -58,7 +60,7 @@ def test_chain_stage3_with_clean_smart_caps_axis_at_watch():
     """SMART reports (has_smart passes) but nothing on it is actually bad;
     stage-3 chain evidence alone must still cap the axis at watch, never bad
     (a pure event-log signal is a suspicion, not a verdict -- T2.2)."""
-    events = [_event("disk", 51, 10), _event("System", 41, 5)]
+    events = [_event("disk", 51, 10), _event(_BUGCHECK, 1001, 5)]
     chain = analyze_events(events, now=_NOW)
     assert chain.stage == 3
     clean_disk = _disk(temperature_c=20.0)  # has_smart=True, but no rule fires on 20C
@@ -70,7 +72,7 @@ def test_chain_stage3_with_clean_smart_caps_axis_at_watch():
 def test_chain_stage3_with_real_smart_defect_matches_fake_chain_pin():
     """Must reproduce test_storage_engine_v3.py's _FakeChain(stage=3) pin
     (value == 70.0) exactly when driven by a real analyzed chain instead."""
-    events = [_event("disk", 51, 10), _event("System", 41, 5)]
+    events = [_event("disk", 51, 10), _event(_BUGCHECK, 1001, 5)]
     chain = analyze_events(events, now=_NOW)
     s = compute_storage_risk(_hist([_disk(nvme_media_errors=1)]), None, chain=chain)
     coords = _coords(s)

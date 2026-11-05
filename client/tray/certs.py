@@ -408,6 +408,13 @@ def query_certs(
     res = run_ps_fn(_CERT_SCRIPT, timeout)
     if res.status == "ok":
         return _certs_from_obj(res.data)
-    if res.status == "empty":
-        return []
+    if res.status == "empty" and res.reason in _EMPTY_STORE_REASONS:
+        return []  # хранилище пусто (rc 0) или его нет у свежего профиля -- факт
     return None
+
+
+# 0.3.5: «сертификата нет» -- ТОЛЬКО при честно пустом или отсутствующем хранилище.
+# Любая другая причина пустого вывода (не грузятся модули, нет провайдера Cert:,
+# процесс упал) -- UNKNOWN: иначе ложная тревога при tray_require_cert и затирание
+# спула пустым списком (UNKNOWN over false confidence; ревью 2026-10-24).
+_EMPTY_STORE_REASONS = frozenset({None, "PathNotFound", "ItemNotFound"})

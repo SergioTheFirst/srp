@@ -88,6 +88,17 @@ def test_storage_risk_reflects_ssd_wear():
     assert "Износ SSD" in labels
 
 
+@pytest.mark.parametrize(("sec", "stalled"), [(0.0, False), (0.5, False), (1.0, True)])
+def test_storage_latency_factor_is_an_io_stall_only(sec: float, stalled: bool) -> None:
+    """H9: disk_read_sec arrives in whole seconds -- the 0.9 factor is a stall of >= 1 s;
+    the old 30 ms threshold fired on nothing but a stall anyway."""
+    hb = {**healthy("heartbeat"), "disk_read_sec": sec}
+    r = compute_risk(healthy("inventory"), healthy("historical"), hb)
+    storage = next(c for c in r["classes"] if c["name"] == "storage")
+    hits = [f for f in storage["factors"] if f["label"].startswith("Зависание чтения диска")]
+    assert [f["weight"] for f in hits] == ([0.9] if stalled else [])
+
+
 def test_storage_risk_ignores_unvalidated_disks_beyond_first():
     """P2-1: semantic validation (validate_storage_item, via
     pipeline._extract_reading) only ever checks storage[0]. bayesian._storage's
@@ -101,24 +112,24 @@ def test_storage_risk_ignores_unvalidated_disks_beyond_first():
     see stoperrors.md P2-1 addendum.)"""
     hist = {
         "storage": [
-            {"disk": "SSD0", "wear_pct": 0, "reallocated_sectors": 0, "power_on_hours": 100},
-            {"disk": "HDD1", "reallocated_sectors": 999999},  # unvalidated -- must be ignored
+            {"disk": "SSD0", "wear_pct": 0, "read_errors_uncorrected": 0, "power_on_hours": 100},
+            {"disk": "HDD1", "read_errors_uncorrected": 999999},  # unvalidated: ignored
         ]
     }
     r = compute_risk(None, hist, None)
     storage = next(c for c in r["classes"] if c["name"] == "storage")
     labels = " ".join(f["label"] for f in storage["factors"])
-    assert "Переназначено секторов" not in labels
+    assert "Накопленные ошибки I/O" not in labels
 
 
 # --------------------------------------------------------------------------- #
 # D6 enforcement: KP41 and WHEA must not drive risk independently
 # --------------------------------------------------------------------------- #
 def test_kp41_alone_does_not_drive_power_thermal():
-    """KP41 without a confirmed anchor (throttle / dirty-shutdown) must not
+    """KP41 without a confirmed anchor (throttle under load, D10) must not
     push power_thermal above the 'low' level (D6: specificity ≈ 0)."""
     hist = {"kernel_power_41_30d": 10, "dirty_shutdowns_30d": 0}
-    # cpu_perf_pct = 100 → no throttle anchor; ds = 0 → no dirty-shutdown anchor
+    # cpu_perf_pct = 100 → no throttle anchor (6008 never anchors KP41 since D10)
     r = compute_risk(None, hist, {"cpu_perf_pct": 100.0})
     power_thermal = next(c for c in r["classes"] if c["name"] == "power_thermal")
     assert power_thermal["level"] == "low", (
@@ -130,7 +141,8 @@ def test_kp41_enhances_when_anchor_present():
     """KP41 IS allowed to amplify risk when an anchor signal (throttle) exists."""
     hist_no_kp41 = {"dirty_shutdowns_30d": 0}
     hist_with_kp41 = {"kernel_power_41_30d": 8, "dirty_shutdowns_30d": 0}
-    hb_throttled = {"cpu_perf_pct": 70.0}
+    # D10: low cpu_perf_pct is throttling only under load (idle SpeedStep is not).
+    hb_throttled = {"cpu_pct": 80.0, "cpu_perf_pct": 70.0}
     r_no = compute_risk(None, hist_no_kp41, hb_throttled)
     r_kp = compute_risk(None, hist_with_kp41, hb_throttled)
     pt_no = next(c for c in r_no["classes"] if c["name"] == "power_thermal")
@@ -206,7 +218,8 @@ def test_no_data_yields_priors_only():
 # just cosmetically label it after the fact.
 # --------------------------------------------------------------------------- #
 _HIGH_RISK_HIST = {
-    "storage": [{"disk": "d0", "wear_pct": 90, "reallocated_sectors": 500}],
+    # H10: reallocated_sectors is not sent by the agent (the dead factor is gone)
+    "storage": [{"disk": "d0", "wear_pct": 90, "read_errors_uncorrected": 5}],
     "reliability_stability_index": 2.0,
     "bugchecks_30d": 8,
 }

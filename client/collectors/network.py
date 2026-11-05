@@ -496,7 +496,7 @@ def collect_network(active_scan: bool = False) -> CollectorResult:
     result = run_ps(_NET_SCRIPT, timeout=60)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed([NETWORK], status))
+        return CollectorResult(None, failed([NETWORK], status, result.reason))
 
     d = result.data
     adapters = [a for a in (_parse_adapter(x) for x in as_list(d.get("adapters"))) if a]

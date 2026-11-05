@@ -368,6 +368,21 @@ def test_query_certs_ps_failure_is_unknown(status: str) -> None:
     assert cz.query_certs(run_ps_fn=_fake_ps(PsResult(status))) is None
 
 
+@pytest.mark.parametrize(
+    "reason", ["CommandNotFoundException", "CouldNotAutoloadMatchingModule", "rc_1", "DriveNotFound"]
+)
+def test_query_certs_broken_powershell_is_unknown_not_no_cert(reason: str) -> None:
+    """0.3.5: пусто из-за сломанного PS -- UNKNOWN, а не «сертификата нет» (ложная тревога)."""
+    broken = PsResult("empty", None, 1, reason)
+    assert cz.query_certs(run_ps_fn=_fake_ps(broken)) is None
+
+
+def test_query_certs_missing_store_is_still_no_cert() -> None:
+    """Нет хранилища My у свежего профиля -- это факт, напоминание о сертификате остаётся."""
+    missing = PsResult("empty", None, 1, "PathNotFound")
+    assert cz.query_certs(run_ps_fn=_fake_ps(missing)) == []
+
+
 # --------------------------------------------------------------------------- #
 # privacy + language-independence pins on the PowerShell snippet
 # --------------------------------------------------------------------------- #

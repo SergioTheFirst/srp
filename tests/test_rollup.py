@@ -401,16 +401,18 @@ def test_event_storm_is_rolled_up_before_prune(tmp_path) -> None:
     db.init_db(str(tmp_path / "storm.db"))
     did = "storm-dev"
     n = db._retain_ev + 500
+    start = datetime(2026, 3, 1, 10, tzinfo=timezone.utc)
     events = [
         {
-            "ts": "2026-03-01T10:00:00+00:00",
+            # distinct ts, same day: a storm of DISTINCT events (copies are deduplicated)
+            "ts": (start + timedelta(seconds=i)).isoformat(),
             "log": "System",
             "source": "disk",
             "event_id": 7,
             "level": "Error",
             "message": "x",
         }
-        for _ in range(n)
+        for i in range(n)
     ]
     db.store_events(did, events, received_at="2026-03-01T10:00:00+00:00")
 
@@ -468,18 +470,22 @@ def test_rolled_up_storm_survives_later_envelope(tmp_path) -> None:
 
     db.init_db(str(tmp_path / "h1.db"))
     ev = {
-        "ts": "2026-03-01T10:00:00+00:00",
         "log": "System",
         "source": "disk",
         "event_id": 7,
         "level": "Error",
         "message": "x",
     }
+    start = datetime(2026, 3, 1, 10, tzinfo=timezone.utc)
+
+    def _at(i: int) -> dict:  # distinct ts: a re-sent copy would be skipped, not recounted
+        return {**ev, "ts": (start + timedelta(seconds=i)).isoformat()}
+
     n = db._retain_ev + 500
-    db.store_events("h1", [dict(ev) for _ in range(n)], received_at="2026-03-01T10:00:00+00:00")
+    db.store_events("h1", [_at(i) for i in range(n)], received_at="2026-03-01T10:00:00+00:00")
     assert sum(r["n"] for r in db.get_event_rollups("h1", 3650)) == n
 
-    db.store_events("h1", [dict(ev)], received_at="2026-03-01T11:00:00+00:00")
+    db.store_events("h1", [_at(n)], received_at="2026-03-01T11:00:00+00:00")
     total = sum(r["n"] for r in db.get_event_rollups("h1", 3650))
     assert total >= n, f"свёртка просела до {total}: следующий конверт стёр шторм"
 

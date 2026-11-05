@@ -138,6 +138,22 @@ th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity: 1; }
 }
 .toolbtn:hover { border-color: var(--bad); color: var(--bad); }
 
+/* ── Ack dialog (H18) ───────────────────────────────────────────────────── */
+.ackdlg {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-card);
+  padding: 16px; width: min(420px, calc(100vw - 32px));
+}
+.ackdlg::backdrop { background: rgba(0,0,0,.5); }
+.ackdlg-title { margin: 0 0 12px; font-weight: 600; }
+.ackdlg-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;
+  font-size: 13px; color: var(--muted); }
+.ackdlg select, .ackdlg textarea {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 6px 8px;
+}
+.ackdlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* ── Compact table rows ─────────────────────────────────────────────────── */
 table th { padding: 5px 8px; }
 table td { padding: 4px 8px; }
@@ -364,6 +380,31 @@ tbody td .trend-up {
 
 <div id="fleet">{% include "_fleet_body.html" %}</div>
 
+{# Квитирование с исходом (спека 2026-10-30 H18). Вне #fleet: опрос перерисовывает
+   только его. Значения — машинные (English), подписи — по-русски. #}
+<dialog id="ackdlg" class="ackdlg">
+  <form method="dialog">
+    <p class="ackdlg-title">Квитирование</p>
+    <label class="ackdlg-row">Исход проверки
+      <select name="outcome">
+        <option value="">без исхода — только заметка</option>
+        <option value="confirmed_failure">подтверждён отказ</option>
+        <option value="preventive_replacement">заменили по тревоге, отказ не подтверждён</option>
+        <option value="false_alarm">ложная тревога</option>
+        <option value="resolved_software">исправлено в ПО или ОС</option>
+        <option value="unverified">не проверялось</option>
+      </select>
+    </label>
+    <label class="ackdlg-row">Заметка (необязательно)
+      <textarea name="note" maxlength="1000" rows="3"></textarea>
+    </label>
+    <div class="ackdlg-btns">
+      <button class="toolbtn" value="cancel">Отмена</button>
+      <button class="toolbtn" value="ok">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 (function () {
 "use strict";
@@ -546,17 +587,34 @@ fleet.addEventListener("click", function (e) {
   var ack = e.target.closest(".ackbtn");
   if (ack) {
     e.preventDefault();
-    var id   = ack.getAttribute("data-id");
-    var note = window.prompt("Квитирование — заметка (необязательно):", "");
-    if (note === null) return;
-    fetch("/api/v1/devices/" + encodeURIComponent(id) + "/ack", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: note })
-    })
-      .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
-      .catch(function () {});
+    openAck(ack.getAttribute("data-id"));
   }
+});
+
+// ── Квитирование с исходом (H18): исход — в журнал, под админ-токеном ─────
+var ackDlg = document.getElementById("ackdlg");
+function openAck(id) {
+  if (!ackDlg || typeof ackDlg.showModal !== "function") return;
+  ackDlg.dataset.id = id;
+  ackDlg.returnValue = "";  // Esc keeps the last returnValue -> would resend
+  ackDlg.querySelector("form").reset();
+  ackDlg.showModal();
+}
+if (ackDlg) ackDlg.addEventListener("close", function () {
+  if (ackDlg.returnValue !== "ok") return;
+  var form = ackDlg.querySelector("form");
+  var outcome = form.elements.outcome.value;
+  var body = { note: form.elements.note.value };
+  var headers = { "Content-Type": "application/json" };
+  if (outcome) {
+    body.outcome = outcome;
+    headers["x-srp-token"] = adminHeaders()["x-srp-token"];
+  }
+  fetch("/api/v1/devices/" + encodeURIComponent(ackDlg.dataset.id) + "/ack", {
+    method: "POST", headers: headers, body: JSON.stringify(body)
+  })
+    .then(function (r) { if (!r.ok) { denied(r.status); return; } refresh(); })
+    .catch(function () {});
 });
 
 // ── Bulk purge of long-silent ghosts (toolbar; outside the polled #fleet) ──

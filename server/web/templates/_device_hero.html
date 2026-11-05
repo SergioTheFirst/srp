@@ -27,7 +27,10 @@
   <div class="alert-banner alert-warn">⚠ {{ health_stale_msg }}</div>
   {% endif %}
 
-  {# 1. Вердикт словами -- самое важное, крупно, контрастно #}
+  {# 1. Вердикт словами -- самое важное, крупно, контрастно. Действие -- итоговое
+     health.action вердикта (= Zabbix srp.reason, D7: здоровой машине не советуют
+     замену диска из-за полосы оси); action_for(dominant) -- только для старых
+     строк без action. #}
   <div class="hero-verdict">
     <div>
       <span class="hero-kv-l">состояние</span>
@@ -35,7 +38,7 @@
     </div>
     <p class="hero-action">
       <span class="hero-kv-l">главный фактор</span> {{ health.dominant_label }}
-      · <span class="hero-kv-l">что делать</span> {{ action_for(health.dominant) }}
+      · <span class="hero-kv-l">что делать</span> {{ health.action or action_for(health.dominant) }}
     </p>
   </div>
 
@@ -85,8 +88,11 @@
   <div class="axis-blind">⚠ не видно: {{ health.blind_spots|join("; ") }}</div>
   {% endif %}
 
-  {# 5. Чипы: каждое значение подписано, латиницы нет #}
-  {% set horizon_label = {7: "≤7 дней", 30: "≤30 дней", 90: "≤90 дней", 180: "≤180 дней"}.get(health.horizon_days, "не прогнозируется") %}
+  {# 5. Чипы: каждое значение подписано, латиницы нет. Срок (D5): kind 'eta' --
+     прогноз по тренду; 'state', старая строка без horizon_kind и незнакомый
+     kind -- срок реакции по состоянию (не прогноз отказа). #}
+  {% set horizon_bucket = {7: "≤7 дней", 30: "≤30 дней", 90: "≤90 дней", 180: "≤180 дней"}.get(health.horizon_days) %}
+  {% set horizon_label = ("прогноз по тренду: " if health.horizon_kind == "eta" else "срок реакции: ") ~ horizon_bucket if horizon_bucket else "срок реакции: не назначен" %}
   {% set delta = health.delta_7d %}
   {% set delta_cls = "na" if delta is none or delta == 0 else ("good" if delta > 0 else "bad") %}
   {% set delta_arrow = "—" if delta is none else ("▲" if delta > 0 else ("▼" if delta < 0 else "→")) %}
@@ -94,7 +100,7 @@
     <span class="chip accent" title="сводный индекс здоровья: свод повреждений и устойчивости; 0–100, выше = лучше; никогда не заменяет три координаты выше">
       сводный индекс: {{ ("%.0f"|format(health.index)) ~ " из 100" if health.index is not none else "—" }}
     </span>
-    <span class="chip {{ band_class(health.band) }}" title="{{ health.horizon_reason or 'прогноз окна до ухудшения состояния' }}">окно до ухудшения: {{ horizon_label }}</span>
+    <span class="chip {{ band_class(health.band) }}" title="{{ health.horizon_reason or 'срок реакции назначается по состоянию — это не прогноз отказа' }}">{{ horizon_label }}</span>
     <span class="chip {{ delta_cls }}" title="изменение сводного индекса за 7 дней">за 7 дней: {{ delta_arrow }}{% if delta is not none %} {{ "%.1f"|format(delta) }}{% endif %}</span>
     {% if health.confidence and health.confidence != "unknown" %}
     <span class="chip na" title="{{ conf_tip }}">уверенность: {{ conf_ru.get(health.confidence, health.confidence) }}</span>

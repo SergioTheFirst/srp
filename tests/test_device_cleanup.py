@@ -77,7 +77,9 @@ _FK_LINK_TABLES = {"net_devices"}
 
 def test_device_tables_constant_matches_schema(db_init):
     """Every table with a device_id column is either registered for row-deletion
-    (_DEVICE_TABLES) or a documented soft-FK link table cleared to NULL."""
+    (_DEVICE_TABLES), a documented soft-FK link table cleared to NULL, or a
+    pseudonymous health-journal table (_PSEUDONYMOUS_TABLES, spec 2026-10-30 H18:
+    it outlives the device with the operator note cleared)."""
     db = db_init
     with db._connect() as conn:
         tables = [
@@ -91,8 +93,10 @@ def test_device_tables_constant_matches_schema(db_init):
             for t in tables
             if any(c["name"] == "device_id" for c in conn.execute(f"PRAGMA table_info({t})"))
         }
-    assert with_device_col - _FK_LINK_TABLES == set(db._DEVICE_TABLES)
-    assert with_device_col >= _FK_LINK_TABLES  # the exception really carries the column
+    pseudonymous = set(db._PSEUDONYMOUS_TABLES)
+    assert with_device_col - _FK_LINK_TABLES - pseudonymous == set(db._DEVICE_TABLES)
+    assert with_device_col >= _FK_LINK_TABLES | pseudonymous  # exceptions carry the column
+    assert not pseudonymous & set(db._DEVICE_TABLES)  # never both deleted and anonymised
 
 
 def test_ingest_never_deletes_a_same_hostname_twin(db_init):

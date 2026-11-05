@@ -13,23 +13,29 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from shared.schema import CONTRACT_VERSION, Envelope, is_contract_compatible, parse_payload
 
-from server import db
+from server import db, health_journal
+from server.analytics.disk_bus import fixed_disks, is_removable_disk
 from server.analytics.disk_fill import compute_disk_fill_risk
 from server.analytics.errchain import analyze_events
 from server.analytics.fleet_anomaly import compute_fleet_anomaly_risk
 from server.analytics.health import compute_health
+from server.analytics.health_dominant import storage_rung
+from server.analytics.health_hold import PHANTOM_MISSING, disk_view, phantom
 from server.analytics.network_risk import compute_network_risk
 from server.analytics.os_degradation import compute_os_degradation_risk
 from server.analytics.software_aging import compute_software_aging_risk
+from server.analytics.stability import assess_stability
 from server.analytics.storage import compute_storage_risk, worst_disk_key
 from server.analytics.trends import compute_trends, trajectory_risk_score, trend_to_dict
 from server.scoring import (
+    Score100,
     compute_day1_score100,
     compute_day1_scores,
     compute_risk,
     legacy_value,
     score_to_dict,
 )
+from server.scoring.scores import boot_threshold_ms
 from server.trust import (
     DOMAIN_GATING_SOURCES,
     DOMAIN_SOURCES,
@@ -63,7 +69,7 @@ _KNOWN_TRUST_SOURCES = (
 
 # W4.1: how much append-only history to feed the trend engine. Generous enough
 # for a real slope, capped so one noisy device cannot make a query unbounded.
-_TREND_HISTORY_LIMIT = 200
+_TREND_HISTORY_LIMIT = 800  # 0.3.8: 1 ч цикл -> ~33 дня, как 200 при 4 ч
 
 # ssd3 Ф3 (T3.3): errchain needs a wider window than the trend engine (30d of
 # raw events, not just a slope's worth of points) but still capped per device.
@@ -100,13 +106,13 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
 
 
 # ssd3 Ф6 (T6.2): delta_7d = current health index minus the index of the first
-# stored row older than 7 days. Reuses _TREND_HISTORY_LIMIT (200) for the fetch.
+# stored row older than 7 days. Reuses _TREND_HISTORY_LIMIT (800) for the fetch.
 # Cadence check (ingest_envelope, ~L459): inventory/historical/heartbeat each
 # trigger their own recompute_scores call, and client/config.py sends all three
-# on the same 14400s (4h) cycle -- so ~3 new score rows land per 4h, not 1
-# (events/print_jobs/liveness/update_status never rescore). That is ~18
-# rows/day, so 200 rows reaches back ~11 days: comfortably past the 7-day mark
-# (scores retention is 5000, so row depth is never the limiting cap here).
+# on the same 3600s (1h, agent 0.3.8) cycle -- so ~3 new score rows land per hour,
+# not 1 (events/print_jobs/liveness/update_status never rescore). That is ~72
+# rows/day, so 800 rows reaches back ~11 days: comfortably past the 7-day mark
+# (scores retention is 20000, so row depth is never the limiting cap here).
 _HEALTH_DELTA_DAYS = 7
 
 
@@ -165,14 +171,12 @@ def _extract_reading(source: str, payload: dict) -> dict:
     validate_source will mark it UNCHECKED, which can never become SUSPECT.
     """
     if source == "storage_reliability":
-        # v1: validates the first disk only; multi-disk coverage deferred.
-        items = payload.get("storage") or [{}]
-        return items[0] if items else {}
+        # v1: validates the first FIXED disk only (0.3.4: never USB/1394); multi-disk deferred.
+        return (fixed_disks(payload.get("storage")) or [{}])[0]
     if source == "smart":
         # Deep-SMART decision-material slice (ssd3 Ф1): same first-disk row as
         # storage_reliability, narrowed to the fields validate_smart_item checks.
-        items = payload.get("storage") or [{}]
-        item = items[0] if items else {}
+        item = (fixed_disks(payload.get("storage")) or [{}])[0]
         return {
             "serial_hash": item.get("serial_hash"),
             "temperature_c": item.get("temperature_c"),
@@ -245,6 +249,7 @@ def _build_source_trust_map(device_id: str) -> dict[str, SourceTrust]:
             collector_status=CollectorStatus(row["collector_status"]),
             semantic_status=SemanticStatus(row["semantic_status"]),
             reason=row["reason"] or None,
+            collector_reason=row.get("collector_reason") or None,
         )
     return result
 
@@ -282,6 +287,7 @@ def build_trust_blob(
             "state": st.state.value,
             "weight": st.weight,
             "reason": st.reason,
+            "collector_reason": st.collector_reason,
             # 3e: a source that delivered before (has a last-good) but now fails is
             # "newly-blocked" (regressed) -- distinct from a source never seen.
             "regressed": st.collector_status in _COLLECTOR_FAIL and src in have_last_good,
@@ -356,6 +362,7 @@ def evaluate_trust(
             reason or "",
             ts,
             received_at if has_evidence else None,
+            health.get("reason"),
         )
 
         if has_evidence and reading:
@@ -391,7 +398,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     # W0.2: stamp server receipt + clock drift; never trust the client clock for
     # staleness / trends / windows. ts is retained as the client-reported time.
     received_at = _now_iso()
-    drift = _clock_drift_sec(received_at, ts)
+    drift = _clock_drift_sec(received_at, env.sent_ts or ts)  # 0.3.4: when sent, not collected
     if env.msg_type == "inventory":
         inv = env.payload
         db.upsert_device(
@@ -415,7 +422,12 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             clock_drift_sec=drift,
             envelope_ts=ts,
         )
-        db.store_inventory(did, ts, inv)
+        # Сбой inventory у агента приходит как payload {} + identity timeout/
+        # empty/blocked: не затираем им прошлую удачную инвентаризацию (сбой и
+        # так виден в строке identity). Первый контакт пишем и пустым -- ПК
+        # сразу получает оценку и значок с причиной. 2026-10-14.
+        if inv or db.get_inventory(did) is None:
+            db.store_inventory(did, ts, inv)
     elif env.msg_type == "historical":
         db.touch_device(
             did,
@@ -562,6 +574,8 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
             env.payload.get("checked_at"),
             env.payload.get("available_version"),
         )
+    if env.agent_arch:  # 0.3.6: x86 агенту дашборд сверяет версию с x86-пакетом
+        db.set_agent_arch(did, env.agent_arch)
 
     # liveness/update_status carry no telemetry by contract (LivenessPayload =
     # {alive}; UpdateStatusPayload = self-update state) and must never enter trust
@@ -571,7 +585,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
     if env.msg_type not in _NO_TRUST_MSG_TYPES and env.source_health:
         # Convert SourceHealth pydantic objects to plain dicts for evaluate_trust
         raw_health = {
-            src: {"status": sh.status, "collected_at": sh.collected_at}
+            src: {"status": sh.status, "collected_at": sh.collected_at, "reason": sh.reason}
             for src, sh in env.source_health.items()
         }
         evaluate_trust(did, env.payload, raw_health, ts, received_at)
@@ -601,7 +615,7 @@ def ingest_envelope(env: Envelope) -> dict[str, Any]:
         # at the HTTP boundary (server/api.py, 406) before reaching this function,
         # so in practice this is always True here; field kept for transparency.
         "server_contract_version": CONTRACT_VERSION,
-        "contract_compatible": is_contract_compatible(env.agent_version),
+        "contract_compatible": is_contract_compatible(env.spoken_contract),
     }
 
 
@@ -662,9 +676,110 @@ def _blank_untrusted_inputs(
     return hb2, hist2
 
 
+def _cap_phantom_axis(score100: dict[str, Any], prev_health: Optional[dict]) -> None:
+    """H5 on the stored axis itself (review 3e): a phantom's storage card must not read
+    «высокая» while the verdict says low -- D, R and the device page all read it."""
+    axis = score100.get("storage_risk")
+    if isinstance(axis, dict) and phantom(disk_view(axis), prev_health):
+        missing = [*(axis.get("missing_evidence") or []), PHANTOM_MISSING]
+        score100["storage_risk"] = {**axis, "confidence": "low", "missing_evidence": missing}
+
+
+def _events_delivered(trust: Optional[dict]) -> Optional[bool]:
+    """The events collector reported (spec H4): "ok", or EMPTY without a failure reason --
+    a clean journal (the script always prints JSON on success). EMPTY with a reason
+    (PowerShell printed nothing, 0.3.5 token) and PARTIAL (unparsable output -- for events
+    only a failed run) arrive payload-less like timeout/blocked/absent: False. None when
+    the device never sent the source."""
+    sources = (trust or {}).get("sources")
+    src = sources.get("events") if isinstance(sources, dict) else None
+    if not isinstance(src, dict):
+        return None
+    status = src.get("collector_status")
+    # ponytail: pre-0.3.5 agents send no reason token -- their failed EMPTY reads as clean
+    return status == "ok" or (status == "empty" and not src.get("collector_reason"))
+
+
+def _storage_source(trust: Optional[dict]) -> Optional[dict[str, Any]]:
+    """Trust of storage_reliability for health_hold.blind_cause (spec H1); None = no hint.
+
+    historical_ran: the same historical script returned reliability or boot data, so an
+    'empty' storage_reliability means the disks answered nothing -- not that PowerShell
+    printed nothing (then every source of that script reads 'empty')."""
+    sources = (trust or {}).get("sources")
+    if not isinstance(sources, dict):
+        return None
+    src = sources.get("storage_reliability")
+    if not isinstance(src, dict):
+        return None
+    ran = any(
+        isinstance(sources.get(s), dict) and sources[s].get("collector_status") in ("ok", "partial")
+        for s in ("reliability", "boot_time")
+    )
+    return {
+        "state": src.get("state"),
+        "collector_status": src.get("collector_status"),
+        "historical_ran": ran,
+    }
+
+
+def _storage_axis(
+    storage: Score100, inv: Optional[dict], trust: Optional[dict] = None
+) -> dict[str, Any]:
+    """The storage axis health reads: coords promoted to a top-level sibling (ssd3 Ф2)
+    and the disks Get-PhysicalDisk lists added to the lineage (calib D3: a disk the agent
+    drops from its SMART rows while still installed is blind). Each is named like its
+    disk id (storage._disk_id): serial_hash, else the FriendlyName. The storage_reliability
+    trust goes in as storage_source (H1: why a blind cycle is blind). Additive keys."""
+    axis = score_to_dict(storage)
+    lineage = dict(axis["source_lineage"])
+    disks = (inv or {}).get("disks")
+    if isinstance(disks, list):  # 0.3.4: a plugged-in USB disk is never "listed but unscored"
+        ids = (d.get("serial_hash") or d.get("model") for d in fixed_disks(disks))
+        lineage["inventory_disk_ids"] = [i for i in ids if i]
+    source = _storage_source(trust)
+    if source and lineage.get("identity") != "untrusted":  # untrusted identity: no hint (H1)
+        lineage["storage_source"] = source
+    coords = lineage.get("coords", {"damage": 0.0, "resilience_loss": 0.0, "flags": []})
+    return {**axis, "source_lineage": lineage, "coords": coords}
+
+
+def _disk_since(device_id: str, inv: Optional[dict]) -> Optional[datetime]:
+    """X4: since when the storage events belong to the disk installed now. Only a PC with
+    ONE fixed disk can tell -- the chain is device-wide (spec 2026-10-09 §9.1, F7g/F7h) --
+    and only after a replacement: another fixed disk reported before this disk's first
+    reading. A disk put back, or the survivor of a former two-disk PC, reported from the
+    start, so its own history stays (review 2026-11-02); so does a freshly enrolled PC's
+    first 24-h event window. A series cut by the retention cap hides the true first
+    reading -- no cut.
+    ponytail: the new disk's own errors logged before its first historical (minutes after
+    boot) are cut too; take the cut from heartbeat uptime if that ever matters."""
+    disks = fixed_disks((inv or {}).get("disks"))
+    key = disks[0].get("serial_hash") if len(disks) == 1 else None
+    if not key:
+        return None
+    spans = {s["disk_key"]: s for s in db.get_disk_key_spans(device_id)}
+    own = spans.get(key)
+    first = _parse_iso(own["first"]) if own and not own["truncated"] else None
+    if first is None:
+        return None
+    # a predecessor is another REAL disk: a serial-less fallback key may be this very drive
+    # reported by an older agent, and a USB stick is no PC disk
+    replaced = any(
+        k != key
+        and s["last"].get("serial_hash")
+        and not is_removable_disk(s["last"])
+        and (_parse_iso(s["first"]) or first) < first
+        for k, s in spans.items()
+    )
+    return first if replaced else None
+
+
 def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     inv = db.get_inventory(device_id)
     hist = db.get_historical(device_id)
+    if hist:  # 0.3.4: USB/1394 disks never score; the stored row stays raw for the card
+        hist = {**hist, "storage": fixed_disks(hist.get("storage"))}
     hbs = db.get_recent_heartbeats(device_id, limit=1)
     hb = hbs[0] if hbs else None
     if inv is None and hist is None and hb is None:
@@ -677,7 +792,11 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         device_trust = _device_trust(trust)
 
     day1_hb, day1_hist = _blank_untrusted_inputs((trust or {}).get("domains", {}), hb, hist)
-    day1 = compute_day1_scores(inv, day1_hist, day1_hb)
+    # H15: the model cohort is read before day-1 -- the slow-boot threshold is relative
+    _model, _site = db.get_device_model_site(device_id)
+    cohort_stats = db.get_fleet_cohort_stats(_model, _site, exclude_device_id=device_id)
+    boot_t = boot_threshold_ms(cohort_stats)
+    day1 = compute_day1_scores(inv, day1_hist, day1_hb, boot_threshold=boot_t)
 
     # P0-5 (stoperrors.md): compute_risk needs the REAL gate, not a postfactum
     # label -- a gate-failed domain must never produce a number in the first
@@ -709,10 +828,10 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     # untrusted identity withholds; insufficient history -> UNKNOWN (no fake ETA).
     hist_series = db.get_historical_series(device_id, limit=_TREND_HISTORY_LIMIT)
     hb_series = db.get_recent_heartbeats(device_id, limit=_TREND_HISTORY_LIMIT)
-    # ssd3 Ф2: pick the worst disk from D-points of its LATEST reading alone
-    # (no series yet -- breaks the "trends need the engine, the engine needs
-    # the worst disk" cycle), THEN fetch its own series, THEN compute trends
-    # over it, THEN hand both to the engine. Order is fixed (§1.6/T2.2).
+    # ssd3 Ф2: pick the worst disk by the D+R points of its LATEST reading alone,
+    # the engine's own ranking key (no series yet -- breaks the "trends need the
+    # engine, the engine needs the worst disk" cycle), THEN fetch its own series,
+    # THEN compute trends over it, THEN hand both to the engine. Order is fixed.
     worst_key = worst_disk_key(hist)
     disk_series = (
         db.get_disk_series(device_id, worst_key, limit=_TREND_HISTORY_LIMIT) if worst_key else None
@@ -727,7 +846,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     chain_events = db.get_recent_events(device_id, limit=_ERRCHAIN_EVENT_LIMIT)
     rollup_counts = db.get_event_rollups(device_id, _ROLLUP_LOOKBACK_DAYS)
     chain = analyze_events(
-        chain_events, now=datetime.now(timezone.utc), rollup_counts=rollup_counts
+        chain_events,
+        now=datetime.now(timezone.utc),
+        rollup_counts=rollup_counts,
+        delivered=_events_delivered(trust),
+        dirty_shutdowns=(hist or {}).get("dirty_shutdowns_30d"),  # H6: the power cause
+        disk_since=_disk_since(device_id, inv),  # X4: the replaced only disk leaves the chain
     )
     rule_stats = db.get_rule_stats()
     # o5-E1: доменные состояния для гейтов движков -- ровно как для сетевого ниже.
@@ -755,10 +879,11 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         domain_state=disk_fill_domain.get("state"),
     )
     os_degradation_risk = compute_os_degradation_risk(
-        hist, device_trust=device_trust, domain_state=os_domain.get("state")
+        hist,
+        device_trust=device_trust,
+        domain_state=os_domain.get("state"),
+        boot_threshold=boot_t,
     )
-    _model, _site = db.get_device_model_site(device_id)
-    cohort_stats = db.get_fleet_cohort_stats(_model, _site)
     fleet_anomaly_risk = compute_fleet_anomaly_risk(cohort_stats, device_trust=device_trust)
     # Phase 2: per-device axis only (own data); the subnet anomaly is read-side (D7).
     net_domain = ((trust or {}).get("domains") or {}).get("network") or {}
@@ -783,6 +908,12 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         "disk_fill_risk": disk_fill_risk.value,
         "software_aging_risk": software_aging_risk.value,
     }
+    # H10: the serialised storage axis and trends exist before the ranker, which
+    # floors the storage class at the rung the storage alone sets in the verdict
+    storage_axis = _storage_axis(storage_risk, inv, trust)
+    trend_dicts = {name: trend_to_dict(t) for name, t in trends.items()}
+    prev_rows = db.get_score_series(device_id, limit=1)
+    prev_health = prev_rows[0]["risk"].get("health") if prev_rows else None
     risk = compute_risk(
         inv,
         hist,
@@ -791,6 +922,7 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         app_hang_count_30d=chain.counts.get("app_hang", 0),
         domain_trust=class_trust,
         device_untrusted=device_trust == "untrusted",
+        storage_floor_state=storage_rung(storage_axis, trend_dicts, asdict(chain), prev_health),
     )
 
     risk_block: dict[str, Any] = {
@@ -806,6 +938,15 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         _annotate_class_trust(risk["classes"], domains)
         risk_block["domains"] = domains
         risk_block["device_trust"] = device_trust
+        identity = trust.get("sources", {}).get("identity")
+        if identity:
+            # Аддитивно (2026-10-14): дашборд называет причину untrusted.
+            risk_block["identity_trust"] = {
+                "state": identity.get("state"),
+                "collector_status": identity.get("collector_status"),
+            }
+            if identity.get("collector_reason"):  # 0.3.5: причина сбоя PS (ключ аддитивный)
+                risk_block["identity_trust"]["collector_reason"] = identity["collector_reason"]
         if device_trust == "untrusted":
             for c in risk["classes"]:
                 c["trust"] = "unknown"
@@ -815,13 +956,9 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
 
     risk_block["score100"] = {name: score_to_dict(s) for name, s in score100.items()}
     risk_block["score100"]["trajectory_risk"] = score_to_dict(trajectory)
-    risk_block["score100"]["storage_risk"] = score_to_dict(storage_risk)
-    # ssd3 Ф2: promote the coordinate tags (D/R) out of source_lineage to a
-    # top-level sibling key -- additive, old readers of storage_risk never
-    # look for "coords" and are unaffected.
-    risk_block["score100"]["storage_risk"]["coords"] = storage_risk.source_lineage.get(
-        "coords", {"damage": 0.0, "resilience_loss": 0.0, "flags": []}
-    )
+    # ssd3 Ф2: coords promoted to a top-level sibling key, plus the inventory disk
+    # ids (calib) -- additive, old readers of storage_risk never look for either.
+    risk_block["score100"]["storage_risk"] = storage_axis
     risk_block["score100"]["disk_fill_risk"] = score_to_dict(disk_fill_risk)
     risk_block["score100"]["os_degradation_risk"] = score_to_dict(os_degradation_risk)
     risk_block["score100"]["fleet_anomaly_risk"] = score_to_dict(fleet_anomaly_risk)
@@ -832,15 +969,25 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
     risk_block["score100"]["software_aging_risk"]["coords"] = (
         software_aging_risk.source_lineage.get("coords", {"flags": []})
     )
-    risk_block["trajectory"] = {name: trend_to_dict(t) for name, t in trends.items()}
+    risk_block["trajectory"] = trend_dicts
 
     # ssd3 Ф6 (T6.2): assemble the coordinate verdict from the axes above and
     # persist it inside the risk blob (no schema/table change). prev_health = the
     # health block of the last stored row (ratchet input; None on first recompute).
     # cohort_stats (fetched above for the fleet-anomaly axis) now also carries
     # boot_p90_ms, the field health.py's cohort context-factor reads.
-    prev_rows = db.get_score_series(device_id, limit=1)
-    prev_health = prev_rows[0]["risk"].get("health") if prev_rows else None
+    _cap_phantom_axis(risk_block["score100"], prev_health)
+    # H13: the BSOD rung by recurrence -- off for an untrusted identity
+    stability = (
+        None
+        if device_trust == "untrusted"
+        else assess_stability(
+            chain.bugcheck_days,
+            datetime.now(timezone.utc),
+            cohort=cohort_stats,
+            last_patch_date=(inv or {}).get("last_patch_date"),
+        )
+    )
     verdict = compute_health(
         score100_axes=risk_block["score100"],
         bayes=risk,
@@ -848,13 +995,13 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         errchain=risk_block["errchain"],
         cohort=cohort_stats,
         prev_health=prev_health,
+        now=datetime.now(timezone.utc),
+        stability=stability,
     )
-    # worst_disk: same source health.py's own compute_health reads for cur_disk
-    # (score100_axes["storage_risk"]["source_lineage"]["worst_disk"]) -- not the
-    # simpler worst_disk_key(hist) pre-pass above, which can disagree with the
-    # storage engine's own (more authoritative) pick. Persisting it here is what
-    # lets the ratchet's disk-replacement branch compare prev vs. current on the
-    # next recompute (health.py module docstring; previously always None/dormant).
+    # worst_disk: the storage engine's own pick (source_lineage.worst_disk), kept
+    # only for the one-time name rule on rows stored before disk ids existed --
+    # health_hold now persists worst_disk_id / disk_ids itself and compares those
+    # for the disk-replacement reset (same-model replacements included).
     worst_disk = risk_block["score100"]["storage_risk"].get("source_lineage", {}).get("worst_disk")
     risk_block["health"] = {
         **asdict(verdict),
@@ -869,5 +1016,8 @@ def recompute_scores(device_id: str) -> Optional[dict[str, Any]]:
         "risk_exposure": legacy_value(score100["risk_exposure"]),
         "risk": risk_block,
     }
-    db.store_scores(device_id, _now_iso(), scores)
+    stamp = _now_iso()
+    db.store_scores(device_id, stamp, scores)
+    health_journal.record_transition(device_id, prev_health, risk_block["health"], stamp)
+    health_journal.record_disk_replacement(device_id, risk_block["health"], stamp)
     return scores

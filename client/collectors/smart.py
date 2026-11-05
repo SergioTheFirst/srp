@@ -98,7 +98,10 @@ def parse_ata_smart(blob: bytes) -> dict[str, int]:
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x2D1400
 _PROP_ID, _NVME, _LOG_PAGE = 50, 3, 2
-_QUERY_OFF, _SPSD_LEN, _DATA_LEN = 8, 28, 512
+# STORAGE_PROTOCOL_SPECIFIC_DATA is 10 ULONGs = 40 bytes (ProtocolType .. SubValue4); the
+# data offset must clear it -- 0.3.x sent 28 and stornvme answered nothing on most NVMe
+# PCs (R5: wear/temperature only), while CrystalDiskInfo read the same log page.
+_QUERY_OFF, _SPSD_LEN, _DATA_LEN = 8, 40, 512
 _GENERIC_READ = 0x80000000
 _FILE_SHARE_READ = 0x00000001
 _FILE_SHARE_WRITE = 0x00000002
@@ -136,7 +139,7 @@ def _win32_ioctl(disk_index: int, buf: bytearray) -> Optional[bytes]:
     ``ioctl_fn`` instead, so ``ctypes.windll`` is never touched off-Windows.
     """
 
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateFileW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -170,7 +173,8 @@ def _win32_ioctl(disk_index: int, buf: bytearray) -> Optional[bytes]:
         None,
     )
     if handle == _INVALID_HANDLE_VALUE:
-        return None
+        err = ctypes.get_last_error()
+        raise OSError(0, "CreateFileW", None, err)
     try:
         returned = wintypes.DWORD(0)
         c_buf = (ctypes.c_ubyte * len(buf)).from_buffer(buf)
@@ -184,7 +188,10 @@ def _win32_ioctl(disk_index: int, buf: bytearray) -> Optional[bytes]:
             ctypes.byref(returned),
             None,
         )
-        return bytes(buf) if ok else None
+        if not ok:
+            err = ctypes.get_last_error()
+            raise OSError(0, "DeviceIoControl", None, err)
+        return bytes(buf)
     finally:
         kernel32.CloseHandle(handle)
 
@@ -195,7 +202,9 @@ _IOCTL_JOIN_TIMEOUT_SEC = 5.0
 
 
 def read_nvme_health(
-    disk_index: int, ioctl_fn: Optional[Callable[[int, bytearray], Optional[bytes]]] = None
+    disk_index: int,
+    ioctl_fn: Optional[Callable[[int, bytearray], Optional[bytes]]] = None,
+    reasons: Optional[list[str]] = None,
 ) -> Optional[dict[str, int]]:
     """Read the NVMe SMART/Health Information Log (page 02h) for one disk.
 
@@ -209,16 +218,19 @@ def read_nvme_health(
     """
     buf = bytearray(_QUERY_OFF + _SPSD_LEN + _DATA_LEN)
     struct.pack_into("<2L", buf, 0, _PROP_ID, 0)
-    struct.pack_into("<7L", buf, _QUERY_OFF, _NVME, _LOG_PAGE, 0x02, 0, _SPSD_LEN, _DATA_LEN, 0)
+    struct.pack_into(
+        "<10L", buf, _QUERY_OFF, _NVME, _LOG_PAGE, 0x02, 0, _SPSD_LEN, _DATA_LEN, 0, 0, 0, 0
+    )
 
     transport = ioctl_fn or _win32_ioctl
-    outcome: dict[str, Optional[bytes]] = {"buf": None}
+    outcome: dict[str, Any] = {"buf": None, "err": "none"}
 
     def _run() -> None:
         try:
             outcome["buf"] = transport(disk_index, buf)
-        except OSError:
+        except OSError as e:  # the Win32 error code names the failure (agent 1.0.0)
             outcome["buf"] = None
+            outcome["err"] = str(getattr(e, "winerror", None) or e.errno or "none")
         except Exception as e:  # noqa: BLE001 -- catch all to degrade gracefully
             logger.warning("NVMe IOCTL worker unexpected exception: %s: %s", type(e).__name__, e)
             outcome["buf"] = None
@@ -228,6 +240,10 @@ def read_nvme_health(
     t.join(_IOCTL_JOIN_TIMEOUT_SEC)
     out = outcome["buf"]
     if t.is_alive() or out is None or len(out) < _QUERY_OFF + 20:
+        if reasons is not None:
+            reasons.append(
+                "nvme_ioctl_timeout" if t.is_alive() else f"nvme_ioctl_err_{outcome['err']}"
+            )
         return None
     off = struct.unpack_from("<L", out, _QUERY_OFF + 16)[0]
     start = _QUERY_OFF + off
@@ -267,8 +283,10 @@ def _merge_overlay(
     return merged
 
 
-def collect_smart(base_storage: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    """Layer Tier A + Tier B onto *base_storage* rows; return (merged, status).
+def collect_smart(
+    base_storage: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str, Optional[str]]:
+    """Layer Tier A + Tier B onto *base_storage* rows; return (merged, status, reason).
 
     status: "ok" if at least one tier produced a reading for at least one
     disk, "partial" if the Tier A script ran but nothing merged, or the raw
@@ -276,7 +294,8 @@ def collect_smart(base_storage: list[dict[str, Any]]) -> tuple[list[dict[str, An
     """
     result = run_ps(_SMART_SCRIPT, timeout=60)
     if result.status != "ok" or not isinstance(result.data, dict):
-        return list(base_storage), (result.status if result.status != "ok" else "partial")
+        status = result.status if result.status != "ok" else "partial"
+        return list(base_storage), status, result.reason
 
     disks = as_list(result.data.get("disks"))
     predict_by_inst = {
@@ -293,6 +312,9 @@ def collect_smart(base_storage: list[dict[str, Any]]) -> tuple[list[dict[str, An
     by_hash: dict[str, dict[str, Any]] = {}
     by_index: dict[int, dict[str, Any]] = {}
     any_hit = False
+    # agent 1.0.0 (R5): why a disk gave no SMART -- only NVMe disks report IOCTL errors
+    nvme = {r.get("serial_hash") for r in base_storage if str(r.get("bus_type")).upper() == "NVME"}
+    reasons: list[str] = []
 
     for d in disks:
         if not isinstance(d, dict):
@@ -316,9 +338,10 @@ def collect_smart(base_storage: list[dict[str, Any]]) -> tuple[list[dict[str, An
                 any_hit = True
 
         if isinstance(index, int):
-            nvme = read_nvme_health(index)
-            if nvme:
-                overlay.update(nvme)
+            on_nvme = hash_serial(d.get("serial")) in nvme
+            health = read_nvme_health(index, reasons=reasons if on_nvme else None)
+            if health:
+                overlay.update(health)
                 any_hit = True
 
         if not overlay:
@@ -330,4 +353,25 @@ def collect_smart(base_storage: list[dict[str, Any]]) -> tuple[list[dict[str, An
             by_index[index] = overlay
 
     merged = _merge_overlay(base_storage, by_hash, by_index)
-    return merged, ("ok" if any_hit else "partial")
+    reason = _smart_reason(base_storage, merged, nvme, blob_by_inst, predict_by_inst, reasons)
+    return merged, ("ok" if any_hit else "partial"), reason
+
+
+def _smart_reason(
+    base: list[dict[str, Any]],
+    merged: list[dict[str, Any]],
+    nvme: set,
+    blobs: dict,
+    predicts: dict,
+    reasons: list[str],
+) -> Optional[str]:
+    """agent 1.0.0 (R5): ASCII tokens of what went missing -- ata_cim_empty (an ATA disk
+    and no FailurePredict data at all), nvme_ioctl_err_<code> per failed NVMe read,
+    merge_miss (readings came back but none landed on a disk row)."""
+    tokens = []
+    if not blobs and not predicts and any(r.get("serial_hash") not in nvme for r in base):
+        tokens.append("ata_cim_empty")
+    tokens += sorted(set(reasons))
+    if merged == list(base) and (blobs or predicts) and base:
+        tokens.append("merge_miss")
+    return ".".join(tokens) or None

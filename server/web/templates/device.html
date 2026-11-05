@@ -11,7 +11,7 @@
                      "unknown": "источник не подтверждён или нет данных",
                      "not_applicable": "источник неприменим для этого устройства"} %}
 {% set conf_tip = "Уверенность в оценке: низкая = один источник данных; средняя = несколько источников, но есть неопределённость; высокая = достаточно независимых данных" %}
-{% set score_tip = "Балл риска 0–100 (выше = хуже). Зелёный ≤ 24, оранжевый 25–49, красный ≥ 50" %}
+{% set score_tip = "Балл риска 0–100 (выше = хуже). Зелёный < 15, оранжевый 15–39, красный ≥ 40" %}
 {% set level_ru = {"Critical": "Критич.", "Error": "Ошибка", "Warning": "Предупр.", "Information": "Инфо"} %}
 
 {% import "_axis_macros.html" as axm with context %}
@@ -35,11 +35,11 @@
    "Менее 2 устройств того же типа — сравнение невозможно"),
   ("trajectory_risk", "Риск по трендам",
    "Насколько быстро показатели движутся к допустимым пределам: износ SSD, заполнение диска, время загрузки. 0–100, выше = хуже",
-   "Недостаточно точек данных для расчёта тренда (нужно минимум 3)"),
+   "Недостаточно данных для тренда: нужно ≥ 6 показаний за ≥ 24 ч (износ SSD и время загрузки — за ≥ 72 ч)"),
 ] %}
 
 {% block extra_head %}
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<script src="/static/plotly-2.35.2.min.js" defer></script>
 <style>
 /* ── Source coverage widget ────────────────────────────────────────────── */
 .coverage-widget {
@@ -185,18 +185,30 @@
   {% if d.manufacturer or d.model %} · {{ d.manufacturer or "" }} {{ d.model or "" }}{% endif %}
   {% if d.org_label.text %} · {{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
   {% if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в справочнике</span>{% endif %}{% endif %}
-  · агент {{ d.agent_version or "?" }}{% if available_version and available_version != d.agent_version %} <span class="badge warn" title="доступна версия {{ available_version }}">обновление доступно</span>{% endif %}{% if d.update_state == "updating" %} <span class="badge warn">обновляется</span>{% elif d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновления</span>{% endif %}{% if d.update_available_version %} <span class="badge warn" title="агент видит эту версию, но не применяет её">доступна {{ d.update_available_version }}, не применяют обновление</span>{% endif %}
+  · агент {{ d.agent_version or "?" }}{% if update_offered %} <span class="badge warn" title="доступна версия {{ available_version }}">обновление доступно</span>{% endif %}{% if d.update_state == "updating" %} <span class="badge warn">обновляется</span>{% elif d.update_state == "failed" %} <span class="badge bad">ошибка обновления{% if d.update_error %}: {{ d.update_error }}{% endif %}</span>{% endif %}{% if d.update_available_version and d.update_state == "ok" %} <span class="badge warn" title="агент видит эту версию, но не применяет её">доступна {{ d.update_available_version }}, не применяют обновление</span>{% endif %}
   · контакт {{ fmt_age(d.last_seen_age_sec) }} назад
   {% if card and card.ip %} · IP {{ card.ip }}{% if card.net_nid and "net" in card.sources and card.sources|length > 1 %} <span class="chip-unk" title="дополнено картой сети">карта</span>{% endif %}{% endif %}
   {% if card and card.mac %} · MAC {{ card.mac }}{% endif %}
 </div>
 {% set upd_parts = [] %}
-{% if d.update_checked_at %}{% set _ = upd_parts.append("проверка обновления: " ~ fmt_age(d.update_checked_at_age_sec) ~ " назад") %}{% endif %}
+{% if d.update_checked_at %}{% set _ = upd_parts.append("проверка обновления: " ~ fmt_age(d.update_checked_at_age_sec) ~ " назад") %}{% else %}{% set _ = upd_parts.append("проверка обновления: не было") %}{% endif %}
 {% if d.version_changed_at %}{% set _ = upd_parts.append("последнее обновление версии: " ~ fmt_age(d.version_changed_at_age_sec) ~ " назад") %}{% endif %}
 {% if upd_parts %}
 <div class="small muted mono" style="margin-bottom:20px">{{ upd_parts|join(" · ") }}</div>
 {% endif %}
 
+{# Канонический ПК (spec 2026-10-24): вытесненная переустановкой запись и старые
+   записи этого ПК. Только чтение -- удаляет ✕ в «Скрытых дубликатах» или автосвип. #}
+{% if lineage and lineage.successor %}
+<div class="alert-banner alert-warn">⚠ Запись вытеснена переустановкой агента: этот ПК теперь отчитывается как
+  <a href="/device/{{ lineage.successor.device_id }}">{{ lineage.successor.hostname or lineage.successor.device_id }}</a>
+  (новая запись появилась {{ fmt_age(lineage.successor.first_seen_age_sec) }} назад). Данные ниже — старые.</div>
+{% endif %}
+{% if lineage and lineage.older %}
+<div class="muted small" style="margin:6px 0">Старые записи этого ПК (до переустановки):
+  {% for o in lineage.older %}<a href="/device/{{ o.device_id }}" title="{{ o.device_id }}">{{ o.device_id }}</a> (молчит {{ fmt_age(o.last_seen_age_sec) }}){% if not loop.last %}, {% endif %}{% endfor %}
+</div>
+{% endif %}
 {% include "_device_specs.html" %}
 
 {% if not s %}
@@ -207,7 +219,7 @@
 
 {# Alert banners #}
 {% if s.risk.device_trust == "untrusted" %}
-<div class="alert-banner alert-bad">⚠ Идентичность недостоверна — оценки могут быть ненадёжны</div>
+<div class="alert-banner alert-bad">⚠ Идентичность недостоверна — оценки могут быть ненадёжны. {{ identity_reason_ru(s.risk.identity_trust) }}</div>
 {% endif %}
 {% if s.risk.regressed_sources %}
 <div class="alert-banner alert-warn">⚠ Источники пропали: {{ s.risk.regressed_sources|join(", ") }}</div>
@@ -262,7 +274,7 @@
 {% set tr = s.risk.trajectory or {} %}
 {% if tr %}
 {# B6 6.3: cohort-note style printed once here (not inside _cohort_slope_note.html,
-   not gated on loop position) -- the partial is included up to 4x/page (once per
+   not gated on loop position) -- the partial is included up to 5x/page (once per
    tmeta row) and a note may first appear on ANY row, not only the first, so a
    per-iteration "first" flag can miss every row that actually renders a note
    [[review-scope-blind-spots]]. Static rule, no loop dependency -- safe to emit
@@ -276,22 +288,26 @@
 {% set dir_chip  = {"worsening":"bad","improving":"good","flat":"na","insufficient":"na"} %}
 {% set dir_label = {"worsening":"↑ ухудш.","improving":"↓ улучш.","flat":"→ стаб.","insufficient":"мало данных"} %}
 {% set traj_tips = {
-  "storage_wear": "Износ SSD в %% — нарастает при активной записи. ETA: прогноз до 100%% при текущем темпе",
-  "disk_fill":    "Заполненность диска в %%. ETA: прогноз до полного заполнения при текущем темпе роста",
+  "storage_wear": "Израсходованный расчётный ресурс записи SSD в %. ETA — до 100% ресурса: плановая информация, не прогноз отказа",
+  "disk_fill":    "Заполненность системного диска в % (100 − свободное место). ETA — до порога 5% свободного места при текущем темпе",
   "boot_time":    "Среднее время загрузки в секундах. Рост указывает на деградацию ОС или накопленный «мусор»",
-  "throttle":     "Недобор частоты CPU до номинала в %% (троттлинг/перегрев): 0%% — полный номинал. Показывает только направление — ETA нет"
+  "throttle":     "Недобор частоты CPU до номинала в % (троттлинг/перегрев): 0% — полный номинал. Показывает только направление — ETA нет",
+  "nvme_spare":   "Израсходованная доля резерва NVMe (100 − Available Spare) на худшем диске. ETA — до порога резерва, заданного производителем: ниже него диск сам выставляет критическое предупреждение"
 } %}
 {# (key, label, scale, higher_worse) #}
 {% set tmeta = [
   ("storage_wear", "Износ SSD",          100,    true),
-  ("disk_fill",    "Заполнение диска",    100,    true),
+  ("disk_fill",    "Заполнение диска",    100,    false),
   ("boot_time",    "Время загрузки",      120000, true),
-  ("throttle",     "Троттлинг CPU",       100,    false)
+  ("throttle",     "Троттлинг CPU",       100,    false),
+  ("nvme_spare",   "Расход резерва NVMe", 100,    false)
 ] %}
 <div class="traj-table">
 {% for key, lab, scale, higher_worse in tmeta %}
   {% set t = tr.get(key) %}
-  {% if t %}
+  {# S13: trends.py builds nvme_spare for every disk series -- a disk without the NVMe log
+     has no points, and a «мало данных» NVMe row on every PC would be noise. #}
+  {% if t and (key != "nvme_spare" or t.get("current") is not none) %}
   {% set dkey = t.direction or "na" %}
   {% if t.current is not none %}
     {% if higher_worse %}
@@ -308,7 +324,7 @@
       <div class="traj-name" title="{{ traj_tips.get(key, '') }}">{{ lab }}</div>
       <div class="traj-val">
         {% if t.current is not none %}
-          {% if key in ("storage_wear","disk_fill") %}{{ "%.1f"|format(t.current) }}%
+          {% if key in ("storage_wear","disk_fill","nvme_spare") %}{{ "%.1f"|format(100 - t.current if key in ("disk_fill","nvme_spare") else t.current) }}%
           {% elif key == "boot_time" %}{{ "%.0f"|format(t.current / 1000) }}с
           {% else %}{# throttle: t.current = % номинала (больше = лучше); полоса рисует
              недобор, число печатаем так же, иначе 99% при пустой полосе.

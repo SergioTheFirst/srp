@@ -221,10 +221,20 @@ def test_normal_boot_does_not_add_risk():
 
 
 def test_slow_boot_threshold_triggers():
-    # avg >= 60s should add a boot-rot contribution.
-    below = compute_os_degradation_risk(_hist(avg_boot_ms=55_000))
-    above = compute_os_degradation_risk(_hist(avg_boot_ms=65_000))
-    assert above.value >= below.value  # at or above threshold triggers, below does not
+    # H15: T = 180 s without a cohort (fleet median 120 s); +5 at T, +12 at 2T
+    base = compute_os_degradation_risk(_hist(avg_boot_ms=20_000)).value or 0.0
+    below = compute_os_degradation_risk(_hist(avg_boot_ms=179_999)).value or 0.0
+    at_t = compute_os_degradation_risk(_hist(avg_boot_ms=180_000)).value or 0.0
+    at_2t = compute_os_degradation_risk(_hist(avg_boot_ms=360_000)).value or 0.0
+    assert (below - base, at_t - base, at_2t - base) == (0.0, 5.0, 12.0)
+
+
+def test_slow_boot_is_relative_to_the_cohort():
+    # a cohort of 5+ with a boot p90 of 240 s moves T to 360 s
+    hist = _hist(avg_boot_ms=300_000)
+    plain = compute_os_degradation_risk(hist).value or 0.0
+    relative = compute_os_degradation_risk(hist, boot_threshold=360_000.0).value or 0.0
+    assert plain - relative == 5.0
 
 
 # --------------------------------------------------------------------------- #

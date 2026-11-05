@@ -52,6 +52,8 @@ class SourceTrust:
     semantic_status: SemanticStatus
     age_sec: Optional[float] = None
     reason: Optional[str] = None
+    # Агент 0.3.5: токен причины сбоя сбора (диагностика, на gate/weight не влияет).
+    collector_reason: Optional[str] = None
 
     @property
     def passes_gate(self) -> bool:

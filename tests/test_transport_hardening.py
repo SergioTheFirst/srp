@@ -638,7 +638,7 @@ def test_throttled_transport_skips_network_until_window_passes(tmp_path, monkeyp
         t.send(msg, {"x": 1})
 
     assert calls["n"] == 1, f"агент сходил в сеть {calls['n']} раз при закрытом окне"
-    assert t.buffer_depth() == 5  # всё сохранено, ничего не потеряно
+    assert t.buffer_depth() == 4  # всё сохранено; liveness в буфер не кладётся (0.3.4 #1)
 
 
 def test_error_response_is_drained_and_closed(tmp_path, monkeypatch):
@@ -668,3 +668,164 @@ def test_error_response_is_drained_and_closed(tmp_path, monkeypatch):
 
     assert state["read"], "тело ответа не дочитано"
     assert state["closed"], "ответ не закрыт"
+
+
+# --------------------------------------------------------------------------- #
+# 0.3.2: 401 в буфер (AUTH-4), битая строка буфера и не-HTTP ответ не роняют
+# агента (F1), буфер не переписывается впустую, пока сервер лежит (F4).
+# --------------------------------------------------------------------------- #
+def test_http_401_keeps_the_backlog(tmp_path, monkeypatch):
+    """AUTH-4: 401 = «токен не принят» -- состояние авторизации сервера, а не плохой
+    конверт. Раньше один 401 выбрасывал живой конверт и выжигал весь офлайн-буфер:
+    ввод или смена ingest_token = невосполнимая потеря телеметрии всего парка."""
+    t = _throttle_transport(tmp_path, monkeypatch, 401)
+    t._append_buffer(t._envelope("heartbeat", {"cpu_pct": 1.0}))  # older backlog
+
+    assert t.send("heartbeat", {"cpu_pct": 2.0}) is False
+    assert t.buffer_depth() == 2
+
+
+def test_flush_drops_a_line_cut_mid_utf8_char_and_keeps_the_rest(tmp_path, monkeypatch):
+    """F1: обрыв записи посреди кириллицы (BSOD, питание) -- read_text бросал
+    UnicodeDecodeError (это не OSError) и убивал агента на каждом старте."""
+    import json
+
+    t = _make_transport(tmp_path)
+    good = json.dumps(t._envelope("heartbeat", {"cpu_pct": 1.0}), ensure_ascii=False).encode()
+    torn = '{"comment": "Офис'.encode()[:-1]  # last 2-byte char cut in half
+    t._buffer.write_bytes(good + b"\n" + torn + b"\n" + good + b"\n")
+    delivered: list = []
+    monkeypatch.setattr(t, "_deliver", lambda env: delivered.append(env) or True)
+
+    assert t.buffer_depth() == 3
+    assert t.flush_buffer() == 3  # two delivered + the torn line dropped
+    assert len(delivered) == 2
+    assert t.buffer_depth() == 0
+
+
+def test_non_http_reply_is_buffered_not_raised(tmp_path, monkeypatch):
+    """AGT-LOOP-5: http.client.HTTPException (BadStatusLine...) -- не OSError: send
+    терял конверт, flush ронял цикл агента."""
+    import http.client
+
+    import client.transport as tm
+
+    def _garbage(*_a, **_kw):
+        raise http.client.BadStatusLine("\x15\x03\x01")
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _garbage)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)
+    t = _make_transport(tmp_path)
+
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert t.buffer_depth() == 1
+
+
+def test_truncated_error_body_is_buffered_not_raised(tmp_path, monkeypatch):
+    """IncompleteRead при дочитывании тела 5xx вылетал из соседнего обработчика."""
+    import http.client
+    import urllib.error
+
+    import client.transport as tm
+
+    class _Err(urllib.error.HTTPError):
+        def read(self, *a, **kw):
+            raise http.client.IncompleteRead(b"partial")
+
+    def _boom(*_a, **_kw):
+        raise _Err("http://x/api/v1/ingest", 503, "boom", {}, None)
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(tm.time, "sleep", lambda _s: None)
+    t = _make_transport(tmp_path)
+
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert t.buffer_depth() == 1
+
+
+def test_flush_does_not_rewrite_the_buffer_when_nothing_was_sent(tmp_path, monkeypatch):
+    """F4: пока сервер лежит, буфер (до ~5 МБ) переписывался целиком раз в минуту --
+    гигабайты записи на диски пользователей за выходные без всякой пользы."""
+    t = _make_transport(tmp_path)
+    t._append_buffer(t._envelope("heartbeat", {"cpu_pct": 1.0}))
+    monkeypatch.setattr(t, "_deliver", lambda _env: False)
+    writes: list = []
+    monkeypatch.setattr(t, "_write_buffer", lambda lines: writes.append(lines))
+
+    assert t.flush_buffer() == 0
+    assert writes == []
+
+
+def test_http_406_is_buffered_not_dropped(tmp_path, monkeypatch):
+    """A 406 is the server's contract gate (a server rolled back below the contract split
+    answers it to every 1.0.0 envelope) -- server state, not a bad envelope: buffer it."""
+    t = _throttle_transport(tmp_path, monkeypatch, 406)
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert t.buffer_depth() == 1
+
+
+def _gate_server(monkeypatch, major: int, decoupled: bool = True) -> list:
+    """urlopen answering like the ingest gate (server/api.py): 406 unless the envelope speaks
+    contract MAJOR `major` -- its contract_version, else its agent_version; a server from
+    before the contract split reads agent_version only. Returns the accepted envelopes."""
+    import io
+    import json
+    import urllib.error
+
+    import client.transport as tm
+    from shared.schema import parse_version
+
+    accepted: list = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _gate(req, timeout=None):
+        env = json.loads(req.data)
+        spoken = env.get("contract_version") if decoupled else None
+        version = parse_version(spoken or env.get("agent_version"))
+        if version is None or version[0] != major:
+            raise urllib.error.HTTPError(req.full_url, 406, "x", None, io.BytesIO(b""))
+        accepted.append(env)
+        return _Resp()
+
+    monkeypatch.setattr(tm.urllib.request, "urlopen", _gate)
+    return accepted
+
+
+def test_a_406_drops_only_a_line_of_another_contract_major(tmp_path, monkeypatch):
+    """Lines buffered before a self-update to a new contract MAJOR (a 0.3.x line speaks its
+    agent_version, as the server reads it) are never taken by that MAJOR's server -- drop
+    them without arming the throttle, or the buffer head wedges every flush."""
+    import client.transport as tm
+
+    t = _make_transport(tmp_path)
+    old = t._envelope("heartbeat", {"cpu_pct": 1.0})  # contract 0.1.0
+    legacy = {**old, "agent_version": "0.3.8"}
+    del legacy["contract_version"]  # a 0.3.x line
+    t._append_buffer(legacy)
+    t._append_buffer(old)
+    monkeypatch.setattr(tm, "CONTRACT_VERSION", "1.0.0")  # the agent self-updated
+    t._append_buffer(t._envelope("heartbeat", {"cpu_pct": 2.0}))
+    accepted = _gate_server(monkeypatch, major=1)
+
+    assert t.flush_buffer() == 3
+    assert (t.buffer_depth(), t._throttled_until) == (0, 0.0)
+    assert [e["contract_version"] for e in accepted] == ["1.0.0"]
+
+
+def test_a_406_keeps_a_line_of_the_same_contract_major(tmp_path, monkeypatch):
+    """D2: only a MAJOR mismatch breaks the contract. A server from before the contract split
+    answers every 1.0.0 envelope 406 (it reads agent_version) -- a line of an older MINOR is
+    the same server state as a live one and stays buffered with it."""
+    t = _make_transport(tmp_path)
+    t._append_buffer({**t._envelope("heartbeat", {"cpu_pct": 1.0}), "contract_version": "0.0.9"})
+    t._append_buffer(t._envelope("heartbeat", {"cpu_pct": 2.0}))
+    accepted = _gate_server(monkeypatch, major=0, decoupled=False)
+
+    assert t.flush_buffer() == 0
+    assert (t.buffer_depth(), accepted) == (2, [])

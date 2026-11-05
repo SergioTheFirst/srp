@@ -23,6 +23,8 @@ Two fleet-level signals:
 Cohort key: model (from devices table, stored on every inventory ingest).
 Site key: site_code (from devices table).
 Minimum cohort for a verdict: 2 devices. Smaller → UNKNOWN.
+A cohort or site pattern needs ≥ 3 affected devices — the counts include this device,
+so that is at least 2 others (D11); fewer contribute nothing.
 Confidence caps at medium: statistical power is limited at small fleet sizes, and the
 cohort may be heterogeneous (same model, different age/config) even when large.
 
@@ -36,6 +38,7 @@ Hard limits:
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from server.scoring.score100 import (
@@ -61,8 +64,11 @@ _KP41_HIGH = 0.50  # ≥50% of site → strong cluster → +40
 _KP41_MOD = 0.30  # ≥30% of site → moderate       → +20
 _KP41_NOISE = 0.20  # < 20% → noise, add nothing
 
-# minimum number of devices in site before cluster is meaningful
-_MIN_SITE_FOR_CLUSTER = 3
+# minimum number of affected devices (round(pct * size)) before any cohort or site
+# pattern counts. The cohort and the site include this device itself, so 3 affected
+# means at least 2 OTHER devices share the pattern (D11); this also covers the old
+# minimum site size, since a site of < 3 devices can never have 3 affected.
+_MIN_AFFECTED = 3
 
 # minimum cohort size to produce any verdict
 _MIN_COHORT = 2
@@ -85,12 +91,17 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, x))
 
 
+def _too_few_affected(pct: float, size: int) -> bool:
+    """Fewer than _MIN_AFFECTED devices behind ``pct`` of ``size`` (NaN/inf: no pattern)."""
+    return not math.isfinite(pct) or round(pct * size) < _MIN_AFFECTED
+
+
 def _site_kp41_contribution(
     site_kp41_pct: float,
     site_size: int,
 ) -> tuple[float, Optional[Factor]]:
     """Risk delta from a site-wide KP41 cluster."""
-    if site_size < _MIN_SITE_FOR_CLUSTER:
+    if _too_few_affected(site_kp41_pct, site_size):
         return 0.0, None
     if site_kp41_pct >= _KP41_HIGH:
         delta = 40.0
@@ -114,6 +125,8 @@ def _cohort_bsod_contribution(
     cohort_size: int,
 ) -> tuple[float, Optional[Factor]]:
     """Risk delta from elevated BSOD rate across the model cohort."""
+    if _too_few_affected(bsod_pct, cohort_size):
+        return 0.0, None
     if bsod_pct >= _BSOD_HIGH:
         delta = 35.0
         label = (
@@ -143,6 +156,8 @@ def _cohort_rsi_contribution(
     cohort_size: int,
 ) -> tuple[float, Optional[Factor]]:
     """Risk delta from widespread RSI degradation across the model cohort."""
+    if _too_few_affected(rsi_low_pct, cohort_size):
+        return 0.0, None
     if rsi_low_pct >= _RSI_HIGH:
         delta = 20.0
         label = (
@@ -158,6 +173,14 @@ def _cohort_rsi_contribution(
         )
         return delta, {"label": label, "delta": delta}
     return 0.0, None
+
+
+def _disk_lineage(cohort_stats: dict) -> dict:
+    """H14: how many machines of the cohort show disk errors -- the verdict's cohort cause
+    (health._cause_class); lineage only, never scored here."""
+    size = int(cohort_stats.get("cohort_size") or 0)
+    n = int(cohort_stats.get("cohort_disk_err_n") or 0)
+    return {"cohort_disk_err_n": n, "cohort_disk_err_pct": round(n / size, 3) if size else 0.0}
 
 
 def compute_fleet_anomaly_risk(
@@ -225,7 +248,7 @@ def compute_fleet_anomaly_risk(
             "unknown",
             "unknown",
             missing_evidence=_missing,
-            source_lineage={"cohort_size": cohort_size},
+            source_lineage={"cohort_size": cohort_size, **_disk_lineage(cohort_stats)},
             reason=_reason,
         )
 
@@ -258,14 +281,7 @@ def compute_fleet_anomaly_risk(
     confidence: ScoreConfidence = "medium" if cohort_size >= _COHORT_MEDIUM else "low"
 
     missing = [_BLIND_SPOT_BUILD, _BLIND_SPOT_CAUSE]
-
-    if value == 0.0:
-        reason = (
-            f"флотовые паттерны не обнаружены — когорта из {cohort_size} устройств показывает "
-            f"нормальный уровень сбоев и стабильную OS; KP41 площадки ниже порога"
-        )
-    else:
-        reason = "флотовые паттерны обнаружены — см. факторы выше"
+    reason = _verdict_reason(value, cohort_size, bsod_pct, rsi_low_pct, site_kp41_pct)
 
     return make_score100(
         _clamp(value),
@@ -281,6 +297,25 @@ def compute_fleet_anomaly_risk(
             "cohort_rsi_low_pct": round(rsi_low_pct, 3),
             "site_size": site_size,
             "site_kp41_pct": round(site_kp41_pct, 3),
+            **_disk_lineage(cohort_stats),
         },
         reason=reason,
+    )
+
+
+def _verdict_reason(
+    value: float, cohort_size: int, bsod_pct: float, rsi_low_pct: float, site_kp41_pct: float
+) -> str:
+    """Operator reason. A zero with a rate at its threshold means _too_few_affected
+    suppressed it -- never call that a normal failure rate and a stable OS (D11)."""
+    if value > 0.0:
+        return "флотовые паттерны обнаружены — см. факторы выше"
+    if bsod_pct >= _BSOD_LOW or rsi_low_pct >= _RSI_MOD or site_kp41_pct >= _KP41_MOD:
+        return (
+            f"флотовый паттерн ниже минимума — затронуто меньше {_MIN_AFFECTED} устройств "
+            "когорты или площадки (включая это устройство)"
+        )
+    return (
+        f"флотовые паттерны не обнаружены — когорта из {cohort_size} устройств показывает "
+        "нормальный уровень сбоев и стабильную OS; KP41 площадки ниже порога"
     )

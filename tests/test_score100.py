@@ -251,7 +251,7 @@ def test_performance_presence_ok_includes_historical():
     a device that ONLY reports historical (no live heartbeat) still produces a
     real performance signal -- presence_ok must not withhold it just because
     heartbeat is absent."""
-    historical = {"avg_boot_ms": 65000}
+    historical = {"avg_boot_ms": 200_000}  # >= T = 180 s (H15): a slow boot
     day1 = compute_day1_scores(None, historical, None)
     assert day1["factors"]["performance"]  # real signal was computed
     perf = compute_day1_score100(day1, None, historical, None, trust=None)["performance"]

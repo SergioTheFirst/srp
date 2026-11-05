@@ -92,6 +92,19 @@ def test_cohort_slope_verdict_ignores_non_worsening_metrics(db_init):
     assert verdict == {}  # not worsening for THIS device -> never compared
 
 
+def test_cohort_slope_verdict_skips_zero_slope_worsening_counter(db_init):
+    """A counter step is 'worsening' with slope_per_day 0 (calibration contract
+    C1): there is no rate to compare, so it must never read as 'faster than the
+    cohort' -- a sign() of 0 used to rank every positive-slope peer as slower."""
+    _seed_trajectory(db_init, "me", "OptiPlex", {"smart_pending": _worsening(0.0)})
+    for i in range(4):
+        _seed_trajectory(db_init, f"peer{i}", "OptiPlex", {"smart_pending": _worsening(1.0)})
+
+    verdict = db_init.get_cohort_slope_verdict("OptiPlex", {"smart_pending": _worsening(0.0)})
+
+    assert verdict == {}
+
+
 def test_cohort_slope_verdict_survives_a_malformed_cohort_row(db_init):
     """One neighbour's corrupted risk JSON must not cost every metric on the
     page its cohort comparison ([[sqlite-json-extract-throws]] -- side-stepped
@@ -290,3 +303,124 @@ def test_cohort_query_uses_model_index(tmp_path, monkeypatch) -> None:
             plans += [str(r[3]) for r in conn.execute("EXPLAIN QUERY PLAN " + sql, args)]
     plan = " ".join(plans)
     assert "idx_devices_model" in plan or "idx_devices_site" in plan
+
+
+# --------------------------------------------------------------------------- #
+# H15 review: a device never sets its own slow-boot bar, nor does a gate-failed peer
+# --------------------------------------------------------------------------- #
+def _seed_boot(db, did: str, boot: int) -> None:
+    db.upsert_device(did, "2026-07-01T00:00:00Z", "1.0.0", model="OptiPlex", site_code="s")
+    db.store_historical(did, "2026-07-01T00:00:00Z", {"avg_boot_ms": boot})
+
+
+def test_cohort_boot_p90_excludes_the_scored_device_and_implausible_peers(db_init):
+    from server.scoring.scores import boot_threshold_ms
+
+    for i, boot in enumerate([120_000] * 5 + [7_200_000]):  # > 600 s: boot_time is SUSPECT
+        _seed_boot(db_init, f"peer{i}", boot)
+    _seed_boot(db_init, "me", 400_000)
+    stats = db_init.get_fleet_cohort_stats("OptiPlex", None, exclude_device_id="me")
+    assert (stats["boot_p90_ms"], stats["boot_n"]) == (120_000.0, 5)
+    assert boot_threshold_ms(stats) == 180_000.0  # 400 s >= 2T -- very slow
+
+
+def test_the_cohort_boot_bound_is_the_boot_time_gate(db_init):
+    from server.trust.validators import BOOT_MAX_MS
+
+    assert db_init._BOOT_PLAUSIBLE_MAX_MS == BOOT_MAX_MS
+
+
+def test_slowest_pc_of_a_five_pc_cohort_is_still_flagged(client, monkeypatch):
+    """Four peers boot in 120 s, the scored PC in 400 s with RSI 4.5: h1, not a false h0
+    (with itself in the sample the p90 was its own 400 s and T 600 s)."""
+    from server import limits
+    from server.pipeline import recompute_scores
+
+    # five PCs: the public demo build caps ingest at 3 (export patch), the cohort needs 5
+    monkeypatch.setattr(limits, "MAX_DEVICES", None)
+
+    from tests.conftest import envelope, healthy
+
+    def ingest(did: str, boot: int, rsi: float) -> None:
+        for mt in ("inventory", "historical", "heartbeat"):
+            p = healthy(mt)
+            if mt == "inventory":  # five PCs, five names: X1 folds namesakes into one vote
+                p["hostname"] = did
+            if mt == "historical":
+                p.update(avg_boot_ms=boot, reliability_stability_index=rsi)
+            assert client.post("/api/v1/ingest", json=envelope(did, mt, p)).status_code == 200
+
+    for i in range(4):
+        ingest(f"peer{i}", 120_000, 9.6)
+    ingest("me", 400_000, 4.5)
+    s = recompute_scores("me")
+    assert s["risk"]["score100"]["os_degradation_risk"]["value"] == 34.0  # RSI 22 + boot 12
+    assert s["performance"] == 85.0
+    assert s["risk"]["health"]["state"] == "h1"
+
+
+def test_bsod_fleet_cause_counts_machines_not_size_times_share(db_init):
+    """H13: a failed historical cycle (payload {}) is in cohort_size but not in the BSOD
+    share -- 2 BSOD machines among 4 reporters of 10 are 2, not 10 x 0.5 = 5."""
+    from server.analytics.stability import bsod_cause
+
+    for i, bc in enumerate([2, 1, 0, 0]):
+        _seed(db_init, f"r{i}", "OptiPlex", "S1", {"bugchecks_30d": bc})
+    for i in range(6):
+        _seed(db_init, f"s{i}", "OptiPlex", "S1", {})  # a failed historical cycle
+    stats = db_init.get_fleet_cohort_stats("OptiPlex", None, exclude_device_id="r0")
+    assert (stats["cohort_size"], stats["cohort_bsod_pct"], stats["cohort_bsod_n"]) == (10, 0.5, 2)
+    assert bsod_cause([], stats, None) == "unknown"
+    _seed(db_init, "s0", "OptiPlex", "S1", {"bugchecks_30d": 3})  # a third BSOD machine
+    assert bsod_cause([], db_init.get_fleet_cohort_stats("OptiPlex", None), None) == "fleet_likely"
+
+
+# --------------------------------------------------------------------------- #
+# X1 (2026-11-02): a row superseded by a reinstall is no cohort peer -- one PC, one vote
+# --------------------------------------------------------------------------- #
+def _seed_reinstalled_me(db) -> None:
+    """'me' (fresh) supersedes 'me-old' (same hostname, silent for 2 h, born 30 d ago),
+    whose stale slow boot, BSOD and disk error would otherwise count as a peer's."""
+    for did, payload in (
+        ("me-old", {"avg_boot_ms": 590_000, "bugchecks_30d": 2}),
+        ("me", {"avg_boot_ms": 400_000, "bugchecks_30d": 0}),
+    ):
+        ts = "2026-07-01T00:00:00Z"
+        db.upsert_device(did, ts, "1.0.0", hostname="PC-ME", model="OptiPlex", site_code="s")
+        db.store_historical(did, ts, payload)
+    bad_block = {"ts": "2026-07-01T00:00:00Z", "log": "System", "source": "disk", "event_id": 7}
+    db.store_events("me-old", [{**bad_block, "level": 2}])
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE devices SET first_seen=datetime('now','-30 days'),"
+            " last_seen=datetime('now','-2 hours') WHERE device_id='me-old'"
+        )
+
+
+def test_cohort_skips_rows_superseded_by_a_reinstall(db_init):
+    from server.scoring.scores import boot_threshold_ms
+
+    for i in range(5):
+        _seed_boot(db_init, f"peer{i}", 120_000)
+    _seed_reinstalled_me(db_init)
+    assert db_init.superseded_ids() == frozenset({"me-old"})
+    stats = db_init.get_fleet_cohort_stats("OptiPlex", "s", exclude_device_id="me")
+    sizes = (stats["cohort_size"], stats["site_size"])
+    counts = (stats["cohort_bsod_n"], stats["cohort_disk_err_n"])
+    assert (sizes, counts) == ((6, 6), (0, 0))
+    # H15: its own ghost no longer sets the PC's bar (nearest-rank p90 of 6 was the ghost)
+    assert (stats["boot_p90_ms"], stats["boot_n"]) == (120_000.0, 5)
+    assert boot_threshold_ms(stats) == 180_000.0  # 400 s >= 2T -- very slow, not hidden
+
+
+def test_cohort_slope_verdict_skips_superseded_rows(db_init):
+    """A ghost's frozen fast slope is no cohort point: with it 'me' (5.0) beats 2 of 4 (no
+    verdict), without it 2 of 3 -- faster than most of the real cohort."""
+    for did, slope in (("slow0", 0.1), ("slow1", 0.1), ("fast0", 9.0)):
+        _seed_trajectory(db_init, did, "OptiPlex", {"disk_fill": _worsening(slope)})
+    _seed_reinstalled_me(db_init)
+    db_init.store_scores(
+        "me-old", "2026-07-01T00:00:00Z", {"risk": {"trajectory": {"disk_fill": _worsening(9.0)}}}
+    )
+    verdict = db_init.get_cohort_slope_verdict("OptiPlex", {"disk_fill": _worsening(5.0)})
+    assert verdict == {"disk_fill": True}

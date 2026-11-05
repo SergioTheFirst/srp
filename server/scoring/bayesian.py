@@ -5,8 +5,8 @@ W4.3 changes applied here:
   D6 — KP41 demoted to conditional enhancer: Kernel-Power 41 has near-zero
   specificity.  It fires on power cuts, driver hangs, RAM faults and clean
   reboots alike.  It may *amplify* a confirmed power/thermal anchor (CPU
-  throttle OR dirty shutdown already present) but must not raise risk on its
-  own.  Demoted weight: min(kp * 0.3, 1.0) vs old min(kp * 0.6, 2.5).
+  throttle under load, D10) but must not raise risk on its own.  Demoted
+  weight: min(kp * 0.3, 1.0) vs old min(kp * 0.6, 2.5).
 
   D6 — WHEA removed from power_thermal and memory: corrected hardware errors
   in the WHEA Logger are predominantly firmware / ASPM / PCIe link-training
@@ -19,6 +19,11 @@ W4.3 changes applied here:
 
   Scale — overall returned on the same 0..100 scale as risk_exposure and all
   W4.2 axes; eliminates the two-scale confusion for the operator.
+
+  D10 (health calibration) — honest inputs, no in-class double counting: SSD
+  wear enters past 70 % and is capped at 1.5 log-odds; uncorrected I/O errors
+  beat the ECC-inclusive totals; throttle and the KP41 anchor need a busy CPU;
+  with an OS-engine value, stability drops its direct RSI/BSOD factors.
 
 Per failure class we work in log-odds: a prior (base rate adjusted for age /
 media type / known-bad) plus an additive contribution per piece of evidence.
@@ -36,7 +41,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-from server.scoring.scores import device_age_years
+from server.scoring.scores import STALL_SEC, device_age_years, loaded_perf
 
 Factor = dict[str, Any]  # {"label": str, "weight": float}
 
@@ -53,6 +58,14 @@ _BASE_PRIOR = {
     "memory": 0.02,
     "stability": 0.05,
 }
+
+# D10: SSD wear enters only past 70 % (the storage engine scores none below it) and
+# is capped at 1.5 log-odds -- field studies find no monotonic hazard with wear
+# (Schroeder FAST'16, Alter SC'19), so wear alone tops out at 'high', never 'critical'.
+_WEAR_START = 70.0
+_WEAR_MAX_LO = 1.5
+_UNCORRECTED_IO = ("read_errors_uncorrected", "write_errors_uncorrected")
+_TOTAL_IO = ("read_errors_total", "write_errors_total")
 
 
 def _logit(p: float) -> float:
@@ -152,6 +165,58 @@ def _domain_gated(name: str, domain_trust: Optional[dict[str, str]]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+def _io_errors(disk: dict) -> int:
+    """D10: uncorrected read+write errors when the agent sent either of them.
+
+    ReadErrorsTotal also counts ECC-corrected reads, so the totals are only the
+    fallback for legacy agents that never report the uncorrected pair.
+    """
+    keys = _UNCORRECTED_IO if any(disk.get(k) is not None for k in _UNCORRECTED_IO) else _TOTAL_IO
+    return sum(int(disk.get(k) or 0) for k in keys)
+
+
+# H10: the storage class never ranks below this cycle's storage rung
+# (health_dominant.storage_rung): the probability floor of each _level band.
+_RUNG_FLOOR = {"h4": 0.50, "h3": 0.25, "h2": 0.10}
+
+
+def _raw_smart(storage: list) -> list[Factor]:
+    """Without a storage-engine value: the raw SMART fallback (wear, uncorrected I/O).
+    With one, the engine already sums them -- counted once, like _stability_direct."""
+    f: list[Factor] = []
+    max_wear = max((s.get("wear_pct") or 0 for s in storage), default=0)
+    io_err = sum(_io_errors(s) for s in storage)
+    if max_wear > _WEAR_START:
+        ramp = min((max_wear - _WEAR_START) / (100.0 - _WEAR_START), 1.0)
+        f.append({"label": f"Износ SSD {max_wear:.0f}%", "weight": ramp * _WEAR_MAX_LO})
+    if io_err > 0:
+        f.append({"label": f"Накопленные ошибки I/O: {io_err}", "weight": 2.6})
+    return f
+
+
+def _age(age: Optional[float], storage: list) -> list[Factor]:
+    """Device age and, without a storage-engine value, the disk's power-on hours: ONE
+    context factor, at most 0.4 (H10). The engine scores POH itself -- counted once."""
+    poh = max((s.get("power_on_hours") or 0 for s in storage), default=0)
+    years = max(age or 0.0, poh / 8760.0)
+    if years <= 0:
+        return []
+    what = "Возраст оборудования / наработка диска" if poh else "Возраст оборудования"
+    return [{"label": f"{what} ~{years:.0f} лет (контекст)", "weight": min(years * 0.05, 0.4)}]
+
+
+def _floor(factors: list[Factor], rung: Optional[str]) -> list[Factor]:
+    """H10: lift the class to the probability floor of this cycle's storage rung; the
+    lift is a labelled term, so the explanation still sums to the posterior."""
+    floor = _RUNG_FLOOR.get(rung or "")
+    if floor is None:
+        return []
+    gap = _logit(floor) - (_logit(_BASE_PRIOR["storage"]) + sum(f["weight"] for f in factors))
+    if gap <= 0:
+        return []
+    return [{"label": "Пол по уровню накопителя в вердикте здоровья", "weight": gap + 1e-6}]
+
+
 def _storage(
     inv: Optional[dict],
     hist: Optional[dict],
@@ -159,48 +224,32 @@ def _storage(
     age: Optional[float],
     domain_values: Optional[dict[str, Optional[float]]] = None,
     domain_trust: Optional[dict[str, str]] = None,
+    rung: Optional[str] = None,
 ) -> dict[str, Any]:
     if _domain_gated("storage", domain_trust):
         return _withheld("storage")
-    f: list[Factor] = []
-    if age:
-        f.append({"label": f"Возраст оборудования ~{age:.0f} лет", "weight": min(age * 0.05, 0.8)})
-
-    # Supplementary from W4.2 storage engine: SMART verdict with latency-as-
-    # confirmation guard. Scale 1.0 means a 100/100 engine score adds +1.0 log-odds.
-    lo = _domain_lo(domain_values, "storage_risk", 1.0)
-    if lo > 0.01 and domain_values:
-        v_raw = domain_values.get("storage_risk", 0.0)
-        f.append({"label": f"Движок хранилища (SMART): {v_raw:.0f}/100", "weight": round(lo, 2)})
-
     # P2-1: trust validation (validate_storage_item via pipeline._extract_reading)
     # only ever checks storage[0] -- aggregating raw values from disk[1+], which
     # are never trust-gated, would let a garbage/malicious reading on any disk
     # past the first influence risk without ever being validated. Limit
     # aggregation to the one disk that is actually validated.
     storage = ((hist or {}).get("storage") or [])[:1]
-    max_wear = max((s.get("wear_pct") or 0 for s in storage), default=0)
-    max_realloc = max((s.get("reallocated_sectors") or 0 for s in storage), default=0)
-    max_poh = max((s.get("power_on_hours") or 0 for s in storage), default=0)
-    io_err = sum(
-        int(s.get("read_errors_total") or 0) + int(s.get("write_errors_total") or 0)
-        for s in storage
-    )
-    if max_wear > 0:
-        f.append({"label": f"Износ SSD {max_wear:.0f}%", "weight": (max_wear / 100) * 3.5})
-    if max_realloc > 100:
-        f.append({"label": f"Переназначено секторов: {int(max_realloc)}", "weight": 3.2})
-    elif max_realloc > 0:
-        f.append({"label": f"Переназначено секторов: {int(max_realloc)}", "weight": 2.0})
-    if io_err > 0:
-        f.append({"label": f"Накопленные ошибки I/O: {io_err}", "weight": 2.6})
-    if max_poh > 40000:
-        f.append({"label": f"Наработка диска {max_poh / 1000:.0f}k ч", "weight": 0.8})
-
+    # The W4.2 storage engine (SMART with latency-as-confirmation) at scale 1.0: a
+    # 100/100 engine score adds +1.0 log-odds; raw SMART (POH too) only without its value.
+    engine = _num(domain_values, "storage_risk")
+    if engine is not None and math.isfinite(engine):
+        f = _age(age, [])  # the engine scores POH itself: counted once (H10)
+        lo = _domain_lo(domain_values, "storage_risk", 1.0)
+        if lo > 0.01:
+            f.append(
+                {"label": f"Движок хранилища (SMART): {engine:.0f}/100", "weight": round(lo, 2)}
+            )
+    else:
+        f = _age(age, storage) + _raw_smart(storage)
     lat = _num(hb, "disk_read_sec")
-    if lat is not None and lat > 0.03:
-        f.append({"label": f"Высокая задержка чтения ({lat * 1000:.0f} мс)", "weight": 0.9})
-    return _finish("storage", _BASE_PRIOR["storage"], f)
+    if lat is not None and lat >= STALL_SEC:  # H9: an I/O stall, the only visible latency
+        f.append({"label": f"Зависание чтения диска ≥ 1 с ({lat:.0f} с)", "weight": 0.9})
+    return _finish("storage", _BASE_PRIOR["storage"], f + _floor(f, rung))
 
 
 def _power_thermal(
@@ -213,8 +262,9 @@ def _power_thermal(
 
     KP41 (W4.3 D6): conditional enhancer only.  Kernel-Power 41 fires on power
     cuts, driver hangs, RAM faults and clean reboots alike — specificity ≈ 0.
-    It may amplify an existing anchor (CPU throttle OR dirty shutdown) but must
-    not drive risk independently.  Reduced weight: min(kp * 0.3, 1.0).
+    It may amplify a throttle-under-load anchor but must not drive risk
+    independently.  Reduced weight: min(kp * 0.3, 1.0).  D10: a dirty shutdown
+    is no anchor — 6008 and KP41 are logged for the same unclean shutdown.
 
     WHEA (W4.3 D6): removed.  Corrected hardware errors are predominantly
     firmware / ASPM / PCIe link-training noise, not early-warning of VRM or PSU
@@ -228,7 +278,7 @@ def _power_thermal(
         return _withheld("power_thermal")
     f: list[Factor] = []
 
-    perf = _num(hb, "cpu_perf_pct")
+    perf = loaded_perf(hb)
     if perf is not None:
         if perf < 85:
             f.append({"label": f"Троттлинг CPU ({perf:.0f}% номинала)", "weight": 1.2})
@@ -239,10 +289,9 @@ def _power_thermal(
     if ds:
         f.append({"label": f"{int(ds)}x грязное выключение (6008)", "weight": min(ds * 0.4, 1.5)})
 
-    # KP41 as conditional enhancer: only when a confirmed power/thermal anchor already
-    # exists.  Without an anchor, KP41 alone means nothing diagnostically (D6).
+    # KP41 as conditional enhancer: only with a throttle-under-load anchor (D6, D10).
     kp = _num(hist, "kernel_power_41_30d")
-    _has_anchor = (perf is not None and perf < 85) or (ds is not None and ds > 0)
+    _has_anchor = perf is not None and perf < 85
     if kp and _has_anchor:
         f.append(
             {
@@ -276,23 +325,28 @@ def _memory(
     return _finish("memory", _BASE_PRIOR["memory"], f)
 
 
-def _stability(
+def _stability_direct(
     inv: Optional[dict],
     hist: Optional[dict],
-    domain_values: Optional[dict[str, Optional[float]]] = None,
-    app_hang_count_30d: Optional[int] = None,
-    domain_trust: Optional[dict[str, str]] = None,
-) -> dict[str, Any]:
-    if _domain_gated("stability", domain_trust):
-        return _withheld("stability")
+    domain_values: Optional[dict[str, Optional[float]]],
+) -> list[Factor]:
+    """Direct telemetry factors of the stability class.
+
+    D10: RSI and BSOD are counted once.  With an OS-engine value its term already
+    sums RSI, BSOD, 6008 and boot time, so the direct RSI/BSOD factors are skipped;
+    without one (None or non-finite = UNKNOWN, as in _domain_lo) they stay as the
+    fallback.
+    """
+    os_v = _num(domain_values, "os_degradation_risk")
+    direct = os_v is None or not math.isfinite(os_v)
     f: list[Factor] = []
-    rsi = _num(hist, "reliability_stability_index")
+    rsi = _num(hist, "reliability_stability_index") if direct else None
     if rsi is not None:
         if rsi < 5:
             f.append({"label": f"Низкий индекс стабильности ({rsi:.1f}/10)", "weight": 1.5})
         elif rsi < 7:
             f.append({"label": f"Умеренный индекс стабильности ({rsi:.1f}/10)", "weight": 0.6})
-    bc = _num(hist, "bugchecks_30d")
+    bc = _num(hist, "bugchecks_30d") if direct else None
     if bc:
         f.append({"label": f"{int(bc)}x BSOD (30д)", "weight": min(bc * 0.8, 2.5)})
     ac = _num(hist, "app_crashes_30d")
@@ -305,6 +359,19 @@ def _stability(
         f.append(
             {"label": f"{int(dpc)} устройство(а) с ошибкой драйвера", "weight": min(dpc * 0.6, 1.8)}
         )
+    return f
+
+
+def _stability(
+    inv: Optional[dict],
+    hist: Optional[dict],
+    domain_values: Optional[dict[str, Optional[float]]] = None,
+    app_hang_count_30d: Optional[int] = None,
+    domain_trust: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    if _domain_gated("stability", domain_trust):
+        return _withheld("stability")
+    f = _stability_direct(inv, hist, domain_values)
 
     # Supplementary from W4.2 OS-degradation engine (RSI-led, crash confirmation) and
     # disk-fill engine (servicing collapse → update failures → compounded instability).
@@ -365,6 +432,7 @@ def compute_risk(
     app_hang_count_30d: Optional[int] = None,
     domain_trust: Optional[dict[str, str]] = None,
     device_untrusted: bool = False,
+    storage_floor_state: Optional[str] = None,
 ) -> dict[str, Any]:
     """Return per-class posteriors with explanations, sorted by probability.
 
@@ -398,7 +466,15 @@ def compute_risk(
 
     age = device_age_years(inventory)
     classes = [
-        _storage(inventory, historical, heartbeat, age, domain_values, domain_trust),
+        _storage(
+            inventory,
+            historical,
+            heartbeat,
+            age,
+            domain_values,
+            domain_trust,
+            storage_floor_state,
+        ),
         _power_thermal(historical, heartbeat, domain_values, domain_trust),
         _memory(historical, heartbeat),
         _stability(inventory, historical, domain_values, app_hang_count_30d, domain_trust),

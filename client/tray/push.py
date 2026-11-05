@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from client.transport import AGENT_VERSION
+from client.transport import AGENT_VERSION, CONTRACT_VERSION
 
 _TIMEOUT_SEC = 5
 
@@ -24,7 +24,7 @@ def _read_config(config_path: Path) -> dict:
     """Теми же средствами, что ``panel._server_url`` -- ничего не пишет и не
     поднимает исключений на битом/отсутствующем файле."""
     try:
-        data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        data = json.loads(Path(config_path).read_bytes())
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -39,6 +39,9 @@ def push_owner_identity(config_path: Path, full_name: str, position: str, phone:
     envelope: dict[str, Any] = {
         "device_id": str(data.get("device_id", "")),
         "agent_version": AGENT_VERSION,
+        # Stage 5: the 406 gate reads contract_version; without it the server falls back
+        # to agent_version (1.0.0 = MAJOR 1) and turns away every direct push.
+        "contract_version": CONTRACT_VERSION,
         # liveness, НЕ heartbeat: пустой heartbeat становится «последним» замером
         # и стирает реальную телеметрию из скоринга (замерено: performance 62.5 ->
         # 100.0 после одного клика в трее). Ветка liveness несёт те же три поля,

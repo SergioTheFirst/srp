@@ -20,6 +20,7 @@ time, by which point both modules are already fully loaded.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -37,6 +38,8 @@ router = APIRouter()
 # --------------------------------------------------------------------------- #
 _HEATMAP_STATE_PRIORITY = {"h4": 0, "h3": 1, "h2": 2, "h1": 3, "h0": 4}  # unknown sorts last (5)
 _HEATMAP_ROW_CAP = 100
+# Спарклайн «ухудшаются»: ~3 строки scores на часовой цикл агента 0.3.8 -> ~40 ч.
+_SPARK_ROWS = 120
 _HEATMAP_AXES = (
     ("storage", "Здоровье диска (SMART)"),
     ("aging", "Старение ПО"),
@@ -100,7 +103,16 @@ def _state_distribution(rows: list[dict]) -> list[dict]:
     ]
 
 
-def _heatmap(rows: list[dict]) -> dict:
+def _with_staleness(row: dict, now: datetime) -> dict:
+    """Тот же read-side оверлей, что у /fleet и Zabbix: вердикт старше 10 дн -> unknown
+    (молчащий ПК не держит замёрзший h4 в «Критичных»)."""
+    over = health.apply_health_staleness(
+        {"state": row.get("state"), "band": row.get("band")}, row.get("score_ts"), now
+    )
+    return {**row, "state": over.get("state"), "band": over.get("band")}
+
+
+def _heatmap(rows: list[dict], older: Optional[dict] = None) -> dict:
     """Device x dimension grid: rows sorted worst-state-first, index asc tiebreak,
     capped at 100. z is a discrete 0..3 band ordinal in EVERY column -- including
     "Состояние", which colours by the row's overall ``band`` (not the 5-value state
@@ -113,8 +125,10 @@ def _heatmap(rows: list[dict]) -> dict:
         ),
     )[:_HEATMAP_ROW_CAP]
     device_ids, hostnames, state_labels, dominant_labels, z = [], [], [], [], []
+    older_counts = []
     for r in ordered:
         device_ids.append(r["device_id"])
+        older_counts.append((older or {}).get(r["device_id"], 0))
         hostnames.append(r.get("hostname") or "")
         state_labels.append(health.state_label_for(r.get("state")))
         dominant_labels.append(health.dominant_label_for(r.get("dominant")))
@@ -132,6 +146,7 @@ def _heatmap(rows: list[dict]) -> dict:
         "hostnames": hostnames,
         "state_labels": state_labels,
         "dominant_labels": dominant_labels,
+        "older_counts": older_counts,
         "cols": _HEATMAP_COLS,
         "z": z,
     }
@@ -142,7 +157,8 @@ def _escalations(deltas: list[dict], health_by_id: dict[str, dict]) -> list[dict
     call (no extra query) -- adds dominant mechanism + Russian recommendation."""
     out = []
     for d in deltas:
-        dominant = (health_by_id.get(d["device_id"]) or {}).get("dominant")
+        row = health_by_id.get(d["device_id"]) or {}
+        dominant = row.get("dominant")
         out.append(
             {
                 "device_id": d["device_id"],
@@ -153,7 +169,9 @@ def _escalations(deltas: list[dict], health_by_id: dict[str, dict]) -> list[dict
                 "state_label": health.state_label_for(d.get("state")),
                 "dominant": dominant,
                 "dominant_label": health.dominant_label_for(dominant),
-                "action": health.action_for(dominant),
+                # the verdict's own action (H6 chkdsk, blind), as on the device page and in
+                # Zabbix; action_for(dominant) only for rows stored without one
+                "action": row.get("action") or health.action_for(dominant),
             }
         )
     return out
@@ -238,14 +256,18 @@ def fleet_health(request: Request):
     from server.web.dashboard import _TEMPLATES  # local: see module docstring
 
     now = datetime.now(timezone.utc)
-    rows = db.get_fleet_health()
-    deltas = db.get_fleet_health_deltas()
+    # Канонический ПК (spec 2026-10-24): записи, вытесненные переустановкой, не
+    # считаются ни в KPI, ни в heatmap, ни в эскалациях; у канона -- счётчик старых.
+    lineage = db.superseded_map()
+    rows = [_with_staleness(r, now) for r in db.get_fleet_health() if r["device_id"] not in lineage]
+    deltas = [x for x in db.get_fleet_health_deltas() if x["device_id"] not in lineage]
+    older = Counter(lineage.values())
     health_by_id = {r["device_id"]: r for r in rows}
     model_by_id = {d["device_id"]: d.get("model") for d in db.get_devices()}
 
     worsening = _worsening_selection(rows)
     sparklines = {
-        r["device_id"]: _index_sparkline(db.get_score_series(r["device_id"], limit=30))
+        r["device_id"]: _index_sparkline(db.get_score_series(r["device_id"], limit=_SPARK_ROWS))
         for r in worsening
     }
 
@@ -255,7 +277,7 @@ def fleet_health(request: Request):
         {
             "kpi": _kpi_counts(rows, deltas, now),
             "state_dist": _state_distribution(rows),
-            "heatmap": _heatmap(rows),
+            "heatmap": _heatmap(rows, older),
             "worsening": worsening,
             "sparklines": sparklines,
             "escalations": _escalations(deltas, health_by_id),

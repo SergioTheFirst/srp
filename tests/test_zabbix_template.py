@@ -94,3 +94,31 @@ def test_a_machine_that_stops_being_exported_raises_a_trigger():
     flat = re.sub(r"\s*\n\s*", " ", TEMPLATE.read_text(encoding="utf-8"))
 
     assert re.search(r"nodata\(/[^/]+/srp\.state,", flat), "нужен nodata на srp.state"
+
+
+def test_a_seven_day_horizon_below_h3_raises_an_average_trigger():
+    """H11: a nearly full drive is h2 now, so its urgency gets its own trigger. It goes off
+    with the horizon (days_left must still arrive: count() over 30 min, not nodata on a
+    numeric key) and leaves h3/h4 to their own triggers."""
+    flat = re.sub(r"\s*\n\s*", " ", TEMPLATE.read_text(encoding="utf-8"))
+    m = re.search(
+        r"expression: '([^']*srp\.days_left\)<=7[^']*)' name: '([^']+)' priority: (\w+)", flat
+    )
+    assert m, "нужен триггер «действовать в течение 7 дней»"
+    expr, _name, priority = m.groups()
+    assert priority == "AVERAGE"
+    assert "count(/SRP predictive verdict/srp.days_left,30m)>0" in expr
+    assert '<>"h3"' in expr and '<>"h4"' in expr
+
+
+DOC = TEMPLATE.parents[1] / "zabbix-export.md"
+
+
+def test_the_doc_tells_manual_setups_about_the_seven_day_trigger():
+    """H11: a full system drive is h2 with days_left 7, so a Zabbix 5.0 / manual setup
+    that builds only the srp.state h3/h4 triggers (section 7) never fires for it."""
+    doc = DOC.read_text(encoding="utf-8")
+    for start, end in (("## 6.", "## 7."), ("## 7.", "## 8.")):
+        part = doc[doc.index(start) : doc.index(end)]
+        assert "действовать в течение 7 дней" in part, start
+        assert "`srp.days_left` ≤ 7" in part, start

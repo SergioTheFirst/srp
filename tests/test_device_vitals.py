@@ -440,3 +440,41 @@ def test_throttle_row_clamps_turbo_boost_to_zero(client: TestClient) -> None:
     row = body[body.index("Троттлинг CPU") :][:600]
     assert "0%" in row
     assert "-4%" not in row
+
+
+# --------------------------------------------------------------------------- #
+# WHEA / S13 (2026-11-02): подсказка чипа и строка «Расход резерва NVMe»
+# --------------------------------------------------------------------------- #
+def test_whea_chip_tooltip_does_not_blame_cpu_or_memory(client: TestClient) -> None:
+    _seed_device_with_scores("dev-wheatip", "PC-HW2")
+    _seed_historical("dev-wheatip", whea_errors_30d=4)
+    body = client.get("/device/dev-wheatip").text
+    assert "CPU/память" not in body
+    assert "Записи журнала WHEA-Logger за 30 дн" in body
+    assert "Своего балла риска не даёт" in body
+
+
+def test_nvme_spare_row_prints_consumed_like_its_bar(client: TestClient) -> None:
+    trend = {
+        "direction": "worsening",
+        "slope_per_day": -0.2,
+        "current": 92.0,
+        "eta_days": 45.0,
+        "target_date": None,
+    }
+    _seed_device_with_trajectory("dev-spare", "PC-SPARE", "SpareModel", {"nvme_spare": trend})
+    body = client.get("/device/dev-spare").text
+    row = body[body.index("Расход резерва NVMe") :][:900]
+    assert "8.0%" in row and "~45д" in row
+    assert 'style="width:8.0%"' in row  # the number equals the bar (11b)
+    assert "92.0%" not in row
+
+
+def test_nvme_spare_row_absent_without_spare_points(client: TestClient) -> None:
+    empty = {"direction": "insufficient", "current": None, "n_points": 0, "eta_days": None}
+    fill = {"direction": "flat", "slope_per_day": 0.0, "current": 40.0, "eta_days": None}
+    trajectory = {"disk_fill": {**fill, "target_date": None}, "nvme_spare": empty}
+    _seed_device_with_trajectory("dev-nospare", "PC-NOSPARE", "NoSpareModel", trajectory)
+    body = client.get("/device/dev-nospare").text
+    assert "Заполнение диска" in body
+    assert "Расход резерва NVMe" not in body

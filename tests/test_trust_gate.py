@@ -206,3 +206,13 @@ def test_pipeline_wires_each_engine_to_its_own_domain(client, monkeypatch) -> No
         assert all(v != "unknown" for v in others.values()), (
             f"недоверие к {untrusted} протекло в чужие движки: {others}"
         )
+
+
+def test_identity_threshold_survives_legacy_daily_inventory() -> None:
+    """Шаблон доезжает не до всех машин: config.json с установок до 2026-06-19 и
+    правленный по README собирает inventory раз в сутки (86400), а обновление
+    config.json не переписывает. identity должен пережить 3 таких цикла."""
+    from server.trust.staleness import IDENTITY_STALE_AFTER_SEC
+
+    legacy_inventory_interval = 86400
+    assert 3 * legacy_inventory_interval <= IDENTITY_STALE_AFTER_SEC

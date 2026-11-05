@@ -32,8 +32,10 @@
     {% if hb and hb.uptime_hours is not none %}<div class="spec-now">аптайм: {{ "%.0f"|format(hb.uptime_hours) }} ч</div>{% endif %}
   </div>
 </div>
-{% if inv.pending_reboot or (inv.driver_problem_count or 0) > 0 %}
+{% set sec_flags = security_flags(inv, hb) %}
+{% if inv.pending_reboot or (inv.driver_problem_count or 0) > 0 or sec_flags %}
 <div class="spec-flags">
+  {% for f in sec_flags %}<span class="chip {{ f.level }}" title="{{ f.title }}">{{ f.text }}</span>{% endfor %}
   {% if inv.pending_reboot %}<span class="chip warn" title="Windows ожидает перезагрузку для завершения обновлений">требуется перезагрузка</span>{% endif %}
   {% if (inv.driver_problem_count or 0) > 0 %}<span class="chip warn" title="Устройства с ошибками драйверов в диспетчере устройств">проблемных драйверов: {{ inv.driver_problem_count }}</span>{% endif %}
 </div>
@@ -50,6 +52,14 @@
         {% for m in inv.memory_modules %}<div>{{ (m.capacity_gb ~ " ГБ") if m.capacity_gb is not none else "?" }}{% if m.speed_mhz %} · {{ m.speed_mhz }} МГц{% endif %}{% if m.manufacturer %} · {{ m.manufacturer }}{% endif %}{% if m.part_number %} · {{ m.part_number }}{% endif %}</div>{% endfor %}
       </td></tr>
       {% endif %}
+      <tr><td class="muted small">Безопасность</td><td class="small">
+        {%- set av = inv.get("antivirus") if inv.get("antivirus") is none or inv.get("antivirus") is iterable and inv.get("antivirus") is not string else none %}
+        <div>Антивирус: {% if av is none %}нет данных{% elif not av %}не найден{% else %}{% for p in av if p is mapping %}{{ p.name or "?" }} ({{ "вкл" if p.enabled else ("выкл" if p.enabled is false else "?") }}{% if p.up_to_date is false %}, базы устарели{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}{% endif %}</div>
+        <div>Последнее обновление Windows: {{ inv.get("last_patch_date") if inv.get("last_patch_date") is string else "нет данных" }}</div>
+        <div>BitLocker (системный диск): {{ {"on": "включён", "off": "выключен", "unknown": "неизвестно"}.get(inv.get("bitlocker_system") if inv.get("bitlocker_system") is string else none, "нет данных") }}</div>
+        <div>TPM: {% if inv.get("tpm_present") is none %}нет данных{% elif inv.get("tpm_present") %}есть{% if inv.get("tpm_version") %} ({{ inv.get("tpm_version") }}){% endif %}{% else %}нет{% endif %} · Secure Boot: {{ {True: "вкл", False: "выкл"}.get(inv.get("secure_boot") if inv.get("secure_boot") is boolean else none, "нет данных") }}</div>
+        <div>Активация Windows: {{ {True: "активирована", False: "не активирована"}.get(inv.get("windows_activated") if inv.get("windows_activated") is boolean else none, "нет данных") }}</div>
+      </td></tr>
       <tr><td class="muted small">Период активности</td><td class="small mono">{{ d.first_seen or "—" }} → {{ d.last_seen or "—" }}</td></tr>
     </tbody>
   </table>

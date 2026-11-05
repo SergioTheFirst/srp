@@ -140,8 +140,9 @@ def test_agent_server_flag_satisfies_requirement(monkeypatch) -> None:
         def __init__(self, cfg: ClientConfig) -> None:
             ran["url"] = cfg.server_url
 
-        def run_once(self) -> None:
+        def run_once(self) -> bool:
             ran["once"] = True
+            return True
 
         def run_forever(self) -> None:  # pragma: no cover - not exercised here
             ran["forever"] = True
@@ -174,24 +175,55 @@ def test_load_config_survives_corrupted_json(tmp_path, caplog) -> None:
     with caplog.at_level("ERROR", logger="client.config"):
         cfg = load_config(path)
     assert cfg.server_url == ""  # fell back to defaults, not a half-parsed value
-    assert cfg.device_id  # startup still completes: id resolved + persisted
+    assert cfg.device_id  # startup still completes: id resolved in memory
     assert "config.json" in caplog.text
+    # AUTH-2: the operator's (broken) file is NOT overwritten with defaults + a new id.
+    assert path.read_text(encoding="utf-8") == '{"server_url": "http://x.test"  BROKEN'
 
 
 def test_load_config_survives_unreadable_file(tmp_path, caplog, monkeypatch) -> None:
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
 
-    def flaky_read_text(self, *args, **kwargs):
+    def flaky_read_bytes(self, *args, **kwargs):
         if self == path:
             raise OSError("permission denied")
-        return original_read_text(self, *args, **kwargs)
+        return original_read_bytes(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
     with caplog.at_level("ERROR", logger="client.config"):
         cfg = load_config(path)
     assert cfg.server_url == ""
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16"])
+def test_load_config_reads_notepad_and_powershell_encodings(tmp_path, encoding) -> None:
+    """AUTH-2: BOM (Блокнот, Set-Content -Encoding UTF8) и UTF-16 (Out-File / > в
+    PS 5.1) раньше давали «не JSON» -> умолчания + новый device_id поверх файла:
+    ПК пропадал с дашборда, плодил призрака и умирал с exit 2."""
+    path = tmp_path / "config.json"
+    data = {"server_url": "http://10.0.0.5:8000", "device_id": "dev-keep", "site_name": "Офис"}
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding=encoding)
+
+    cfg = load_config(path)
+
+    assert cfg.server_url == "http://10.0.0.5:8000"
+    assert cfg.device_id == "dev-keep"
+    assert cfg.site_name == "Офис"
+
+
+def test_load_config_never_overwrites_an_unparsable_file(tmp_path) -> None:
+    """cp1251 (Set-Content без -Encoding в PS 5.1) не декодировать -- но файл
+    оператора должен остаться байт-в-байт, а не превратиться в умолчания."""
+    path = tmp_path / "config.json"
+    raw = '{"server_url": "http://10.0.0.5:8000", "site_name": "Офис"}'.encode("cp1251")
+    path.write_bytes(raw)
+
+    cfg = load_config(path)
+
+    assert cfg.server_url == ""
+    assert path.read_bytes() == raw
 
 
 def test_load_config_survives_non_object_json(tmp_path) -> None:
@@ -210,7 +242,7 @@ def test_load_config_rejects_wrong_type_for_int_field(tmp_path, caplog) -> None:
     )
     with caplog.at_level("ERROR", logger="client.config"):
         cfg = load_config(path)
-    assert cfg.heartbeat_interval_sec == 14400  # default kept, bad value skipped
+    assert cfg.heartbeat_interval_sec == 3600  # default kept, bad value skipped
     assert "heartbeat_interval_sec" in caplog.text
 
 
@@ -221,7 +253,7 @@ def test_load_config_rejects_bool_for_int_field(tmp_path) -> None:
         json.dumps({"heartbeat_interval_sec": True, "device_id": "d"}), encoding="utf-8"
     )
     cfg = load_config(path)
-    assert cfg.heartbeat_interval_sec == 14400
+    assert cfg.heartbeat_interval_sec == 3600
 
 
 def test_load_config_rejects_int_for_bool_field(tmp_path) -> None:
@@ -317,3 +349,27 @@ def test_type_matches_skips_check_for_non_plain_type() -> None:
     assert _type_matches(Optional[int], "anything") is True
     assert _type_matches(Optional[int], 5) is True
     assert _type_matches(Optional[int], None) is True
+
+
+_CYCLE = (
+    "inventory_interval_sec",
+    "historical_interval_sec",
+    "heartbeat_interval_sec",
+    "events_interval_sec",
+    "print_interval_sec",
+)
+
+
+def test_legacy_4h_cycle_migrates_to_1h(tmp_path) -> None:
+    """0.3.8: config.json установленных ПК обновление не трогает -- старое значение
+    по умолчанию (14400) читается как новое (3600), иначе парк остался бы на 4 ч."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({**dict.fromkeys(_CYCLE, 14400), "device_id": "d"}), "utf-8")
+    cfg = load_config(path)
+    assert all(getattr(cfg, k) == 3600 for k in _CYCLE)
+
+
+def test_custom_cycle_value_is_kept(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"events_interval_sec": 900, "device_id": "d"}), "utf-8")
+    assert load_config(path).events_interval_sec == 900

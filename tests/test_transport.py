@@ -7,13 +7,19 @@ FIFO and stop at the first blocked envelope; corrupt lines are dropped.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import logging
+import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from client import transport as transport_mod
 from client.config import ClientConfig
-from client.transport import AGENT_VERSION, Transport
+from client.transport import AGENT_VERSION, CONTRACT_VERSION, Transport
+from shared.schema import CONTRACT_VERSION as SERVER_CONTRACT
 
 pytestmark = pytest.mark.unit
 
@@ -27,15 +33,13 @@ def _make(tmp_path):
     return Transport(cfg), cfg
 
 
-def test_agent_version_is_contract_compatible():
-    """AGENT_VERSION (software release) and CONTRACT_VERSION (wire schema) are
-    independent axes -- T6 bumped AGENT_VERSION to 0.2.0 for the auto-update
-    feature while CONTRACT_VERSION stayed 0.1.0 (additive/optional fields never
-    bump it). The invariant that must hold is MAJOR compatibility, not equality:
-    a same-MAJOR agent's envelopes always parse (shared.schema.is_contract_compatible)."""
+def test_the_agent_declares_a_compatible_contract():
+    """AGENT_VERSION (software release) and CONTRACT_VERSION (wire schema) are independent
+    axes. Since stage 5 the 406 gate reads the declared contract_version, so AGENT_VERSION
+    1.0.0 has its own MAJOR; what must hold is that the declared contract is compatible."""
     from shared.schema import is_contract_compatible
 
-    assert is_contract_compatible(AGENT_VERSION)
+    assert is_contract_compatible(CONTRACT_VERSION)
 
 
 def test_agent_version_matches_version_file():
@@ -65,9 +69,16 @@ def test_envelope_has_required_fields(tmp_path):
     env = t._envelope("heartbeat", {"cpu_pct": 1.0})
     assert env["device_id"] == cfg.device_id
     assert env["agent_version"] == AGENT_VERSION
+    assert env["contract_version"] == SERVER_CONTRACT  # stage 5: the 406 gate reads it
     assert env["msg_type"] == "heartbeat"
     assert env["payload"] == {"cpu_pct": 1.0}
     assert "T" in env["ts"]  # ISO timestamp
+
+
+def test_the_agent_speaks_the_servers_contract():
+    """The stdlib agent keeps its own copy of the contract version (it cannot import
+    pydantic's shared.schema) -- the two must never drift."""
+    assert CONTRACT_VERSION == SERVER_CONTRACT
 
 
 def test_ingest_url_built_once(tmp_path):
@@ -82,6 +93,118 @@ def test_offline_send_buffers_envelope(tmp_path, monkeypatch):
     lines = t._read_buffer()
     assert len(lines) == 1
     assert json.loads(lines[0])["msg_type"] == "heartbeat"
+
+
+def test_failed_liveness_leaves_no_buffer_file(tmp_path, monkeypatch):
+    """0.3.4 #1: a replayed ping says nothing (the server stamps last_seen on receipt),
+    yet pings were 91 % of buffered lines -- the cap evicted real data after ~16 days."""
+    t, _ = _make(tmp_path)
+    monkeypatch.setattr(t, "_deliver", lambda env: False)  # server unreachable
+    assert t.send("liveness", {"alive": True}) is False
+    assert not t._buffer.exists()
+
+
+def test_buffered_liveness_is_purged_with_zero_posts(tmp_path, monkeypatch):
+    """0.3.3 backlogs: pings already on disk leave on the next flush, no network call."""
+    t, _ = _make(tmp_path)
+    for _ in range(2):
+        t._append_buffer(t._envelope("liveness", {"alive": True}))
+    posts: list = []
+
+    def _down(*a, **_kw):
+        posts.append(a)
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _down)
+    monkeypatch.setattr(transport_mod.time, "sleep", lambda _s: None)
+    assert t.flush_buffer() == 2
+    assert posts == []
+    assert not t._buffer.exists()
+
+
+def test_outage_logs_one_warning_then_one_recovery_line(tmp_path, monkeypatch, caplog):
+    """0.3.4 #4: every failed attempt was a WARNING -- 85 % of the 4 x 1 MB log was
+    'network error sending', so the lines explaining a dark PC rotated out in days."""
+    t, _ = _make(tmp_path)
+    replies = iter([urllib.error.URLError("refused"), urllib.error.URLError("refused"), None, None])
+
+    def _urlopen(*_a, **_kw):
+        reply = next(replies)
+        if reply is None:
+            return contextlib.nullcontext()
+        raise reply
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _urlopen)
+    with caplog.at_level(logging.DEBUG, logger="client.transport"):
+        outcomes = [t._attempt(t._envelope("heartbeat", {})) for _ in range(4)]
+    records = [r for r in caplog.records if r.name == "client.transport"]
+    assert outcomes == ["retry", "retry", "ok", "ok"]
+    assert [r.levelname for r in records] == ["WARNING", "DEBUG", "INFO"]
+    assert "связь восстановлена" in records[2].getMessage()
+
+
+def test_no_recovery_line_after_an_error_that_was_not_an_outage(tmp_path, monkeypatch, caplog):
+    """Ревью 0.3.4: 4xx-отказ или 429 -- сервер отвечал, связь не рвалась; «связь
+    восстановлена» после них путала разбор журнала."""
+    t, _ = _make(tmp_path)
+
+    def _http(code):
+        # настоящее пустое тело: на Python 3.9 HTTPError(fp=None) роняет read() с KeyError
+        return urllib.error.HTTPError("http://x", code, "x", {}, io.BytesIO(b""))  # type: ignore[arg-type]
+
+    replies = iter([_http(400), None, _http(429), None])
+
+    def _urlopen(*_a, **_kw):
+        reply = next(replies)
+        if reply is None:
+            return contextlib.nullcontext()
+        raise reply
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _urlopen)
+    with caplog.at_level(logging.DEBUG, logger="client.transport"):
+        for _ in range(2):
+            t._attempt(t._envelope("heartbeat", {}))
+        t._throttled_until = 0.0
+        for _ in range(2):
+            t._attempt(t._envelope("heartbeat", {}))
+    assert not any("связь восстановлена" in r.getMessage() for r in caplog.records)
+
+
+def test_replay_carries_a_fresh_sent_ts_and_the_original_envelope(tmp_path, monkeypatch):
+    """0.3.4 #9: ts is collection time and stays old on a replay -- the server took the
+    buffer's age for clock drift («рассинхронизация часов», minus 10 points)."""
+    t, _ = _make(tmp_path)
+    env = t._envelope("heartbeat", {"cpu_pct": 1.0})
+    env["ts"] = "2026-01-01T00:00:00+00:00"  # collected long ago, buffered since
+    t._append_buffer(env)
+    bodies: list[dict] = []
+
+    def _ok(req, **_kw):
+        bodies.append(json.loads(req.data))
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _ok)
+    assert t.flush_buffer() == 1
+    sent_ts = bodies[0].pop("sent_ts")
+    assert bodies[0] == env  # ts, idempotency_key and the rest go out untouched
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(sent_ts)
+    assert abs(age.total_seconds()) < 60
+
+
+def test_every_attempt_is_stamped_but_the_buffer_line_is_not(tmp_path, monkeypatch):
+    t, _ = _make(tmp_path)
+    posted: list[dict] = []
+
+    def _down(req, **_kw):
+        posted.append(json.loads(req.data))
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _down)
+    monkeypatch.setattr(transport_mod.time, "sleep", lambda _s: None)
+    assert t.send("heartbeat", {"cpu_pct": 1.0}) is False
+    assert len(posted) == 2
+    assert all("sent_ts" in body for body in posted)
+    assert "sent_ts" not in json.loads(t._read_buffer()[0])
 
 
 def test_flush_empty_buffer_returns_zero(tmp_path):
@@ -217,3 +340,33 @@ def test_offline_mode_drops_oversized_payload(tmp_path):
     big = {"blob": "x" * (transport_mod._MAX_PAYLOAD_BYTES + 1)}
     assert t.send("historical", big) is True  # «обработан» = отброшен
     assert t.buffer_depth() == 0
+
+
+def test_buffered_envelopes_of_a_previous_device_id_are_dropped_unsent(tmp_path, monkeypatch):
+    """0.3.5: после смены device_id (сброс клона, потеря config.json) буфер под старым id
+    не досылается -- иначе старая запись «оживает» поверх новой (spec canonical-devices)."""
+    t, cfg = _make(tmp_path)
+    t._append_buffer({**t._envelope("heartbeat", {"cpu_pct": 1.0}), "device_id": "old-dev"})
+    posts: list = []
+
+    def _accept(*a, **_kw):
+        posts.append(a)
+        raise AssertionError("must not POST an envelope of another device_id")
+
+    monkeypatch.setattr(transport_mod.urllib.request, "urlopen", _accept)
+    assert t.flush_buffer() == 1
+    assert posts == []
+    assert not t._buffer.exists()
+
+
+def test_envelope_carries_the_build_bitness(tmp_path):
+    """0.3.6: дашборд сверяет x86-агента с x86-пакетом -- разрядность в каждом конверте."""
+    import struct
+
+    from client.winflags import AGENT_ARCH
+    from shared.schema import Envelope
+
+    t, _ = _make(tmp_path)
+    env = t._envelope("heartbeat", {})
+    assert env["agent_arch"] == AGENT_ARCH == ("x86" if struct.calcsize("P") == 4 else "x64")
+    assert Envelope(**env).agent_arch == AGENT_ARCH

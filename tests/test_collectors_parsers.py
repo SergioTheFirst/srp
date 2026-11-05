@@ -12,6 +12,8 @@ Cyrillic message text from Russian Windows Event Log must pass through intact.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from client.collectors import events, heartbeat, historical, inventory
 from client.collectors.ps import PsResult
@@ -380,3 +382,188 @@ def test_events_grab_guards_each_event() -> None:
     assert "} catch { continue }" in tail.split("return $out")[0]
     # Перечисление журнала -- под своей защитой (журнала может не быть на этой SKU).
     assert "try { $records = @(Get-WinEvent" in _SCRIPT
+
+
+# --------------------------------------------------------------------------- #
+# Агент 0.3.4, пачка B: сборщики + съёмные устройства вне диагноза
+# --------------------------------------------------------------------------- #
+
+
+def test_inventory_pending_reboot_ignores_pending_file_renames() -> None:
+    """Находка 3: хвосты EdgeUpdate в PendingFileRenameOperations -- не «зависшие обновления».
+
+    Fast Startup их не разбирает: флаг висел бы почти на каждом ПК до настоящего рестарта.
+    """
+    s = inventory._SCRIPT
+    assert "PendingFileRenameOperations" not in s
+    assert "Component Based Servicing\\RebootPending" in s
+    assert "Auto Update\\RebootRequired" in s
+
+
+def test_inventory_driver_count_skips_disabled_and_peripheral_devices() -> None:
+    """Находка 12 + USB: код 22 (отключено вручную) и периферия ПО ПРИРОДЕ -- не «ошибка
+    драйвера». Флаг InLocalMachineContainer не годится: на ноутбуках он $false и у встроенных
+    USB-камеры/BT-модуля/картридера (ревью, проверено живьём) -- их сбои считаются, как раньше.
+    Сбой перечисления -> null, не «0 проблем»."""
+    s = inventory._SCRIPT
+    assert "ConfigManagerErrorCode <> 0 AND ConfigManagerErrorCode <> 22" in s
+    assert "DEVPKEY_Device_InLocalMachineContainer" not in s and "GetDeviceProperties" not in s
+    assert "$drv = $null" in s and "-ErrorAction Stop" in s
+    found = re.search(r"\$periph = '([^']+)'", s)
+    assert found is not None
+    periph = re.compile(found.group(1))  # .NET-регулярка из скрипта, Python читает её так же
+    excluded = [
+        r"SWD\PRINTENUM\{1234}",
+        r"SWD\IPP\x",
+        r"SWD\ESCL\x",
+        r"SWD\DAFWSDPROVIDER\x",
+        r"BTHENUM\{0000110E}",
+        r"BTHLE\DEV_E8B5",
+        r"BTHLEDEVICE\{1800}",
+        r"USBSTOR\DISK&VEN_X",
+        r"SWD\WPDBUSENUM\_??_USBSTOR#DISK&VEN_X&PROD_Y&REV_1#SER&0#{53F56307-B6BF-11D0-94F2}",
+        r"SWD\WPDBUSENUM\{3120354D-88C5-11F0-88B8-E0752663F12D}#0000000000100000",
+    ]
+    counted = [
+        r"USB\VID_0BDA&PID_5830\5&1",  # встроенная веб-камера
+        r"BTH\MS_BTHLE\7&1",  # дочерний узел встроенного BT-модуля
+        r"HID\INTC816\3&1",
+        r"PCI\VEN_10EC&DEV_C822",
+        r"SWD\MMDEVAPI\x",
+        r"SWD\WPDBUSENUMX\y",  # слеш после имени перечислителя -- граница имени
+        "",
+    ]
+    assert all(periph.match(pnp) for pnp in excluded)
+    assert not any(periph.match(pnp) for pnp in counted)
+
+
+def test_boot_time_is_median_of_normal_boots() -> None:
+    """Находка 6: одна долгая загрузка после обновления тянула среднее вверх.
+
+    Медиана загрузок с BootIsRebootAfterInstall = false (xs:boolean -> 'false', не
+    локализуется); нет таких -- медиана всех: boot_time -- источник доверия, не EMPTY.
+    """
+    s = historical._SCRIPT
+    assert "Measure-Object -Average" not in s
+    loop = s.split("foreach ($e in $btEvents)")[1].split("$avgBoot")[0]
+    assert "'BootIsRebootAfterInstall' }).'#text' -eq 'false'" in loop
+    assert "} catch { continue }" in loop
+
+
+def test_events_cap_keeps_evidence_priority_before_time_sort() -> None:
+    """Находка 11: всплеск WHEA/падений программ не должен вытеснять BugCheck 1001."""
+    s = events._SCRIPT
+    block = s.split("$queries = @(")[1].split("$all = @()")[0]
+    order = [
+        "Id=41;",
+        "Id=6008;",
+        "Id=1001;",
+        "ProviderName='disk'; Id=7,",
+        "ProviderName='disk'; Id=157;",
+        "'storahci'",
+        "'stornvme'",
+        "'Ntfs'",
+        "WHEA-Logger",
+        "WindowsUpdateClient",
+        "'Application Error'",
+        "'Application Hang'",
+    ]
+    pos = [block.index(t) for t in order]
+    assert pos == sorted(pos)
+    assert s.index("Select-Object -First 120") < s.index("Sort-Object { $_.ts } -Descending")
+
+
+def test_events_disk_bus_lookup_reads_numbers_only() -> None:
+    """USB: номер диска -- из пути \\Device\\HarddiskN\\ события, шина -- из журнала 1006.
+
+    Модель, серийник и MBR из записи 1006 не читаются; перечисление и каждая запись
+    -- под своей защитой.
+    """
+    s = events._SCRIPT
+    assert r"-match '\\Device\\Harddisk(\d+)\\'" in s
+    assert "LogName='Microsoft-Windows-Partition/Diagnostic'; Id=1006} -MaxEvents 200" in s
+    for leak in ("SerialNumber", "Model", "Mbr"):
+        assert leak not in s
+    head, loop = s.split("foreach ($r in $recs)")
+    assert "try { $recs = @(Get-WinEvent" in head
+    assert "} catch { continue }" in loop
+    # Живой бокс: 10 из 200 записей 1006 (дешёвые флешки, 0x1F/0x06 в серийнике) роняют
+    # [xml] -- ровно те, что нужны. Поля -- по имени регэкспом, только цифры.
+    assert "[xml]" not in loop
+    assert r"<Data Name='DiskNumber'>(\d+)</Data>" in loop
+    assert r"<Data Name='BusType'>(\d+)</Data>" in loop
+
+
+_EV_DISK1 = {
+    "ts": "2026-08-16T13:38:59.3469747Z",
+    "log": "System",
+    "source": "disk",
+    "event_id": 51,
+    "level": "Warning",
+    "message": "An error was detected on device \\Device\\Harddisk1\\DR13.",
+    "disk": 1,
+}
+
+
+def _arr(ts: str, disk: int, bus: int) -> dict:
+    return {"ts": ts, "disk": disk, "bus": bus}
+
+
+def _events_with(monkeypatch, evs, arrivals):
+    raw = {"events": evs, "arrivals": arrivals, "window_hours": 24}
+    monkeypatch.setattr(events, "run_ps", lambda *a, **k: _ok(raw))
+    return events.collect_events().payload["events"]
+
+
+@pytest.mark.parametrize("bus", [7, 4])  # STORAGE_BUS_TYPE: 7 = USB, 4 = 1394
+def test_events_disk_on_removable_bus_becomes_disk_removable(monkeypatch, bus):
+    """Запись 1006 через 8 мс ПОСЛЕ события (так на живом боксе) не в счёт -- решает прежняя."""
+    arrivals = [
+        _arr("2026-08-16T13:38:59.3551304Z", 1, 11),
+        _arr("2026-08-16T13:38:50.0602425Z", 1, bus),
+        _arr("2026-08-16T13:38:55.0000000Z", 0, 17),
+    ]
+    out = _events_with(monkeypatch, [_EV_DISK1], arrivals)
+    assert out[0]["source"] == "disk-removable"  # без «:» -- ключ свёртки делится по нему
+    assert "disk" not in out[0]  # служебный номер диска на сервер не уходит
+
+
+@pytest.mark.parametrize(
+    "event, arrivals",
+    [
+        (_EV_DISK1, None),  # журнал 1006 не прочитан / пуст
+        (_EV_DISK1, [_arr("2026-08-16T12:00:00.0000000Z", 1, 17)]),  # диск 1 -- NVMe
+        (_EV_DISK1, [_arr("2026-08-16T13:39:04.0000000Z", 1, 7)]),  # флешка -- позже события
+        (_EV_DISK1, [_arr("2026-08-16T12:00:00.0000000Z", 2, 7)]),  # флешка -- другой номер
+        ({**_EV_DISK1, "disk": None}, [_arr("2026-08-16T12:00:00.0000000Z", 1, 7)]),
+        ({**_EV_DISK1, "source": "Ntfs"}, [_arr("2026-08-16T12:00:00.0000000Z", 1, 7)]),
+    ],
+)
+def test_events_unproven_removable_disk_keeps_source(monkeypatch, event, arrivals):
+    """Исключаем только положительно опознанное съёмное; иначе -- как раньше (считается)."""
+    out = _events_with(monkeypatch, [event], arrivals)
+    assert out[0]["source"] == event["source"]
+
+
+def test_events_reused_disk_number_uses_latest_arrival_before_event(monkeypatch):
+    """Номера дисков переиспользуются: решает последнее подключение не позже события."""
+    early = {**_EV_DISK1, "ts": "2026-08-16T10:00:00.0000000Z"}
+    late = {**_EV_DISK1, "ts": "2026-08-16T14:00:00.0000000Z"}
+    arrivals = [
+        _arr("2026-08-16T09:00:00.0000000Z", 1, 7),  # диск 1 -- флешка
+        _arr("2026-08-16T13:00:00.0000000Z", 1, 11),  # потом диск 1 -- SATA
+    ]
+    out = _events_with(monkeypatch, [early, late], arrivals)
+    assert [e["source"] for e in out] == ["disk-removable", "disk"]
+
+
+def test_heartbeat_disk_latency_reads_system_disk_not_total() -> None:
+    """USB: в _Total входит копирование на флешку -- берём экземпляр диска системы («0 C:»).
+
+    Не нашли (счётчики выключены, необычная разметка) -- _Total, как раньше.
+    """
+    s = heartbeat._SCRIPT
+    assert "PhysicalDisk -Filter \"Name='_Total'\"" not in s
+    assert s.count("PhysicalDisk -Filter \"Name='$sysDisk'\"") == 3  # formatted + 2 raw
+    assert "-contains $env:SystemDrive" in s
+    assert "$sysDisk = '_Total'" in s

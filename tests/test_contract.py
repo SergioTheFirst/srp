@@ -87,6 +87,18 @@ def test_envelope_agent_version_is_capped():
         )
 
 
+def test_envelope_sent_ts_is_optional_and_capped():
+    """0.3.4 #9: additive -- old agents omit it (None); the cap sits above the agent's
+    32-char UTC ISO stamp, so a live envelope is never rejected."""
+    from pydantic import ValidationError
+
+    assert Envelope(device_id="d", msg_type="heartbeat", payload={}).sent_ts is None
+    stamp = "2026-10-15T12:00:00.123456+00:00"
+    assert Envelope(device_id="d", msg_type="heartbeat", payload={}, sent_ts=stamp).sent_ts == stamp
+    with pytest.raises(ValidationError):
+        Envelope(device_id="d", msg_type="heartbeat", payload={}, sent_ts="x" * 65)
+
+
 def test_envelope_rejects_bad_msg_type():
     with pytest.raises(ValueError):
         Envelope(device_id="dev-1", msg_type="nonsense", payload={})
@@ -243,3 +255,36 @@ def test_print_jobs_cap_is_above_agent_byte_budget() -> None:
     assert max_jobs_possible <= PRINT_JOBS_MAX, (
         f"серверный потолок {PRINT_JOBS_MAX} ниже достижимых агентом {max_jobs_possible}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# SourceHealth.reason (агент 0.3.5): мягкий токен, конверт не теряется
+# --------------------------------------------------------------------------- #
+def test_source_health_reason_optional_and_token_kept():
+    assert SourceHealth(status="empty").reason is None  # старые агенты
+    sh = SourceHealth(status="empty", reason="CommandNotFoundException")
+    assert sh.reason == "CommandNotFoundException"
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("CommandNotFoundException\r\n", "CommandNotFoundException"),
+        ("HRESULT 0x80041010", "HRESULT_0x80041010"),
+        ("rc_-532462766", "rc_-532462766"),
+        ("бум", None),  # кириллица -> без букв/цифр -> нет причины, а не 422
+        ("", None),
+        (123, None),
+        (None, None),
+    ],
+)
+def test_source_health_reason_is_cleaned_never_rejected(raw, clean):
+    assert SourceHealth(status="empty", reason=raw).reason == clean
+
+
+def test_source_health_reason_rejected_only_above_the_agent_cap():
+    from shared.schema import SOURCE_REASON_MAX
+
+    assert SourceHealth(status="empty", reason="a" * SOURCE_REASON_MAX).reason
+    with pytest.raises(ValueError):
+        SourceHealth(status="empty", reason="a" * (SOURCE_REASON_MAX + 1))

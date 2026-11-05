@@ -136,7 +136,7 @@ def _blind_health(**over: Any) -> dict:
         "dominant_label": "не определено",
         "horizon_days": None,
         "horizon_reason": "",
-        "action": "восстановить видимость: проверить агент и доступ к SMART/журналам",
+        "action": "восстановить видимость — проверить агент и доступ к SMART/журналам",
         "factors": [],
         "missing_evidence": [],
         "delta_7d": None,
@@ -258,15 +258,22 @@ def test_hero_no_hardcoded_hex_colors_in_blind_branch(client) -> None:
 
 
 def test_hero_dominant_and_action_line_present(client) -> None:
+    # D7 (calibration 2026-10-09): the hero prints the verdict's own health.action
     _seed(
         "hero-11",
         "HERO-11",
-        {"health": _real_health(dominant="network", dominant_label="сеть")},
+        {
+            "health": _real_health(
+                dominant="network",
+                dominant_label="сеть",
+                action="проверить линк/кабель/точку доступа",
+            )
+        },
     )
     body = client.get("/device/hero-11").text
     frag = _hero_fragment(body)
     assert "сеть" in frag  # dominant_label
-    assert "проверить линк/кабель/точку доступа" in frag  # action_for("network")
+    assert "проверить линк/кабель/точку доступа" in frag  # health.action
 
 
 def test_hero_delta_7d_none_renders_neutral_dash_not_broken(client) -> None:
@@ -305,7 +312,7 @@ def test_hero_verdict_line_prominent(client) -> None:
     assert "состояние" in frag
     assert "ранняя деградация" in frag  # state_label
     assert "что делать" in frag
-    assert "снять образ данных" in frag  # action_for("storage")
+    assert "снять образ данных" in frag  # health.action of the fixture
     assert "главный фактор" in frag
     assert "накопитель" in frag  # dominant_label
 

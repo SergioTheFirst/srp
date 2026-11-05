@@ -60,12 +60,14 @@ def test_fleet_page_outdated_kpi_neutral_when_none_outdated(client: TestClient) 
 def test_version_counts_groups_and_orders() -> None:
     devices = [{"agent_version": "0.2.0"}, {"agent_version": "0.2.0"}, {"agent_version": "0.1.0"}]
     rows = dashboard._version_counts(devices)
-    assert rows[0] == {"v": "0.2.0", "n": 2}
-    assert rows[1] == {"v": "0.1.0", "n": 1}
+    assert rows[0] == {"v": "0.2.0", "arch": "x64", "n": 2}
+    assert rows[1] == {"v": "0.1.0", "arch": "x64", "n": 1}
 
 
 def test_version_counts_missing_version_coalesces_to_dash() -> None:
-    assert dashboard._version_counts([{"agent_version": None}]) == [{"v": "—", "n": 1}]
+    assert dashboard._version_counts([{"agent_version": None}]) == [
+        {"v": "—", "arch": "x64", "n": 1}
+    ]
 
 
 def test_deploy_outdated_version_row_has_explanatory_title(client: TestClient, monkeypatch) -> None:
@@ -77,7 +79,7 @@ def test_deploy_outdated_version_row_has_explanatory_title(client: TestClient, m
     staged "available" version must be supplied for any row to go .warn."""
     db.upsert_device("v1", "2026-07-03T00:00:00+00:00", "0.3.0", hostname="NEW-PC")
     db.upsert_device("v2", "2026-07-03T00:00:00+00:00", "0.1.0", hostname="OLD-PC")
-    monkeypatch.setattr(dashboard, "_fleet_available_version", lambda request: "0.3.0")
+    monkeypatch.setattr(dashboard, "_fleet_available_version", lambda request, arch="x64": "0.3.0")
     html = client.get("/deploy").text
     assert "Версия агента ниже выложенной на сервере — устройства ждут обновления" in html
 
@@ -98,7 +100,7 @@ def test_deploy_version_counts_exclude_reinstall_ghost(client: TestClient) -> No
             "UPDATE devices SET last_seen=datetime('now','-2 hours') WHERE device_id='dev-old'"
         )
     live, _ = dashboard._live_devices(db.get_devices())
-    assert dashboard._version_counts(live) == [{"v": "0.3.0", "n": 1}]
+    assert dashboard._version_counts(live) == [{"v": "0.3.0", "arch": "x64", "n": 1}]
     html = client.get("/deploy").text
     assert "0.1.0" not in html
 

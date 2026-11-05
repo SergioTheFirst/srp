@@ -412,7 +412,7 @@ def _collect_via_events(state_path: Path, state: dict[str, Any]) -> CollectorRes
     result = run_ps(_build_script(last_ts), timeout=90)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed([PRINT_JOBS], status))
+        return CollectorResult(None, failed([PRINT_JOBS], status, result.reason))
 
     # Знак берём из PS (снят ДО запроса); fallback -- локальные часы.
     sweep_ts = _safe_ts(result.data.get("queried_at")) or datetime.now(timezone.utc).isoformat()
@@ -435,7 +435,7 @@ def _collect_via_counter(
     result = run_ps(_COUNTER_SCRIPT, timeout=60)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed([PRINT_JOBS], status))
+        return CollectorResult(None, failed([PRINT_JOBS], status, result.reason))
     if result.data.get("ok") is False:
         # Скрипт отработал, но перечислить очереди не смог. Пустой список тогда
         # НЕ означает «никто не печатал» -- отчитаться исправным было бы ложной

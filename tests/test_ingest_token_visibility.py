@@ -49,47 +49,19 @@ def test_dashboard_hides_banner_when_ingest_token_set(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# P0-4: same loud-not-silent treatment for the update_hmac_secret fallback.
+# K2 (2026-10-15): отдельного ключа подписи обновлений больше нет -- пакет подписан
+# ingest_token, который у агентов есть. Баннер «задайте update_hmac_secret ... и в
+# конфиге агентов» уводил оператора чинить не то и править config.json агентов руками.
 # --------------------------------------------------------------------------- #
-def test_startup_warns_when_update_hmac_secret_falls_back_to_ingest_token(tmp_path, caplog):
+def test_no_update_hmac_secret_nag_when_ingest_token_set(tmp_path, caplog):
     with caplog.at_level("WARNING", logger="srp.auth"):
-        create_app(
-            ServerConfig(db_path=str(tmp_path / "t.db"), ingest_token="tok", update_hmac_secret="")
-        )
-    assert any("update_hmac_secret" in r.message for r in caplog.records)
-
-
-def test_startup_silent_when_update_hmac_secret_set(tmp_path, caplog):
-    with caplog.at_level("WARNING", logger="srp.auth"):
-        create_app(
+        app = create_app(
             ServerConfig(
-                db_path=str(tmp_path / "t.db"), ingest_token="tok", update_hmac_secret="sign2"
+                db_path=str(tmp_path / "t.db"),
+                ingest_token="tok",
+                org_directory_path=str(tmp_path / "org_directory.json"),
             )
         )
-    assert not any("update_hmac_secret" in r.message for r in caplog.records)
-
-
-def test_dashboard_shows_update_hmac_banner_when_falling_back(tmp_path):
-    app = create_app(
-        ServerConfig(
-            db_path=str(tmp_path / "t.db"),
-            ingest_token="tok",
-            update_hmac_secret="",
-            org_directory_path=str(tmp_path / "org_directory.json"),
-        )
-    )
-    with TestClient(app) as c:
-        assert "update_hmac_secret" in c.get("/").text
-
-
-def test_dashboard_hides_update_hmac_banner_when_secret_set(tmp_path):
-    app = create_app(
-        ServerConfig(
-            db_path=str(tmp_path / "t.db"),
-            ingest_token="tok",
-            update_hmac_secret="sign2",
-            org_directory_path=str(tmp_path / "org_directory.json"),
-        )
-    )
     with TestClient(app) as c:
         assert "update_hmac_secret" not in c.get("/").text
+    assert not any("update_hmac_secret" in r.message for r in caplog.records)

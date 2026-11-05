@@ -118,3 +118,45 @@ def test_ingest_rejects_unparseable_agent_version_with_406(client):
     r = client.post("/api/v1/ingest", json=env)
     assert r.status_code == 406, r.text
     assert not any(d["device_id"] == "junkver" for d in client.get("/api/v1/devices").json())
+
+
+# --------------------------------------------------------------------------- #
+# Stage 5: the agent version is decoupled from the contract (contract_version)
+# --------------------------------------------------------------------------- #
+@pytest.mark.integration
+def test_agent_1_0_speaking_the_contract_is_accepted(client):
+    """The 406 gate reads contract_version: agent 1.0.0 speaking the server's contract is
+    stored; the same 1.0.0 without the field is a MAJOR break, as before the split."""
+    env = envelope("v1agent", "heartbeat", healthy("heartbeat"))
+    env["agent_version"] = "1.0.0"
+    env["contract_version"] = CONTRACT_VERSION
+    r = client.post("/api/v1/ingest", json=env)
+    assert r.status_code == 200, r.text
+    assert r.json()["contract_compatible"] is True
+    bare = {k: v for k, v in env.items() if k != "contract_version"}
+    bare["device_id"] = "v1bare"
+    assert client.post("/api/v1/ingest", json=bare).status_code == 406
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("declared", ["junk", None])
+def test_a_declared_contract_is_what_the_gate_checks(client, declared):
+    """A wrong-MAJOR or unparseable declared contract is stopped even when the agent's own
+    version would pass (the declared one wins)."""
+    env = envelope(f"declared-{declared}", "heartbeat", healthy("heartbeat"))
+    bad_major = parse_version(CONTRACT_VERSION)[0] + 1
+    env["contract_version"] = declared or f"{bad_major}.0.0"
+    r = client.post("/api/v1/ingest", json=env)
+    assert r.status_code == 406, r.text
+    assert "contract" in r.json()["detail"]
+
+
+@pytest.mark.unit
+def test_an_envelope_without_contract_version_falls_back_to_the_agent_version():
+    from shared.schema import Envelope
+
+    old = Envelope(device_id="d", msg_type="heartbeat", agent_version="0.3.8")
+    new = Envelope(
+        device_id="d", msg_type="heartbeat", agent_version="1.0.0", contract_version="0.1.0"
+    )
+    assert (old.spoken_contract, new.spoken_contract) == ("0.3.8", "0.1.0")

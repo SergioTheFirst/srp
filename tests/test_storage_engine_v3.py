@@ -176,7 +176,7 @@ def test_attr5_low_and_high_tier():
 
 def test_attr187_reported_uncorrectable():
     s = compute_storage_risk(_hist([_disk(smart_attrs={"187": 1})]), None)
-    assert _coords(s)["damage"] == 35.0
+    assert _coords(s)["damage"] == 40.0
 
 
 def test_attr188_command_timeouts():
@@ -206,13 +206,22 @@ def test_nvme_percentage_used_mid_tier():
     assert _coords(s)["damage"] == 25.0
 
 
-def test_wear_pct_alone_does_not_trigger_new_wear_rule():
-    """Backward-compat gate: the ssd3 wear rule requires nvme_percentage_used
-    (a Ф1-only field) so a pre-Ф1 payload's wear_pct never double-fires
-    against the legacy wear rule (T2.4 pin)."""
+def test_sata_wear_is_damage_coordinate_only():
+    """A Ф1 SATA payload (serial_hash, no nvme_percentage_used) tags the legacy
+    wear hit with D; the axis value stays the legacy one and the ssd3 wear rule
+    never double-fires (it requires nvme_percentage_used)."""
     s = compute_storage_risk(_hist([_disk(wear_pct=96.0)]), None)
-    assert _coords(s)["damage"] == 0.0
+    assert _coords(s)["damage"] == 40.0
     assert s.value == 40.0  # legacy wear rule only
+
+
+def test_pre_f1_wear_pct_keeps_zero_damage():
+    """Backward-compat gate (T2.4 pin): a pre-Ф1 payload has no serial_hash, so
+    its wear_pct feeds the legacy value alone, never a coordinate."""
+    old_disk = {"disk": "PhysicalDisk0", "media_type": "SSD", "wear_pct": 96.0}
+    s = compute_storage_risk(_hist([old_disk]), None)
+    assert _coords(s)["damage"] == 0.0
+    assert s.value == 40.0
 
 
 def test_wear_rule_takes_max_of_wear_pct_and_percentage_used():
@@ -272,7 +281,7 @@ def test_coordinate_sums_match_the_hits_that_fired():
     # Kept under the 100-clamp so the raw sum is directly checkable.
     s = compute_storage_risk(_hist([_disk(smart_attrs={"5": 5, "187": 1})]), None)
     coords = _coords(s)
-    assert coords["damage"] == 30.0 + 35.0
+    assert coords["damage"] == 30.0 + 40.0
     assert set(coords["flags"]) == {"damage_present"}  # 5 and 187 share this flag
 
 
@@ -281,7 +290,7 @@ def test_coordinate_damage_clamps_at_100_like_the_legacy_axis():
         _hist([_disk(smart_attrs={"5": 5, "187": 1}, nvme_media_errors=1)]), None
     )
     coords = _coords(s)
-    assert coords["damage"] == 100.0  # 30+35+45=110, clamped same as the legacy value
+    assert coords["damage"] == 100.0  # 30+40+45=115, clamped same as the legacy value
     assert s.value == 100.0
 
 
@@ -304,7 +313,7 @@ def test_untrusted_withholds_even_with_new_fields():
 
 
 # --------------------------------------------------------------------------- #
-# worst_disk_key: pure, D-points of the latest reading only
+# worst_disk_key: pure, D+R points of the latest reading only
 # --------------------------------------------------------------------------- #
 
 
@@ -338,10 +347,10 @@ def _series_row(days_ago: int, **fields):
     return row
 
 
-def test_recurrence_fires_when_gap_is_at_least_seven_days():
+def test_new_maximum_is_recent_growth():
     series = [
-        _series_row(10, nvme_media_errors=1),
-        _series_row(2, nvme_media_errors=3),  # grew, >=7d after the older reading
+        _series_row(10, nvme_media_errors=1),  # the first reading seeds, never an event
+        _series_row(2, nvme_media_errors=3),  # new high-water mark within 14 days
     ]
     s = compute_storage_risk(_hist([_disk(nvme_media_errors=3)]), None, disk_series=series)
     coords = _coords(s)
@@ -349,10 +358,11 @@ def test_recurrence_fires_when_gap_is_at_least_seven_days():
     assert coords["resilience_loss"] >= 30.0
 
 
-def test_recurrence_does_not_fire_under_seven_days():
+def test_old_burst_without_new_maximum_is_not_growth():
     series = [
-        _series_row(5, nvme_media_errors=1),
-        _series_row(1, nvme_media_errors=3),  # grew, but only 4 days apart
+        _series_row(30, nvme_media_errors=1),
+        _series_row(20, nvme_media_errors=3),  # the last new maximum, 20 days back
+        _series_row(1, nvme_media_errors=3),  # stable since: no new maximum in 14 days
     ]
     s = compute_storage_risk(_hist([_disk(nvme_media_errors=3)]), None, disk_series=series)
     assert "recurrence" not in _coords(s)["flags"]

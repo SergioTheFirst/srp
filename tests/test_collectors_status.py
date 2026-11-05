@@ -113,6 +113,22 @@ def test_inventory_ok_reports_identity(monkeypatch):
     assert res.source_health["identity"]["status"] == "ok"
 
 
+def test_inventory_hollow_run_is_identity_empty(monkeypatch):
+    """F2: WMI отказал целиком (битый репозиторий, служба остановлена), PowerShell
+    отработал -- hostname из $env есть всегда, а модели и ОС нет. Раньше это было
+    identity «ok»: пустышка затирала хорошую инвентаризацию и давала ложный trusted."""
+    monkeypatch.setattr(
+        inventory,
+        "run_ps",
+        lambda *a, **k: _ok(
+            {"hostname": "PC1", "model": "", "os_caption": "", "disks": [], "memory_modules": []}
+        ),
+    )
+    res = inventory.collect_inventory()
+    assert res.payload is None
+    assert res.source_health["identity"]["status"] == "empty"
+
+
 def test_inventory_absent_marks_identity(monkeypatch):
     monkeypatch.setattr(inventory, "run_ps", lambda *a, **k: PsResult("absent"))
     res = inventory.collect_inventory()
@@ -143,3 +159,42 @@ def test_events_timeout_marks_source(monkeypatch):
     res = events.collect_events()
     assert res.payload is None
     assert res.source_health["events"]["status"] == "timeout"
+
+
+# --------------------------------------------------------------------------- #
+# Агент 0.3.5: причина сбоя едет в source_health (статус прежний)
+# --------------------------------------------------------------------------- #
+def test_broken_powershell_reason_reaches_every_owned_source(monkeypatch):
+    broken = PsResult("empty", rc=1, reason="CommandNotFoundException")
+    monkeypatch.setattr(historical, "run_ps", lambda *a, **k: broken)
+    res = historical.collect_historical()
+    assert res.payload is None
+    for src in ("storage_reliability", "reliability", "boot_time"):
+        assert res.source_health[src]["status"] == "empty"  # доверие не меняется
+        assert res.source_health[src]["reason"] == "CommandNotFoundException"
+
+
+def test_events_failure_carries_reason(monkeypatch):
+    monkeypatch.setattr(
+        events, "run_ps", lambda *a, **k: PsResult("empty", rc=1, reason="rc_1")
+    )
+    assert events.collect_events().source_health["events"]["reason"] == "rc_1"
+
+
+def test_legit_empty_has_no_reason_key(monkeypatch):
+    monkeypatch.setattr(events, "run_ps", lambda *a, **k: _ok({"events": [], "arrivals": []}))
+    assert "reason" not in events.collect_events().source_health["events"]
+
+
+def test_inventory_hollow_run_names_cim(monkeypatch):
+    monkeypatch.setattr(inventory, "run_ps", lambda *a, **k: _ok({"hostname": "PC-01"}))
+    identity = inventory.collect_inventory().source_health["identity"]
+    assert (identity["status"], identity["reason"]) == ("empty", "cim_hollow")
+
+
+def test_health_sanitizes_and_drops_garbage_reason():
+    from client.collectors.sources import health
+
+    assert health("empty", "HRESULT 0x80041010")["reason"] == "HRESULT_0x80041010"
+    assert "reason" not in health("empty", "бум")
+    assert "reason" not in health("ok")

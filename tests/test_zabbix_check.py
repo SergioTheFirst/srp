@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from server.zabbix import check as chk
 from server.zabbix import export as zx
 from server.zabbix.config import ZabbixConfig
 
 from tests.zabbix_trapper_stub import TrapperStub
+
+# Расчёт «свежий» относительно сейчас: зашитая дата протухала через несколько дней,
+# экспорт считал вывод устаревшим и отдавал unknown вместо h3.
+_FRESH_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 ROWS = [
     {
@@ -16,7 +22,7 @@ ROWS = [
         "model": "OptiPlex",
         "chassis": "desktop",
         "org_code": "7",
-        "score_ts": "2026-09-08T11:00:00+00:00",
+        "score_ts": _FRESH_TS,
         "state": "h3",
         "risk": 61.0,
         "days_left": 30,
@@ -29,7 +35,7 @@ ROWS = [
         "model": "",
         "chassis": "",
         "org_code": "7",
-        "score_ts": "2026-09-08T11:00:00+00:00",
+        "score_ts": _FRESH_TS,
         "state": "h0",
         "risk": 3.0,
         "days_left": None,

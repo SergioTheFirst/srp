@@ -307,3 +307,54 @@ def test_get_network_snapshots_does_not_read_historical(client: TestClient) -> N
     snaps = {s["device_id"]: s for s in db.get_network_snapshots()}
     assert "dev-net-2" in snaps
     assert snaps["dev-net-2"]["adapters"] == _NET_FIELDS["network_adapters"]
+
+
+# --------------------------------------------------------------------------- #
+# 2026-10-24: призрак/выключенный ПК не голосует в D9; свежий снапшот выигрывает
+# --------------------------------------------------------------------------- #
+def _post_net(client, did, hostname=None):
+    body = envelope(did, "historical", _hist_with_network(**_NET_FIELDS))
+    if hostname:
+        body = {**body, "hostname": hostname}
+    assert client.post("/api/v1/ingest", json=body).status_code == 200
+
+
+@pytest.mark.integration
+def test_silent_device_quality_is_not_current(client: TestClient):
+    """D9: ПК, молчащий > суток по СЕРВЕРНОМУ last_seen, не голосует замёрзшими потерями."""
+    from server import db
+
+    _post_net(client, "dev-live")
+    _post_net(client, "dev-off")
+    with db._connect() as conn:
+        conn.execute("UPDATE devices SET last_seen=datetime('now','-3 days') WHERE device_id='dev-off'")
+    snaps = {s["device_id"]: s for s in db.get_network_snapshots()}
+    assert snaps["dev-off"]["quality"] == [] and snaps["dev-off"]["adapters"]
+    assert snaps["dev-live"]["quality"] == _NET_FIELDS["network_quality"]
+
+
+@pytest.mark.integration
+def test_ghost_snapshot_skipped_when_successor_has_its_own(client: TestClient):
+    from server import db
+
+    _post_net(client, "dev-old", hostname="PC-01")
+    _post_net(client, "dev-new", hostname="PC-01")
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE devices SET first_seen=datetime('now','-30 days'),"
+            " last_seen=datetime('now','-2 hours') WHERE device_id='dev-old'"
+        )
+    ids = [s["device_id"] for s in db.get_network_snapshots()]
+    assert ids == ["dev-new"]
+
+
+@pytest.mark.integration
+def test_network_snapshots_ordered_by_server_last_seen(client: TestClient):
+    from server import db
+
+    for did in ("dev-b", "dev-a"):
+        _post_net(client, did)
+    with db._connect() as conn:
+        conn.execute("UPDATE devices SET last_seen=datetime('now','-2 hours') WHERE device_id='dev-a'")
+    order = [s["device_id"] for s in db.get_network_snapshots()]
+    assert order.index("dev-a") < order.index("dev-b")

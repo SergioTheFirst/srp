@@ -56,41 +56,42 @@ def _ids(rows):
 # _split_duplicates — ядро
 # --------------------------------------------------------------------------- #
 def test_older_stale_twin_hidden_newest_kept():
-    fresh = _dev("new", "PC-01", 30)  # на связи
-    ghost = _dev("old", "PC-01", 4000)  # молчит
+    fresh = _dev("new", "PC-01", 30, first_seen_age=3600)  # на связи, появился час назад
+    ghost = _dev("old", "PC-01", 4000, first_seen_age=900_000)  # замолчал до появления
     live, dupes = dashboard._split_duplicates([ghost, fresh])
     assert _ids(live) == ["new"]
     assert _ids(dupes) == ["old"]
 
 
 def test_both_live_nothing_hidden():
-    a = _dev("a", "PC-01", 20)
-    b = _dev("b", "PC-01", 40)
+    a = _dev("a", "PC-01", 20, first_seen_age=50_000)
+    b = _dev("b", "PC-01", 40, first_seen_age=40_000)
     live, dupes = dashboard._split_duplicates([a, b])
     assert set(_ids(live)) == {"a", "b"}
     assert dupes == []
 
 
 def test_different_hostnames_nothing_hidden():
-    a = _dev("a", "PC-01", 4000)
-    b = _dev("b", "PC-02", 20)
+    # возрасты такие, что при одном имени b вытеснил бы a -- гард имени не пустой
+    a = _dev("a", "PC-01", 4000, first_seen_age=900_000)
+    b = _dev("b", "PC-02", 20, first_seen_age=3600)
     live, dupes = dashboard._split_duplicates([a, b])
     assert set(_ids(live)) == {"a", "b"}
     assert dupes == []
 
 
 def test_case_and_whitespace_group_together():
-    fresh = _dev("new", "pc-01", 20)
-    ghost = _dev("old", " PC-01 ", 4000)
+    fresh = _dev("new", "pc-01", 20, first_seen_age=3600)
+    ghost = _dev("old", " PC-01 ", 4000, first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([ghost, fresh])
     assert _ids(live) == ["new"]
     assert _ids(dupes) == ["old"]
 
 
 def test_empty_hostname_never_hidden():
-    a = _dev("a", "", 4000)
-    b = _dev("b", "", 20)
-    c = _dev("c", None, 4000)
+    a = _dev("a", "", 4000, first_seen_age=900_000)
+    b = _dev("b", "", 20, first_seen_age=3600)
+    c = _dev("c", None, 4000, first_seen_age=950_000)
     live, dupes = dashboard._split_duplicates([a, b, c])
     assert set(_ids(live)) == {"a", "b", "c"}
     assert dupes == []
@@ -99,8 +100,8 @@ def test_empty_hostname_never_hidden():
 def test_unparseable_age_never_hidden_never_keeper():
     """last_seen_age_sec is None -> строка не участвует: не скрывается и не
     может быть keeper'ом (UNKNOWN over false confidence)."""
-    unknown = _dev("u", "PC-01", None)
-    ghost = _dev("old", "PC-01", 4000)
+    unknown = _dev("u", "PC-01", None, first_seen_age=3600)  # без last_seen не может вытеснить
+    ghost = _dev("old", "PC-01", 4000, first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([unknown, ghost])
     # только одна строка с известным возрастом -> сравнивать не с чем, скрывать нечего
     assert set(_ids(live)) == {"u", "old"}
@@ -108,30 +109,49 @@ def test_unparseable_age_never_hidden_never_keeper():
 
 
 def test_three_copies_newest_kept_two_hidden():
-    fresh = _dev("new", "PC-01", 15)
-    g1 = _dev("g1", "PC-01", 2000)
-    g2 = _dev("g2", "PC-01", 5000)
+    fresh = _dev("new", "PC-01", 15, first_seen_age=1000)
+    g1 = _dev("g1", "PC-01", 2000, first_seen_age=900_000)
+    g2 = _dev("g2", "PC-01", 5000, first_seen_age=950_000)
     live, dupes = dashboard._split_duplicates([g1, fresh, g2])
     assert _ids(live) == ["new"]
     assert set(_ids(dupes)) == {"g1", "g2"}
 
 
-def test_two_offline_twins_nothing_hidden():
-    """Обе offline: нет живого преемника -> не доказано, что это переустановка
-    (может быть один упавший ПК). Ничего не прячем (UNKNOWN over false confidence)."""
-    newer = _dev("newer", "PC-01", 1000)
-    older = _dev("older", "PC-01", 9000)
+def test_night_sleeping_successor_still_folds_predecessor():
+    """P0 владельца (2026-10-24): преемник спит (offline), но прожил день и появился
+    ПОСЛЕ того, как старая запись замолчала -> дубль свёрнут и ночью."""
+    newer = _dev("newer", "PC-01", 1000, first_seen_age=50_000)
+    older = _dev("older", "PC-01", 60_000, first_seen_age=900_000)
+    live, dupes = dashboard._split_duplicates([older, newer])
+    assert _ids(live) == ["newer"]
+    assert _ids(dupes) == ["older"]
+
+
+def test_two_offline_twins_with_overlapping_lives_stay_visible():
+    """Жизни пересекаются (старая писала после появления новой) -> тёзки, не дубли:
+    доказательства переустановки нет (UNKNOWN over false confidence)."""
+    newer = _dev("newer", "PC-01", 1000, first_seen_age=50_000)
+    older = _dev("older", "PC-01", 9000, first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([older, newer])
     assert set(_ids(live)) == {"newer", "older"}
     assert dupes == []
+
+
+def test_overlapping_stale_twin_stays_visible_as_namesake():
+    """Регрессия старой stale-ветки: спящий реальный тёзка больше не прячется за живым."""
+    fresh = _dev("fresh", "PC-01", 30, first_seen_age=7200)
+    sleeping = _dev("sleeping", "PC-01", 1800, first_seen_age=900_000)
+    live, dupes = dashboard._split_duplicates([sleeping, fresh])
+    assert set(_ids(live)) == {"fresh", "sleeping"} and dupes == []
 
 
 def test_same_hostname_different_site_not_hidden():
     """Разные объекты с одинаковым generic-именем -- разные машины, не дубли:
     упавший ПК другого объекта не должен исчезнуть из списка (закрытие HIGH
     финального ревью)."""
-    live_a = _dev("a", "KASSA", 20, site="msk", org="o1")
-    broken_b = _dev("b", "KASSA", 900000, site="spb", org="o2")  # реально в отказе
+    live_a = _dev("a", "KASSA", 20, site="msk", org="o1", first_seen_age=3600)
+    # реально в отказе; на одном объекте a вытеснил бы b -- гард объекта не пустой
+    broken_b = _dev("b", "KASSA", 900000, site="spb", org="o2", first_seen_age=950_000)
     live, dupes = dashboard._split_duplicates([live_a, broken_b])
     assert set(_ids(live)) == {"a", "b"}
     assert dupes == []
@@ -139,8 +159,8 @@ def test_same_hostname_different_site_not_hidden():
 
 def test_risky_stale_twin_hidden_when_live_successor():
     """Флаги призрака описывают тот же ПК, который теперь репортит преемник -> прячем."""
-    fresh = _dev("new", "PC-01", 20)
-    failing = _dev("old", "PC-01", 4000, flags=["at_risk", "unknown"])
+    fresh = _dev("new", "PC-01", 20, first_seen_age=3600)
+    failing = _dev("old", "PC-01", 4000, flags=["at_risk", "unknown"], first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([failing, fresh])
     assert _ids(live) == ["new"] and _ids(dupes) == ["old"]
 
@@ -148,7 +168,7 @@ def test_risky_stale_twin_hidden_when_live_successor():
 def test_predecessor_hidden_before_stale_when_successor_appeared_later():
     """Замолчал 2 мин назад, преемник впервые виден 1 мин назад -> предшественник, прячем сразу."""
     fresh = _dev("new", "PC-01", 10, first_seen_age=60)
-    ghost = _dev("old", "PC-01", 120)
+    ghost = _dev("old", "PC-01", 120, first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([ghost, fresh])
     assert _ids(live) == ["new"] and _ids(dupes) == ["old"]
 
@@ -156,15 +176,15 @@ def test_predecessor_hidden_before_stale_when_successor_appeared_later():
 def test_overlapping_live_twins_both_visible():
     """Оба репортят после появления второго -> разные машины или переходный период, показываем обе."""
     a = _dev("a", "PC-01", 30, first_seen_age=60)
-    b = _dev("b", "PC-01", 40)
+    b = _dev("b", "PC-01", 40, first_seen_age=900_000)
     live, dupes = dashboard._split_duplicates([a, b])
     assert set(_ids(live)) == {"a", "b"} and dupes == []
 
 
 def test_input_order_preserved():
     a = _dev("a", "H-A", 10)
-    g = _dev("g", "H-B", 4000)
-    b = _dev("b", "H-B", 20)
+    g = _dev("g", "H-B", 4000, first_seen_age=900_000)
+    b = _dev("b", "H-B", 20, first_seen_age=3600)
     live, _ = dashboard._split_duplicates([a, g, b])
     assert _ids(live) == ["a", "b"]  # исходный порядок сохранён
 
@@ -221,3 +241,62 @@ def test_first_seen_lights_new7d_kpi(client: TestClient):
     assert rows and rows[0].get("first_seen")  # больше не выпадает из SELECT
     ctx = dashboard._fleet_context(rows)
     assert ctx["summary"]["new7d"] >= 1
+
+
+def _age_row(did, *, first_days_ago, last_hours_ago):
+    from server import db
+
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE devices SET first_seen=datetime('now', ?), last_seen=datetime('now', ?)"
+            " WHERE device_id=?",
+            (f"-{first_days_ago} days", f"-{last_hours_ago} hours", did),
+        )
+
+
+@pytest.mark.integration
+def test_dupes_block_explains_why_and_when_it_is_purged(client: TestClient):
+    """P2: у свёрнутой строки -- когда замолчала, кто её сменил и когда удалит автосвип;
+    у неё нет NEW и data-flags (фильтры KPI её не поднимают)."""
+    from tests.conftest import envelope
+
+    for did in ("dev-old", "dev-new"):
+        body = {**envelope(did, "liveness", {}), "hostname": "PC-01"}
+        assert client.post("/api/v1/ingest", json=body).status_code == 200
+    _age_row("dev-old", first_days_ago=3, last_hours_ago=2)  # новая (NEW по first_seen)
+
+    html = client.get("/").text
+    _, _, tail = html.partition('class="site dupes"')
+    assert "замолчала" in tail and "новая запись" in tail
+    assert "удалится после" in tail  # device_retention_days=30 по умолчанию
+    row = tail.partition('data-id="dev-old"')[0].rpartition("<tr")[2]
+    assert 'data-flags=""' in row
+    assert "NEW" not in tail.partition("</table>")[0]
+
+
+@pytest.mark.integration
+def test_namesakes_with_overlapping_lives_both_listed_with_badge(client: TestClient):
+    from tests.conftest import envelope
+
+    # ns-a пишет и ПОСЛЕ появления ns-b -> жизни пересекаются (иначе на границе секунды
+    # ns-b законно вытеснил бы ns-a -- это и есть правило, а не флейк)
+    for did in ("ns-a", "ns-b", "ns-a"):
+        body = {**envelope(did, "liveness", {}), "hostname": "KASSA"}
+        assert client.post("/api/v1/ingest", json=body).status_code == 200
+    html = client.get("/fleet/fragment").text
+    assert "Скрытые дубликаты" not in html
+    assert html.count("тёзка ×2") == 2
+
+
+def test_dupe_why_survives_retention_off_and_absurd_values():
+    """Ревью 2026-10-24: огромный device_retention_days не роняет / и /fleet/fragment."""
+    ghost = {"device_id": "g", "successor_id": "k", "last_seen": "2026-10-01T00:00:00+00:00"}
+    by_id = {"k": {"device_id": "k", "first_seen": "2026-10-02T00:00:00+00:00", "hostname": "PC"}}
+    off = dashboard._dupe_why(ghost, by_id, 0)
+    assert off["purge_off"] is True and off["purge_after"] is None
+    # 4e6 дн переполняет datetime на любой ОС; 999999 дн -- только на Windows
+    # (astimezone за 3000-м годом), на Linux это реальная дата -- главное, без 500
+    assert dashboard._dupe_why(ghost, by_id, 4_000_000)["purge_after"] is None
+    assert dashboard._dupe_why(ghost, by_id, 999_999)["purge_off"] is False  # не падает
+    normal = dashboard._dupe_why(ghost, by_id, 30)
+    assert normal["purge_after"] and normal["successor_name"] == "PC"

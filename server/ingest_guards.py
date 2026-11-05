@@ -97,8 +97,11 @@ def mark_seen(key: Optional[str]) -> None:
         _seen_keys[key] = now
 
 
-def check_rate_limit(device_id: str) -> bool:
-    """True → within limit (process it).  False → exceeded (return 429)."""
+def check_rate_limit(device_id: str, limit: Optional[int] = None) -> bool:
+    """True → within limit (process it).  False → exceeded (return 429).
+
+    *limit* -- requests per window for this key; external_access passes a larger
+    per-IP budget (a NATed office of agents shares one address)."""
     now = time.monotonic()
     cutoff = now - _RATE_WINDOW_SEC
     with _rate_lock:
@@ -112,7 +115,7 @@ def check_rate_limit(device_id: str) -> bool:
             for d in stale_devices:
                 del _device_windows[d]
         times = [t for t in _device_windows.get(device_id, []) if t >= cutoff]
-        if len(times) >= _RATE_MAX_PER_WINDOW:
+        if len(times) >= (_RATE_MAX_PER_WINDOW if limit is None else limit):
             _device_windows[device_id] = times
             return False
         times.append(now)
@@ -120,7 +123,7 @@ def check_rate_limit(device_id: str) -> bool:
         return True
 
 
-def retry_after_sec(device_id: str) -> int:
+def retry_after_sec(device_id: str, limit: Optional[int] = None) -> int:
     """Через сколько секунд у ключа снова появится место в окне (минимум 1).
 
     Нужно, чтобы 429 нёс `Retry-After`: без него клиент не знает срока и
@@ -130,7 +133,7 @@ def retry_after_sec(device_id: str) -> int:
     now = time.monotonic()
     with _rate_lock:
         times = [t for t in _device_windows.get(device_id, []) if t >= now - _RATE_WINDOW_SEC]
-    if len(times) < _RATE_MAX_PER_WINDOW:
+    if len(times) < (_RATE_MAX_PER_WINDOW if limit is None else limit):
         return 1
     # Место освободится, когда самая старая отметка выпадет из окна.
     return max(1, math.ceil(min(times) + _RATE_WINDOW_SEC - now))

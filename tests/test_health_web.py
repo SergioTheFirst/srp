@@ -548,3 +548,38 @@ def test_fleet_health_deltas_reads_only_capped_tail(client, monkeypatch) -> None
     db.get_fleet_health_deltas()
     sql = next(q for q in seen if "health.state" in q)
     assert "ROW_NUMBER" not in sql.upper()
+
+
+# --------------------------------------------------------------------------- #
+# Канонический ПК (spec 2026-10-24): призраки вне /health, staleness-оверлей
+# --------------------------------------------------------------------------- #
+def test_with_staleness_turns_ten_day_old_verdict_unknown() -> None:
+    now = _now()
+    row = _hrow("st-1", state="h4", band="bad", score_ts=_iso(now - timedelta(days=12)))
+    out = health_view._with_staleness(row, now)
+    assert out["state"] == "unknown" and out["band"] == "unknown"
+    fresh = _hrow("st-2", state="h4", band="bad", score_ts=_iso(now))
+    assert health_view._with_staleness(fresh, now)["state"] == "h4"
+
+
+def test_health_excludes_reinstall_ghost_and_counts_older_records(client) -> None:
+    h4 = {"health": {"state": "h4", "index": 20.0, "band": "bad", "dominant": "storage"}}
+    h0 = {"health": {"state": "h0", "index": 90.0, "band": "good", "dominant": "storage"}}
+    _seed("gh-old", "PC-77", h4)
+    _seed("gh-new", "PC-77", h0)
+    with db._connect() as conn:  # серверные метки: старая замолчала до появления новой
+        conn.execute(
+            "UPDATE devices SET first_seen=datetime('now','-30 days'),"
+            " last_seen=datetime('now','-2 hours') WHERE device_id='gh-old'"
+        )
+    isl = _island(client.get("/health").text)
+    ids = isl["heatmap"]["device_ids"]
+    assert "gh-old" not in ids and "gh-new" in ids
+    assert isl["heatmap"]["older_counts"][ids.index("gh-new")] == 1
+
+
+def test_escalation_shows_the_verdicts_own_action() -> None:
+    # review 3f: an H6 h2 must say chkdsk here too, not "reinstall the OS" by its dominant
+    deltas = [{"device_id": "e1", "hostname": "E1", "state": "h2", "prev_state": "h0"}]
+    by_id = {"e1": _hrow("e1", state="h2", dominant="os", action=health._FS_ACTION)}
+    assert health_view._escalations(deltas, by_id)[0]["action"] == health._FS_ACTION

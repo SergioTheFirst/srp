@@ -17,6 +17,10 @@ Result = Tuple[SemanticStatus, Optional[str]]
 _OK: Result = (SemanticStatus.PLAUSIBLE, None)
 
 
+# The boot_time gate; db._BOOT_PLAUSIBLE_MAX_MS is the cohort sample bound (a test pins them)
+BOOT_MAX_MS = 600000.0
+
+
 def _num(value: Any) -> Optional[float]:
     try:
         return None if value is None else float(value)
@@ -35,20 +39,32 @@ def validate_scalar_range(source: str, value: Any, lo: float, hi: float) -> Resu
 
 def validate_storage_item(item: dict, last: Optional[dict]) -> Result:
     wear = _num(item.get("wear_pct"))
-    if wear is not None and (wear < 0 or wear > 100):
+    # MSFT_StorageReliabilityCounter.Wear is UInt8: a worn drive may legitimately pass 100.
+    if wear is not None and (wear < 0 or wear > 255):
         return SemanticStatus.IMPLAUSIBLE, f"wear_pct={wear}"
+    # A different serial_hash is a replaced disk: its lower counters are a legitimate reset
+    # (as in validate_smart_item). Both None stays comparable, so legacy agents keep the check.
+    same_disk = last is not None and item.get("serial_hash") == last.get("serial_hash")
     for key in ("reallocated_sectors", "power_on_hours", "read_errors_total", "write_errors_total"):
         cur = _num(item.get(key))
         if cur is not None and cur < 0:
             return SemanticStatus.IMPLAUSIBLE, f"{key}={cur} (negative)"
-        if last is not None:
-            prev = _num(last.get(key))
+        if same_disk:
+            prev = _num((last or {}).get(key))
             if cur is not None and prev is not None and cur < prev:
                 return SemanticStatus.INCONSISTENT, f"{key} dropped {prev}->{cur} (counter reset)"
     return _OK
 
 
-_SMART_MONOTONIC_ATTRS = ("5", "197", "198")
+# 197 (current pending) is a gauge: it legitimately falls when sectors are remapped
+# (Backblaze 2016; storage.py's remap_masking rule expects exactly that).
+_SMART_MONOTONIC_ATTRS = ("5", "198")
+# NVMe 2.0c: Percentage Used may exceed 100, 255 means "255 or more".
+_SMART_PCT_MAX = (
+    ("nvme_spare_pct", 100.0),
+    ("nvme_spare_threshold_pct", 100.0),
+    ("nvme_percentage_used", 255.0),
+)
 
 
 def validate_smart_item(item: dict, last: Optional[dict]) -> Result:
@@ -68,8 +84,8 @@ def validate_smart_item(item: dict, last: Optional[dict]) -> Result:
     check (or cross-anchoring to the same envelope's storage_reliability
     reading) becomes worth adding there.
     """
-    for key in ("nvme_spare_pct", "nvme_spare_threshold_pct", "nvme_percentage_used"):
-        status, reason = validate_scalar_range(f"smart.{key}", item.get(key), 0.0, 100.0)
+    for key, hi in _SMART_PCT_MAX:
+        status, reason = validate_scalar_range(f"smart.{key}", item.get(key), 0.0, hi)
         if status is not SemanticStatus.PLAUSIBLE:
             return status, reason
     temp = _num(item.get("temperature_c"))
@@ -190,7 +206,7 @@ def validate_source(source: str, reading: dict, last: Optional[dict]) -> Result:
     if source == "reliability":
         return validate_scalar_range(source, reading.get("value"), 0.0, 10.0)
     if source == "boot_time":
-        return validate_scalar_range(source, reading.get("value"), 0.0, 600000.0)
+        return validate_scalar_range(source, reading.get("value"), 0.0, BOOT_MAX_MS)
     if source == "throttle":
         last_value = (last or {}).get("value")
         return validate_frozen_constant(source, reading.get("value"), last_value)

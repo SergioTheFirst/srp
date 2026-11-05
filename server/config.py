@@ -16,6 +16,12 @@ from server.zabbix.config import ZabbixConfig, load_zabbix_config
 logger = logging.getLogger("srp.config")
 
 _CONFIG_PATH = Path(__file__).with_name("config.json")
+# Лимиты из server/config.json эпохи 4-часового цикла (до 0.3.8).
+_LEGACY_RETENTION = {
+    "retain_heartbeats": 500,
+    "retain_historical": 500,
+    "retain_disk_readings": 2000,
+}
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Env override for the org/department directory path (tray spec §7).
@@ -38,7 +44,7 @@ class ServerConfig:
     host: str = "0.0.0.0"  # nosec B104
     port: int = 8000
     db_path: str = "srp.db"  # relative -> resolved against project root
-    retain_heartbeats: int = 500  # per device, keep last N (MVP cap)
+    retain_heartbeats: int = 2000  # per device, keep last N (0.3.8: 1 ч цикл, ~83 дня)
     retain_events: int = 1000  # per device
     # Порог «offline» на дашборде, сек: 2 пропущенных liveness-пинга агента (300 с).
     stale_after_sec: int = 600
@@ -46,15 +52,21 @@ class ServerConfig:
     # stale_after_sec above (device-level offline flag). A source whose last
     # real evidence (device_source_trust.evidence_seen_at) is older than this
     # degrades to STALE on the periodic sweep below, independent of ingest.
-    # 12 ч ~= 3 пропущенных 4-часовых цикла агента. Цикл берётся из ШАБЛОНА,
-    # который разворачивает установщик -- client/deploy/config.template.json
-    # (все интервалы 14400). Файл client/config.json к цели не доезжает: он в
+    # 6 ч = 6 пропущенных часовых циклов агента 0.3.8 (верхняя граница пина 3-6x:
+    # агенты до обновления ещё ходят раз в 4 ч и не должны становиться STALE).
+    # Цикл берётся из ШАБЛОНА, который разворачивает установщик --
+    # client/deploy/config.template.json (все интервалы 3600). Файл client/config.json
+    # к цели не доезжает: он в
     # _KEEP_FILES и передаётся robocopy в /XF, поэтому его значения к поставке
     # отношения не имеют (я на этом уже ошибся: поднял порог до 72 ч, что
     # ослабило обнаружение мёртвого источника с 3 до 18 пропущенных циклов).
     # Связь пинится tests/test_trust_gate.py::
     # test_staleness_threshold_matches_shipped_agent_cadence.
-    source_stale_after_sec: int = 43200
+    # Но шаблон доезжает не до всех машин: config.json с установок до
+    # 2026-06-19 (и правленный по README) собирает inventory раз в сутки, а
+    # обновление его не переписывает -- поэтому у identity свой пол 3 суток
+    # (server/trust/staleness.py::IDENTITY_STALE_AFTER_SEC).
+    source_stale_after_sec: int = 21600
     source_stale_reeval_interval_sec: int = 3600  # 1h cadence; 0 disables the loop
     # W4.0: пересчитывать скоры в фоновом воркере, а не в HTTP-запросе ingest.
     async_rescore: bool = False
@@ -72,20 +84,19 @@ class ServerConfig:
     # но не вечно (единственная таблица телеметрии, росшая без ограничения).
     print_jobs_raw_days: int = 400
     rollup_days: int = 730
-    retain_disk_readings: int = 2000
+    retain_disk_readings: int = 8000  # 0.3.8: 1 ч цикл (было 2000 при 4 ч)
     # Спека 2026-08-27 (минимальный рост БД): historical -- окно читателей 200
     # строк (х2.5 запас); scores -- полный вердикт живёт в новейших строках,
     # возрастной срез истории (rulestats нужно 70 дней, дашборду <=44).
-    retain_historical: int = 500
+    retain_historical: int = 2000  # 0.3.8: 1 ч цикл (было 500 при 4 ч)
     scores_raw_days: int = 120
     historical_raw_days: int = 180
     # B105: not a secret literal -- empty = ingest auth OFF; real token set via config.json/env.
     ingest_token: str = ""  # nosec B105
-    update_hmac_secret: str = ""  # nosec B105 -- empty = fall back to ingest_token
     # Секрет ТОЛЬКО для админ-кнопок дашборда (удаление/очистка). Отдельный от
     # ingest_token намеренно: дашборд не аутентифицирован, и его страница
-    # публикует этот секрет мета-тегом -- ingest-ключ (он же запасной ключ
-    # подписи обновлений агента) публиковать нельзя. Пусто = кнопки получают
+    # публикует этот секрет мета-тегом -- ingest-ключ (он же ключ подписи
+    # пакета обновления агента) публиковать нельзя. Пусто = кнопки получают
     # честный 401, а не молчаливый «успех».
     admin_token: str = ""  # nosec B105
     # Org/department directory (tray spec §7); relative -> resolved against root.
@@ -104,7 +115,7 @@ class ServerConfig:
     netdisco: Optional[dict[str, Any]] = None
     retain_net_readings: int = 2000
     retain_net_snapshots: int = 500
-    # Agent auto-update package drop: the operator copies build.bat's
+    # Agent auto-update package drop: update.bat on this server publishes the signed
     # srp-agent-update-<ver>.zip + manifest.json here. Relative -> project root.
     updates_dir: str = "server/updates"
     # Экспорт предиктивного вердикта во внешний Zabbix (протокол траппера).
@@ -148,6 +159,12 @@ def load_config(path: Optional[Path] = None) -> ServerConfig:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         known = {f.name for f in fields(ServerConfig)}
         for key, value in data.items():
+            # Значение, поставлявшееся в server/config.json при 4-часовом цикле,
+            # = «не задано»: берём дефолт под часовой. Сам файл не меняем -- иначе
+            # update.ps1 не сведёт его с правками оператора в соседних строках.
+            if _LEGACY_RETENTION.get(key) == value:
+                logger.info("%s=%r -- значение 4-часового цикла, беру дефолт", key, value)
+                continue
             if key in known:
                 setattr(cfg, key, value)
     env_dir = os.environ.get(_ORG_DIRECTORY_ENV)

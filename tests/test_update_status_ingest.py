@@ -410,3 +410,26 @@ def test_legacy_devices_table_migrates_update_status_columns(tmp_path: Path) -> 
     # idempotent: a second re-init on an already-migrated DB must not blow up
     db.init_db(p)
     assert _columns(p, "devices") == after
+
+
+# --------------------------------------------------------------------------- #
+# 0.3.6: agent_arch (build bitness) is stored per device; old agents omit it
+# --------------------------------------------------------------------------- #
+def test_agent_arch_is_stored_and_kept_when_a_later_envelope_omits_it(client) -> None:
+    env = {**envelope("dev-x86", "heartbeat", {}), "agent_arch": "x86"}
+    assert client.post("/api/v1/ingest", json=env).status_code == 200
+    assert db.get_device("dev-x86")["agent_arch"] == "x86"
+    assert (
+        client.post("/api/v1/ingest", json=envelope("dev-x86", "liveness", {})).status_code == 200
+    )
+    assert db.get_device("dev-x86")["agent_arch"] == "x86"
+    assert [d["agent_arch"] for d in db.get_devices() if d["device_id"] == "dev-x86"] == ["x86"]
+
+
+def test_old_agent_without_agent_arch_stores_null() -> None:
+    assert Envelope(**envelope("dev-old", "heartbeat", {})).agent_arch is None
+
+
+def test_unknown_agent_arch_is_rejected_by_the_contract() -> None:
+    with pytest.raises(ValueError):
+        Envelope(**{**envelope("dev-bad", "heartbeat", {}), "agent_arch": "arm64"})

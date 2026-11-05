@@ -32,7 +32,14 @@ $cpu  = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='
 $pi   = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'" | Select-Object -First 1
 $mem  = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
 $pf   = Get-CimInstance Win32_PerfFormattedData_PerfOS_PagingFile -Filter "Name='_Total'"
-$dsk  = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"
+# Задержка диска -- по диску системы (экземпляр вида «0 C:»), не _Total: туда входит и
+# копирование на флешку. Не нашли (счётчики выключены, необычная разметка) -- _Total, как раньше.
+$sysDisk = '_Total'
+try {
+  $hit = @(Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk | Where-Object { ("$($_.Name)" -split ' ') -contains $env:SystemDrive })
+  if ($hit.Count) { $sysDisk = $hit[0].Name }
+} catch {}
+$dsk  = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='$sysDisk'"
 $proc = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name='_Total'"
 $os   = Get-CimInstance Win32_OperatingSystem
 $ld   = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($env:SystemDrive)'"
@@ -44,6 +51,7 @@ foreach ($n in Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface) {
 $explorer = @(Get-Process explorer -ErrorAction SilentlyContinue).Count -gt 0
 $uptimeH  = if ($os.LastBootUpTime) { [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1) } else { $null }
 $freePct  = if ($ld -and $ld.Size -gt 0) { [math]::Round(($ld.FreeSpace / $ld.Size) * 100, 1) } else { $null }
+$freeGb   = if ($ld -and $ld.Size -gt 0) { [math]::Round([double]$ld.FreeSpace / 1GB, 2) } else { $null }
 
 # ssd3 Ф4 (T4.1, K6 -- passive): 8 raw-counter samples ~2s apart -> 7 deltas of
 # PERF_AVERAGE_TIMER latency (ms). Raw class (not the Formatted one above) so we
@@ -61,11 +69,11 @@ function Get-Pctl($sorted, $p) {
 
 $rReadings = @(); $wReadings = @()
 try {
-  $prev = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"
+  $prev = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='$sysDisk'"
   $freq = [double]$prev.Frequency_PerfTime
   for ($i = 0; $i -lt 7; $i++) {
     Start-Sleep -Milliseconds 2000
-    $cur = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"
+    $cur = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='$sysDisk'"
     if ($freq -gt 0) {
       $dbR = [double]$cur.AvgDisksecPerRead_Base - [double]$prev.AvgDisksecPerRead_Base
       if ($dbR -gt 0) {
@@ -99,6 +107,7 @@ $latMax = if ($allSorted.Count -gt 0) { [math]::Round($allSorted[$allSorted.Coun
   disk_write_sec     = $dsk.AvgDisksecPerWrite
   disk_queue         = $dsk.CurrentDiskQueueLength
   free_space_pct     = $freePct
+  free_space_gb      = $freeGb
   handle_count_total = $proc.HandleCount
   nic_errors         = $nicErr
   user_present       = $explorer
@@ -132,7 +141,7 @@ def collect_heartbeat() -> CollectorResult:
     owned = [FREE_SPACE, THROTTLE, DISK_LATENCY]
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed(owned, status))
+        return CollectorResult(None, failed(owned, status, result.reason))
     raw = result.data
     payload = {
         "cpu_pct": _f(raw.get("cpu_pct")),
@@ -144,6 +153,7 @@ def collect_heartbeat() -> CollectorResult:
         "disk_write_sec": _f(raw.get("disk_write_sec")),
         "disk_queue": _f(raw.get("disk_queue")),
         "free_space_pct": _f(raw.get("free_space_pct")),
+        "free_space_gb": _f(raw.get("free_space_gb")),  # agent 1.0.0 (H17)
         "handle_count_total": _i(raw.get("handle_count_total")),
         "nic_errors": _i(raw.get("nic_errors")),
         "user_present": bool(raw.get("user_present")),

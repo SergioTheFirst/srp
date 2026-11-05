@@ -92,7 +92,7 @@ def test_insufficient_history_is_unknown():
 
 
 def test_worsening_wear_projects_eta_and_date():
-    series = [_hist(d, wear=10 + d) for d in (0, 5, 10)]  # 10->20, +1/day
+    series = [_hist(d, wear=10 + d) for d in range(0, 11, 2)]  # 10->20, +1/day
     trends = compute_trends(series, [])
     t = trends["storage_wear"]
     assert t.direction == "worsening"
@@ -102,14 +102,22 @@ def test_worsening_wear_projects_eta_and_date():
 
 
 def test_already_at_threshold_is_imminent_not_dropped():
-    # A drive that has reached 100% wear while still rising must read ETA 0 (the
-    # worst real case), not "no crossing" -> zero risk.
-    series = [_hist(d, wear=96 + 2 * d) for d in (0, 2, 4)]  # 96, 100, 104
+    # Rated write endurance is not failure: wear rising past 100% has no ETA and
+    # caps trajectory at the 180-day band (NVMe 2.0c Fig. 207). A FALLING metric
+    # at its floor is a different story: free space reaching 4% is imminent (H7: the
+    # level is the median of the last 4 readings, 8/6/4 -> 7 %, so ETA 1 day, not 0).
+    series = [_hist(d, wear=96 + d) for d in range(0, 11, 2)]  # 96 -> 106
     t = compute_trends(series, [])["storage_wear"]
     assert t.direction == "worsening"
-    assert t.eta_days == 0.0
-    s = trajectory_risk_score(compute_trends(series, []))
-    assert s.value is not None and s.value >= 90  # imminent -> top trajectory risk
+    assert t.eta_days is None
+    assert trajectory_risk_score(compute_trends(series, [])).value <= 35
+    hbs = [_hb(d, free=14 - 2 * d) for d in range(6)]  # 14 -> 4 (floor 5), -2/day
+    full = compute_trends([], hbs)
+    assert full["disk_fill"].eta_days == 1.0
+    s = trajectory_risk_score(full)
+    # H11 (owner decision 1): a filling drive is urgency, not degradation -- capped at 80
+    # (h2 with the horizon 7), while a depleting NVMe spare keeps the top band
+    assert s.value == 80.0
 
 
 def test_drive_replacement_anchors_to_new_part():
@@ -119,49 +127,63 @@ def test_drive_replacement_anchors_to_new_part():
         _hist(0, wear=80),
         _hist(5, wear=84),
         _hist(10, wear=88),
-        _hist(15, wear=2),
-        _hist(20, wear=5),
-        _hist(25, wear=8),
-    ]
+    ] + [_hist(15 + 2 * k, wear=2 + k) for k in range(6)]  # new drive 2 -> 7 over 10 days
     t = compute_trends(series, [])["storage_wear"]
-    assert t.current == 8.0  # latest = new drive
-    assert 0 < t.slope_per_day < 2.0  # ~0.6/day on the new drive, not a wild cross-cliff value
-    assert t.n_points == 3  # anchored to the post-swap segment
+    assert t.current == 7.0  # latest = new drive
+    assert 0 < t.slope_per_day < 2.0  # 0.5/day on the new drive, not a wild cross-cliff value
+    assert t.n_points == 6  # anchored to the post-swap segment
 
 
 def test_improving_metric_has_no_eta():
-    series = [_hist(d, wear=30 - d) for d in (0, 5, 10)]  # wear falling
+    series = [_hist(d, wear=30 - d) for d in range(0, 11, 2)]  # wear falling
     t = compute_trends(series, [])["storage_wear"]
     assert t.direction == "improving"
     assert t.eta_days is None
 
 
+def test_storage_wear_trend_ignores_removable_disks():
+    """0.3.4: a worn USB stick plugged in next to the internal disk is not the PC's wear."""
+    usb = {"wear_pct": 99.0, "bus_type": "USB"}
+    series = [{**_hist(d), "storage": [usb, {"wear_pct": 10 + d}]} for d in range(0, 11, 2)]
+    t = compute_trends(series, [])["storage_wear"]
+    assert t.current == 20.0
+    assert t.direction == "worsening"
+
+
+def test_unpopulated_zero_wear_is_no_trend():
+    """S2: the counter's constant 0 is no wear reading -- not a 'stable' 0 %."""
+    series = [_hist(d, wear=0) for d in range(0, 11, 2)]
+    assert compute_trends(series, [])["storage_wear"].direction == "insufficient"
+
+
 def test_flat_metric_is_flat_not_worsening():
-    series = [_hist(d, wear=40) for d in (0, 5, 10)]
+    series = [_hist(d, wear=40) for d in range(0, 11, 2)]
     t = compute_trends(series, [])["storage_wear"]
     assert t.direction == "flat"
     assert t.eta_days is None
 
 
 def test_disk_fill_falling_free_space_worsens_toward_zero():
-    hbs = [_hb(d, free=50 - 2 * d) for d in (0, 5, 10)]  # 50 -> 30, -2/day
+    hbs = [_hb(d, free=50 - 2 * d) for d in range(0, 11, 2)]  # 50 -> 30, -2/day
     t = compute_trends([], hbs)["disk_fill"]
     assert t.direction == "worsening"
-    assert t.eta_days == 15.0  # 30 / 2
+    # (36 - 5) / 2: the floor is 5 % free, not 0; H7: the level is the median of the
+    # last 4 readings (42/38/34/30 -> 36), so a lone low reading cannot jump the ETA
+    assert t.eta_days == 15.5
     assert t.current == 30.0
 
 
 def test_boot_trend_direction_only_no_threshold():
-    series = [_hist(d, boot=20000 + 1000 * d) for d in (0, 5, 10)]
+    series = [_hist(d, boot=20000 + 1000 * d) for d in range(0, 11, 2)]
     t = compute_trends(series, [])["boot_time"]
     assert t.direction == "worsening"
     assert t.eta_days is None  # unbounded metric -> no crossing
 
 
 def test_received_at_used_over_client_ts():
-    # ts implies a 1/day ramp; received_at implies a 0.5/day ramp. Server time wins.
+    # received_at implies a 1/day ramp; ts implies a 0.5/day ramp. Server time wins.
     series = []
-    for d in (0, 5, 10):
+    for d in range(0, 11, 2):
         r = {"received_at": _at(d), "ts": _at(2 * d), "storage": [{"wear_pct": 10 + d}]}
         series.append(r)
     t = compute_trends(series, [])["storage_wear"]
@@ -188,7 +210,7 @@ def test_no_depletion_history_is_unknown_not_zero():
 
 
 def test_imminent_disk_fill_drives_high_trajectory_risk():
-    hbs = [_hb(d, free=20 - 1 * d) for d in (0, 5, 10)]  # 20 -> 10, -1/day, ~10d left
+    hbs = [_hb(d, free=20 - 1 * d) for d in range(0, 11, 2)]  # 20 -> 10, -1/day, 5d to 5 %
     s = trajectory_risk_score(compute_trends([], hbs))
     assert s.value is not None and s.value >= 60
     assert s.band == "bad"
@@ -196,8 +218,8 @@ def test_imminent_disk_fill_drives_high_trajectory_risk():
 
 
 def test_stable_trends_score_zero_good():
-    series = [_hist(d, wear=40) for d in (0, 5, 10)]
-    hbs = [_hb(d, free=60) for d in (0, 5, 10)]
+    series = [_hist(d, wear=40) for d in range(0, 11, 2)]
+    hbs = [_hb(d, free=60) for d in range(0, 11, 2)]
     s = trajectory_risk_score(compute_trends(series, hbs))
     assert s.value == 0.0
     assert s.band == "good"
@@ -208,7 +230,9 @@ def test_worsening_spare_without_threshold_is_missing_not_stable():
     # nvme_spare_threshold_pct -- ETA can't be computed. This used to fall
     # through both branches silently and read as "тренды стабильны" (good,
     # value 0.0), indistinguishable from an actually flat disk.
-    disks = [{"received_at": _at(d), "ts": _at(d), "nvme_spare_pct": 20 - d} for d in (0, 5, 10)]
+    disks = [
+        {"received_at": _at(d), "ts": _at(d), "nvme_spare_pct": 20 - d} for d in range(0, 11, 2)
+    ]
     trends = compute_trends([], [], disk_series=disks)
     assert trends["nvme_spare"].direction == "worsening"
     assert trends["nvme_spare"].eta_days is None
@@ -218,8 +242,9 @@ def test_worsening_spare_without_threshold_is_missing_not_stable():
 
 
 def test_confidence_scales_with_sample_count():
-    few = [_hist(d, wear=10 + d) for d in (0, 5, 10)]  # 3 points
-    many = [_hist(d, wear=10 + d) for d in range(0, 12, 2)]  # 6 points
+    # Span-based now: six readings over 5 days stay "medium", over 10 days "high".
+    few = [_hist(d, wear=10 + d) for d in range(6)]  # 5 days
+    many = [_hist(d, wear=10 + d) for d in range(0, 12, 2)]  # 10 days
     assert trajectory_risk_score(compute_trends(few, [])).confidence == "medium"
     assert trajectory_risk_score(compute_trends(many, [])).confidence == "high"
 
@@ -229,7 +254,7 @@ def test_confidence_scales_with_sample_count():
 # --------------------------------------------------------------------------- #
 def _seed_series(device_id: str) -> None:
     db.upsert_device(device_id, _at(0), "0.1.0", hostname="WEAR-01")
-    for d in (0, 4, 8, 12):
+    for d in (0, 2, 4, 6, 8, 10, 12):  # >= 6 rows over >= 72 h, >= 4 distinct wear values
         db.store_historical(
             device_id,
             _at(d),
@@ -296,8 +321,8 @@ def test_gateway_latency_trend_direction_only():
     def hb(day, free=50.0):
         return {"received_at": f"2026-06-{day:02d}T00:00:00+00:00", "free_space_pct": free}
 
-    series = [row(9, 80.0), row(7, 40.0), row(5, 20.0), row(3, 5.0), row(1, 1.0)]
-    hb_series = [hb(d) for d in (9, 7, 5, 3, 1)]  # stable disk -> trajectory has data
+    series = [row(11, 160.0), row(9, 80.0), row(7, 40.0), row(5, 20.0), row(3, 5.0), row(1, 1.0)]
+    hb_series = [hb(d) for d in (11, 9, 7, 5, 3, 1)]  # stable disk -> trajectory has data
     trends = compute_trends(series, hb_series)
     t = trends["gateway_latency"]
     assert t.direction == "worsening"
@@ -352,7 +377,7 @@ def test_disk_tail_ratio_trend_worsening_stays_out_of_trajectory_risk():
             "disk_read_ms_p95": ratio,  # p50=1.0 -> ratio equals p95 directly
         }
 
-    hb_series = [hb(9, 8.0), hb(7, 6.0), hb(5, 4.0), hb(3, 2.5), hb(1, 2.0)]
+    hb_series = [hb(11, 10.0), hb(9, 8.0), hb(7, 6.0), hb(5, 4.0), hb(3, 2.5), hb(1, 2.0)]
     trends = compute_trends([], hb_series)
     t = trends["disk_tail_ratio"]
     assert t.direction == "worsening"
@@ -376,3 +401,12 @@ def test_disk_tail_ratio_noisy_single_reading_excluded():
     series = [hb(5, 2, 9.0), hb(3, 8, 3.0), hb(1, 8, 2.0)]  # first row noisy -> dropped
     t = compute_trends([], series)["disk_tail_ratio"]
     assert t.n_points == 2
+
+
+def test_throttle_trend_takes_only_loaded_samples() -> None:
+    # spec H3: an idle laptop at 40 % of nominal is SpeedStep, not a thermal trend point
+    from server.analytics.trends import _cpu_perf_pct
+
+    assert _cpu_perf_pct({"cpu_pct": 5.0, "cpu_perf_pct": 40.0}) is None
+    assert _cpu_perf_pct({"cpu_perf_pct": 40.0}) is None
+    assert _cpu_perf_pct({"cpu_pct": 75.0, "cpu_perf_pct": 40.0}) == 40.0

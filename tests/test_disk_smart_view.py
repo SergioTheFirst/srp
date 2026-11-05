@@ -232,6 +232,34 @@ def test_disk_smart_bus_type_visible_slow_disk_is_usb(client: TestClient) -> Non
     assert "USB" in body
 
 
+def test_disk_smart_removable_disk_card_says_it_is_not_counted(client: TestClient) -> None:
+    """0.3.4: the USB disk stays on the card (raw historical), marked as left out of
+    the health verdict; the internal disk next to it carries no such chip."""
+    _seed_device_with_scores("dev-usbchip", "PC-EXTCHIP")
+    usb = {**_ONE_DISK, "disk": "Kingston DataTraveler 3.0", "bus_type": "USB"}
+    _seed_storage("dev-usbchip", [_ONE_DISK, usb])
+    cards = client.get("/device/dev-usbchip").text.split('<div class="disk-card')[1:]
+    assert len(cards) == 2
+    assert "внешний — не учитывается" not in cards[0]
+    assert "внешний — не учитывается" in cards[1]
+
+
+def test_disk_smart_realloc_falls_back_to_smart_attr_5(client: TestClient) -> None:
+    """Находка 5: агенты шлют переназначенные секторы только SMART-атрибутом 5
+    (smart_attrs["5"]), поля reallocated_sectors не шлёт ни один."""
+    _seed_device_with_scores("dev-attr5", "PC-ATTR5")
+    _seed_storage("dev-attr5", [{**_ONE_DISK, "smart_attrs": {"5": 12}}])
+    assert "переназначено: 12" in client.get("/device/dev-attr5").text
+
+
+def test_disk_smart_attr_5_zero_lets_no_errors_claim_render(client: TestClient) -> None:
+    _seed_device_with_scores("dev-attr5ok", "PC-ATTR5OK")
+    zeros = {"read_errors_uncorrected": 0, "write_errors_uncorrected": 0}
+    disk = {**_ONE_DISK, **zeros, "smart_attrs": {"5": 0, "197": 0, "198": 0}}
+    _seed_storage("dev-attr5ok", [disk])
+    assert "ошибок нет" in client.get("/device/dev-attr5ok").text
+
+
 def test_disk_smart_missing_wear_shows_dash_not_invented_zero(client: TestClient) -> None:
     """NVMe-диск без wear_pct (не все накопители его отдают) -- поле «—», не 0%."""
     _seed_device_with_scores("dev-nowear", "PC-NOWEAR")
@@ -465,3 +493,138 @@ def test_specs_memory_modules_show_part_number(client: TestClient) -> None:
     )
     body = client.get(f"/device/{device_id}").text
     assert "M378A2K43EB1" in body
+
+
+# --------------------------------------------------------------------------- #
+# S2/X5/S13 (2026-11-02): нули счётчика Windows, запасной путь SMART 194/9, NVMe
+# --------------------------------------------------------------------------- #
+_RAID = {
+    "disk": "RAID HDD",
+    "media_type": "HDD",
+    "bus_type": "RAID",
+    "serial_hash": "0f1e2d3c4b5a6978",
+}
+
+
+def test_disk_smart_counter_zero_shows_dash_not_green_zero(client: TestClient) -> None:
+    """S2: MSFT 0 degC / 0 % means "not populated" -- «—», never a green zero."""
+    _seed_device_with_scores("dev-raid0", "PC-RAIDZERO")
+    _seed_storage("dev-raid0", [{**_RAID, "wear_pct": 0, "temperature_c": 0}])
+    body = client.get("/device/dev-raid0").text
+    assert body.count('<div class="disk-m-v na">—</div>') >= 2  # temperature + wear
+    assert 'class="disk-m-v good">0°C' not in body
+    assert 'class="disk-m-v good">0%' not in body
+    assert "Data Units Written" not in body  # no NVMe row without NVMe data
+
+
+def test_disk_smart_temp_and_poh_fall_back_to_smart_194_9(client: TestClient) -> None:
+    """X5: Windows sent nothing -- raw SMART is shown marked, without a status colour."""
+    _seed_device_with_scores("dev-raidattr", "PC-RAIDATTR")
+    disk = {**_RAID, "wear_pct": 0, "temperature_c": 0, "smart_attrs": {"194": 42, "9": 24670}}
+    _seed_storage("dev-raidattr", [disk])
+    body = client.get("/device/dev-raidattr").text
+    assert '<div class="disk-m-v accent">42°C <span class="disk-src"' in body
+    assert re.search(r'<div class="disk-m-v accent">\s*2 г 7150 ч', body)  # 2*8760 + 7150
+    assert body.count(">по SMART</span>") == 2
+
+
+def test_disk_smart_fallback_rejects_implausible_raw(client: TestClient) -> None:
+    _seed_device_with_scores("dev-raidodd", "PC-RAIDODD")
+    disk = {**_RAID, "temperature_c": 0, "smart_attrs": {"194": 450, "9": 1_500_000}}
+    _seed_storage("dev-raidodd", [disk])
+    body = client.get("/device/dev-raidodd").text
+    assert ">по SMART</span>" not in body
+    assert "450°C" not in body
+
+
+def test_disk_smart_fallback_never_overrides_reported_values(client: TestClient) -> None:
+    _seed_device_with_scores("dev-raidrep", "PC-RAIDREP")
+    attrs = {"194": 35, "9": 900}
+    disk = {**_RAID, "temperature_c": 33, "power_on_hours": 500, "smart_attrs": attrs}
+    _seed_storage("dev-raidrep", [disk])
+    body = client.get("/device/dev-raidrep").text
+    assert '<div class="disk-m-v good">33°C</div>' in body
+    assert ">по SMART</span>" not in body
+
+
+def test_disk_smart_nvme_row_shows_spare_written_unsafe(client: TestClient) -> None:
+    """S13: spare with its threshold (the engine's spare rule colours it), data written and
+    unsafe shutdowns (neutral: the engine does not score them this way)."""
+    _seed_device_with_scores("dev-nvmerow", "PC-NVMEROW")
+    nvme = {
+        "nvme_spare_pct": 8,
+        "nvme_spare_threshold_pct": 10,
+        "nvme_data_units_written": 20_000_000,
+        "nvme_unsafe_shutdowns": 7,
+    }
+    _seed_storage("dev-nvmerow", [{**_ONE_DISK, **nvme}])
+    body = client.get("/device/dev-nvmerow").text
+    assert '<div class="disk-m-v bad">8% <span class="disk-src">порог 10%</span></div>' in body
+    assert '<div class="disk-m-v accent">10.2 ТБ</div>' in body  # 20e6 x 512000 B
+    assert '<div class="disk-m-v accent">7</div>' in body
+
+
+def test_disk_smart_nvme_cw_and_media_chips_block_all_clear(client: TestClient) -> None:
+    _seed_device_with_scores("dev-nvmecw", "PC-NVMECW")
+    zeros = {
+        "read_errors_uncorrected": 0,
+        "write_errors_uncorrected": 0,
+        "smart_attrs": {"5": 0, "197": 0, "198": 0},
+    }
+    disk = {**_ONE_DISK, **zeros, "nvme_critical_warning": 0b01000, "nvme_media_errors": 2}
+    _seed_storage("dev-nvmecw", [disk])
+    body = client.get("/device/dev-nvmecw").text
+    assert ">NVMe: диск в режиме только для чтения</span>" in body
+    assert "ошибок носителя NVMe: 2" in body
+    assert '<div class="disk-card bad">' in body
+    assert "ошибок нет" not in body
+
+
+def test_disk_smart_nvme_media_errors_alone_raise_the_chip(client: TestClient) -> None:
+    """Without any CW bit: the media term of has_err alone must show the chip (test review)."""
+    _seed_device_with_scores("dev-nvmemedia", "PC-NVMEMEDIA")
+    zeros = {
+        "read_errors_uncorrected": 0,
+        "write_errors_uncorrected": 0,
+        "smart_attrs": {"5": 0, "197": 0, "198": 0},
+    }
+    disk = {**_ONE_DISK, **zeros, "nvme_critical_warning": 0, "nvme_media_errors": 2}
+    _seed_storage("dev-nvmemedia", [disk])
+    body = client.get("/device/dev-nvmemedia").text
+    assert "ошибок носителя NVMe: 2" in body
+    assert "ошибок нет" not in body
+
+
+def test_disk_smart_cw_temperature_is_a_warning_without_red_border(client: TestClient) -> None:
+    """The engine weighs the temperature bit at 30 (watch band), not as a failure."""
+    _seed_device_with_scores("dev-nvmetemp", "PC-NVMETEMP")
+    _seed_storage("dev-nvmetemp", [{**_ONE_DISK, "nvme_critical_warning": 0b10}])
+    body = client.get("/device/dev-nvmetemp").text
+    assert '<span class="chip warn" title="Critical Warning' in body
+    assert '<div class="disk-card bad">' not in body
+
+
+def test_disk_smart_attr_table_shows_names(client: TestClient) -> None:
+    _seed_device_with_scores("dev-attrnames", "PC-ATTRNAMES")
+    _seed_storage("dev-attrnames", [{**_ONE_DISK, "smart_attrs": {"5": 0, "241": 7}}])
+    body = client.get("/device/dev-attrnames").text
+    assert '<td class="small">переназначенные секторы</td>' in body
+    assert "вендорский (обычно объём записи)" in body
+
+
+def test_disk_series_temperature_uses_smart_fallback_and_nulls_zero_wear(
+    client: TestClient,
+) -> None:
+    device_id = "dev-raidseries"
+    _seed_device_with_scores(device_id, "PC-RAIDSERIES")
+    disk = {**_RAID, "wear_pct": 0, "temperature_c": 0}
+    _seed_storage(device_id, [disk])
+    now = datetime.now(timezone.utc).isoformat()
+    db.store_disk_readings(device_id, [{**disk, "smart_attrs": {"194": 41}}], now, now)
+    db.store_disk_readings(device_id, [{**disk, "smart_attrs": {"194": 43}}], now, now)
+    body = client.get(f"/device/{device_id}").text
+    m = re.search(r'<script id="disk-series-data"[^>]*>(.*?)</script>', body, re.S)
+    assert m, "disk-series-data script tag not found"
+    rows = json.loads(m.group(1))["0"]
+    assert [r["temperature_c"] for r in rows] == [43, 41]  # newest first
+    assert all(r["wear_pct"] is None for r in rows)

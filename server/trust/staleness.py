@@ -24,7 +24,7 @@ from typing import Any, Callable, Optional
 from server import db
 from server.trust.domains import DOMAIN_SOURCES
 from server.trust.gate import compute_weight, derive_state
-from server.trust.states import CollectorStatus, SemanticStatus
+from server.trust.states import CollectorStatus, SemanticStatus, SourceState
 
 # Only sources that actually gate a domain (server.trust.domains.DOMAIN_SOURCES)
 # have a natural reporting cadence to go stale against. Event-driven sources
@@ -41,6 +41,13 @@ DOMAIN_GATING_SOURCES = frozenset(
 # there means "gone silent" too, not "nothing happened".
 _STALENESS_SOURCES = DOMAIN_GATING_SOURCES | {"identity"}
 
+# ponytail: identity стареет не раньше 3 суток, даже если общий порог меньше.
+# config.json с установок до 2026-06-19 и правленный по README собирает
+# inventory раз в сутки, а обновление config.json не переписывает -- при
+# общих 12 ч такие ПК были untrusted половину суток (2026-10-14). 3 суток =
+# 3 пропущенных суточных прогона; «inventory умер, пульс идёт» всё ещё ловится.
+IDENTITY_STALE_AFTER_SEC = 3 * 86400.0
+
 
 @dataclass(frozen=True)
 class StaleUpdate:
@@ -55,6 +62,10 @@ class StaleUpdate:
     # optimistic-concurrency guard for the write (db.apply_source_staleness): if a
     # real ingest has since moved the clock, the stale write is safely dropped.
     evidence_seen_at: Optional[str]
+    # The state the job read -- the second half of that guard. A FAILED ingest
+    # keeps evidence_seen_at (COALESCE) but changes the state; without this the
+    # job could write OK over a fresh gate-failed row (review 2026-10-14).
+    prev_state: str
 
 
 def _age_sec(evidence_seen_at: Optional[str], now: datetime) -> Optional[float]:
@@ -85,8 +96,10 @@ def reevaluate_staleness(
     never from the client-controlled ``ts`` (W0.2). A row whose stored state is
     already SUSPECT or UNAVAILABLE is naturally left alone: ``derive_state``'s
     own precedence ladder returns that same verdict again regardless of age, so
-    no update is emitted -- this job only ever degrades OK/DEGRADED -> STALE,
-    never revives a source (design D7). NOT_APPLICABLE is out of scope here, not
+    no update is emitted -- this job degrades OK/DEGRADED -> STALE and never
+    revives a gate-failed source (design D7). The one way back is STALE -> OK
+    for a row whose threshold has since been raised (identity's own floor,
+    2026-10-14); its reason is cleared. NOT_APPLICABLE is out of scope here, not
     an equally-safe case: it is gated by ``derive_state``'s separate
     ``applicable`` bool, which this job never sets to False and which is not
     reconstructable from a stored row -- but no production source currently
@@ -106,19 +119,24 @@ def reevaluate_staleness(
             semantic_status = SemanticStatus(row["semantic_status"])
         except ValueError:
             continue  # malformed row (forced-majeure) -- skip rather than guess
-        new_state = derive_state(collector_status, semantic_status, age_sec, stale_after_sec)
+        threshold = stale_after_sec
+        if row["source"] == "identity":
+            threshold = max(stale_after_sec, IDENTITY_STALE_AFTER_SEC)
+        new_state = derive_state(collector_status, semantic_status, age_sec, threshold)
         if new_state.value == row.get("state"):
             continue  # no change -- avoid write churn
-        age_h = age_sec / 3600
-        thr_h = stale_after_sec / 3600
+        reason = ""
+        if new_state != SourceState.OK:
+            reason = f"источник молчит {age_sec / 3600:.0f} ч (порог {threshold / 3600:.0f} ч)"
         updates.append(
             StaleUpdate(
                 device_id=row["device_id"],
                 source=row["source"],
                 state=new_state.value,
                 weight=compute_weight(new_state),
-                reason=f"источник молчит {age_h:.0f} ч (порог {thr_h:.0f} ч)",
+                reason=reason,
                 evidence_seen_at=evidence_seen_at,
+                prev_state=str(row.get("state")),
             )
         )
     return updates
@@ -126,9 +144,11 @@ def reevaluate_staleness(
 
 def _rebuild_domain_blob(device_id: str, ts: str) -> None:
     """KodSR M1: recompute + persist just the domain-state blob (db.get_trust)
-    for one device, same shape pipeline.evaluate_trust writes -- a device that
-    goes fully silent must not stay "trusted" forever waiting for a real
-    ingest that may never come.
+    for one device, same shape pipeline.evaluate_trust writes -- the domain
+    states of a device that goes fully silent must not stay "trusted" forever
+    waiting for a real ingest that may never come. The fleet badge
+    (scores.risk.device_trust) is NOT recomputed here: it changes with the
+    device's next scored envelope, so a silent PC keeps its last badge.
 
     Shares pipeline.py's own blob-builder (security review MEDIUM-4: this
     used to hand-roll the shape and drop "regressed"). Local import: pipeline
@@ -159,8 +179,9 @@ def run_staleness_cycle(
     *stale_after_sec* is floored (design D5): an operator misconfiguring 0 (or
     negative) must not flag every domain source in the fleet STALE on the very
     next cycle. KodSR M1: *rebuild* re-persists the affected devices' domain
-    blob (db.get_trust) so a device that goes fully silent reads non-trusted
-    from this cycle alone, without waiting on a next real ingest.
+    blob (db.get_trust) so the domain states of a device that goes fully silent
+    read non-trusted from this cycle alone; the fleet badge waits for the
+    device's next scored envelope (see _rebuild_domain_blob).
     """
     moment = now or datetime.now(timezone.utc)
     floor_sec = max(60.0, stale_after_sec)

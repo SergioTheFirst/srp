@@ -273,3 +273,40 @@ def test_specs_block_renders_without_scores(client) -> None:
     db.store_inventory("card-16", _iso_now(), _INV)
     body = client.get("/device/card-16").text
     assert "Intel(R) Core(TM) i5-10400" in body
+
+
+# --------------------------------------------------------------------------- #
+# Агент 0.3.8: гигиена безопасности в блоке «Компьютер»
+# --------------------------------------------------------------------------- #
+def test_security_chips_and_row_render(client) -> None:
+    _seed("card-30", "CARD-30", {})
+    inv = {
+        **_INV,
+        "chassis": "laptop",
+        "last_patch_date": "2020-01-01",
+        "antivirus": [{"name": "Windows Defender", "enabled": False, "up_to_date": True}],
+        "bitlocker_system": "off",
+        "tpm_present": False,
+        "secure_boot": False,
+        "windows_activated": False,
+    }
+    db.store_inventory("card-30", _iso_now(), inv)
+    body = client.get("/device/card-30").text
+    for text in (
+        "антивирус выключен",
+        "обновлений Windows не было",
+        "диск не зашифрован",
+        "не готов к Windows 11",
+        "Windows не активирована",
+        "Безопасность",
+        "Windows Defender (выкл)",
+    ):
+        assert text in body, text
+
+
+def test_security_unknown_renders_no_chips(client) -> None:
+    _seed_with_inventory("card-31", "CARD-31")  # инвентарь агента до 0.3.8
+    body = client.get("/device/card-31").text
+    assert "антивирус" not in body.lower().replace("антивирус: нет данных", "")
+    assert "не готов к Windows 11" not in body
+    assert "нет данных" in body

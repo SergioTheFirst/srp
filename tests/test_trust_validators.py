@@ -14,8 +14,8 @@ from server.trust.validators import (
 pytestmark = pytest.mark.unit
 
 
-def test_storage_wear_above_100_is_implausible():
-    status, reason = validate_storage_item({"wear_pct": 140.0}, last=None)
+def test_storage_wear_above_255_is_implausible():
+    status, reason = validate_storage_item({"wear_pct": 300.0}, last=None)
     assert status is SemanticStatus.IMPLAUSIBLE
     assert reason is not None
 
@@ -65,7 +65,7 @@ def test_immaterial_source_is_unchecked():
 
 
 def test_material_storage_routes_to_storage_validator():
-    status, _ = validate_source("storage_reliability", {"wear_pct": 200.0}, last=None)
+    status, _ = validate_source("storage_reliability", {"wear_pct": 300.0}, last=None)
     assert status is SemanticStatus.IMPLAUSIBLE
 
 
@@ -158,7 +158,7 @@ def test_scalar_range_non_numeric_value_is_plausible():
 
 
 def test_smart_percent_out_of_range_is_implausible():
-    status, _ = validate_smart_item({"nvme_percentage_used": 142.0}, last=None)
+    status, _ = validate_smart_item({"nvme_spare_pct": 142.0}, last=None)
     assert status is SemanticStatus.IMPLAUSIBLE
 
 
@@ -190,8 +190,8 @@ def test_smart_same_disk_counter_drop_is_inconsistent():
 
 def test_smart_same_disk_attr_drop_is_inconsistent():
     status, reason = validate_smart_item(
-        {"serial_hash": "abc123", "smart_attrs": {"197": 1}},
-        last={"serial_hash": "abc123", "smart_attrs": {"197": 9}},
+        {"serial_hash": "abc123", "smart_attrs": {"5": 1}},
+        last={"serial_hash": "abc123", "smart_attrs": {"5": 9}},
     )
     assert status is SemanticStatus.INCONSISTENT
     assert reason
@@ -216,7 +216,7 @@ def test_smart_counter_increase_same_disk_is_plausible():
 
 
 def test_smart_dispatch_via_validate_source():
-    status, _ = validate_source("smart", {"nvme_percentage_used": 200.0}, last=None)
+    status, _ = validate_source("smart", {"nvme_percentage_used": 300.0}, last=None)
     assert status is SemanticStatus.IMPLAUSIBLE
 
 

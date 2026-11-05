@@ -77,10 +77,18 @@
   </div>
 </div>
 {% endif %}
+{# Находка 10: почему источник «неизвест.» -- последний сбой сборщика по источнику. #}
+{% if collector_failures %}
+<div class="small muted" style="margin-top:8px">Сбои сбора: {% for f in collector_failures %}{{ f.source }} — {{ f.reason }} ({{ fmt_age(f.age_sec) }} назад){% if not loop.last %} · {% endif %}{% endfor %}</div>
+{% endif %}
 
 {# ── Failure classes (Bayesian) ────────────────────────────────────────── #}
+{# D10: веса не откалиброваны -> уровень словом, не процент «вероятности
+   отказа». Незнакомый level печатается как есть (fail-open). Префикс «Классы
+   отказа» -- якорь tests/test_device_card.py. #}
+{% set bayes_level_ru = {"low": "низкий", "elevated": "повышенный", "high": "высокий", "critical": "критический"} %}
 <div class="section-label" style="margin-top:24px"
-     title="Байесовская оценка вероятности отказа по каждому классу. Основана на весах сигналов из телеметрии">Классы отказа (байесовский анализ)</div>
+     title="Относительный приоритет по классам; веса не откалиброваны — это не вероятность отказа">Классы отказа (байесовская оценка риска, не калибрована)</div>
 {% for c in s.risk.classes %}
 <div class="riskrow">
   <div class="head">
@@ -89,18 +97,19 @@
     <span class="chip na" title="Нет достаточных данных для оценки этого класса">НЕИЗВЕСТНО</span>
     {% else %}
     <span class="chip {{ level_color(c.level) }}"
-          title="Вероятность отказа по классу «{{ c.label }}»: байесовская оценка на основе телеметрии">{{ pct(c.probability) }}</span>
+          title="байесовская оценка риска (не калибрована) по классу «{{ c.label }}»">{{ bayes_level_ru.get(c.level, c.level) }}</span>
     {% endif %}
   </div>
   <div class="riskbar {{ 'na' if c.trust == 'unknown' else level_color(c.level) }}">
-    <i style="width:{{ 0 if c.trust == 'unknown' else (c.probability * 100)|round(1) }}%"></i>
+    {# H10: a ranker, not a probability -- the bar shows the level band only #}
+    <i style="width:{{ 0 if c.trust == 'unknown' else {'low': 25, 'elevated': 50, 'high': 75, 'critical': 100}.get(c.level, 0) }}%"></i>
   </div>
   <ul class="factors">
     {% for f in c.factors %}
     <li>
       <span>{{ f.label }}</span>
       <span class="w {{ 'pos' if f.weight > 0 else 'neg' }}"
-            title="Вес сигнала: положительный = увеличивает вероятность, отрицательный = уменьшает">{{ "%+.2f"|format(f.weight) }}</span>
+            title="Вес сигнала: положительный — повышает оценку риска, отрицательный — понижает">{{ "%+.2f"|format(f.weight) }}</span>
     </li>
     {% endfor %}
   </ul>

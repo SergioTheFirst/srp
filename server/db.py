@@ -27,6 +27,7 @@ from typing import Any, Iterator, Optional
 
 from shared.schema import parse_version
 
+from server import fleet_canon
 from server.analytics import rulestats
 from server.analytics.oui import normalize_mac
 from server.netdisco.identity import device_nid as _ip_only_nid
@@ -35,10 +36,12 @@ _db_path: Optional[Path] = None
 # Флаг «WAL уже выставлен для этого пути»: сбрасывается в init_db (тесты
 # переставляют путь БД между прогонами).
 _wal_set = False
-_retain_hb = 500
+_retain_hb = 2000  # 0.3.8: 1 ч цикл (было 500 при 4 ч)
 _retain_ev = 1000
-_retain_hist = 500  # historical readings kept per device (окно читателей 200 строк, х2.5 запас)
-_retain_scores = 5000  # defensive row-cap; реальный срез -- prune_aged(scores_raw_days)
+_retain_hist = 2000  # historical per device (окно читателей 800 строк, х2.5 запас; 1 ч цикл)
+# 0.3.8: ~72 строк/сут, rulestats нужно 70 дн. Defensive row-cap; реальный срез --
+# prune_aged(scores_raw_days).
+_retain_scores = 20000
 # Спека 2026-08-27 (минимальный рост БД): полный вердикт scores.risk (~21 КБ)
 # нужен только карточке устройства -- она читает ПОСЛЕДНЮЮ строку; глубже
 # новейших N строк история ужимается до slim-вердикта (см. _slim_risk).
@@ -55,7 +58,9 @@ _retain_net_topo = 500  # topology snapshots kept fleet-wide (phase 2)
 # Журнал изменений топологии: единственная таблица netdisco без обрезки --
 # «мигающий» порт может писать в неё бесконечно.
 _retain_net_changes = 20000
-_retain_disk = 2000  # SMART readings kept per (device, physical disk) (ssd3 Ф2), config-driven
+# SMART readings kept per (device, physical disk) (ssd3 Ф2), config-driven;
+# 0.3.8: 1 ч цикл (было 2000).
+_retain_disk = 8000
 _CLOCK_DRIFT_FLAG_SEC = 300  # |received_at - ts| above this (s) flags clock drift (W0.2)
 
 
@@ -370,6 +375,7 @@ CREATE TABLE IF NOT EXISTS device_source_trust (
   reason            TEXT,
   ts                TEXT,
   evidence_seen_at  TEXT,
+  collector_reason  TEXT,
   PRIMARY KEY (device_id, source)
 );
 CREATE TABLE IF NOT EXISTS print_jobs (
@@ -580,19 +586,45 @@ CREATE TABLE IF NOT EXISTS rule_episodes (
   outcome   TEXT NOT NULL,
   PRIMARY KEY (rule_key, device_id, end_ts)
 );
+-- Health journal (spec 2026-10-30 H18): append-only, pseudonymous -- it survives a
+-- device delete/purge with the operator note cleared (_PSEUDONYMOUS_TABLES).
+CREATE TABLE IF NOT EXISTS health_transitions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id   TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  from_state  TEXT,
+  to_state    TEXT NOT NULL,
+  raw_state   TEXT,
+  dominant    TEXT,
+  rung_source TEXT,
+  detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_health_transitions_device ON health_transitions(device_id, id);
+CREATE TABLE IF NOT EXISTS health_outcomes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id   TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  source      TEXT NOT NULL,  -- operator | auto
+  outcome     TEXT NOT NULL,
+  state_at    TEXT,
+  dominant_at TEXT,
+  action      TEXT,
+  note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_health_outcomes_device ON health_outcomes(device_id, id);
 """
 
 
 def init_db(
     db_path: Path,
-    retain_heartbeats: int = 500,
+    retain_heartbeats: int = 2000,
     retain_events: int = 1000,
-    retain_historical: int = 500,
-    retain_scores: int = 5000,
+    retain_historical: int = 2000,
+    retain_scores: int = 20000,
     retain_printer_readings: int = 2000,
     retain_net_readings: int = 2000,
     retain_net_snapshots: int = 500,
-    retain_disk_readings: int = 2000,
+    retain_disk_readings: int = 8000,
 ) -> None:
     global _db_path, _retain_hb, _retain_ev, _retain_hist, _retain_scores, _retain_prn, _wal_set
     global _retain_net, _retain_net_topo, _retain_disk
@@ -757,6 +789,8 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # D3: version the agent sees but does not apply.
         ("update_available_version", "TEXT"),
         ("version_changed_at", "TEXT"),
+        # 0.3.6: разрядность сборки агента (x64/x86); NULL = агент до 0.3.6 = x64.
+        ("agent_arch", "TEXT"),
     ),
     "print_jobs": (("source", "TEXT"),),
     # Phase 1 net-map unification: FK link to the agent (devices) / printer record.
@@ -788,7 +822,7 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     # P2-2: server-stamped "last real evidence" clock, distinct from the client-
     # controlled ts -- the periodic staleness re-eval job (server/trust/staleness.py)
     # computes age from this, never from ts (W0.2: never trust the client clock).
-    "device_source_trust": (("evidence_seen_at", "TEXT"),),
+    "device_source_trust": (("evidence_seen_at", "TEXT"), ("collector_reason", "TEXT")),
     # B3: per-poll consumed-supply percent snapshot (compact [[name,percent],...]),
     # kept for every row (unlike `detail`) -- the toner-ETA forecast's raw history.
     "printer_readings": (("supplies_pct", "TEXT"),),
@@ -797,18 +831,28 @@ _ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     # as every other rollup column before it).
     "heartbeat_rollup_daily": (("committed_pct_p95", "REAL"), ("nic_errors_max", "INTEGER")),
 }
-_BACKFILL: dict[str, str] = {
+# Ключ -- (таблица, КОЛОНКА): бэкфилл бежит, только когда добавлена именно его колонка.
+# Раньше ключом была таблица, и ЛЮБАЯ новая колонка device_source_trust заново штамповала
+# evidence_seen_at у строк, которые никогда не были OK (partial) -> staleness мигал
+# reliability/smart -> os_stability UNKNOWN (ревью 2026-10-24).
+_BACKFILL: dict[tuple[str, str], str] = {
     # Pre-W0.2 rows carry no server stamp; best-effort backfill from the client ts
     # (devices: from last_seen) so staleness/windows keep a usable value.
-    "historical": "UPDATE historical SET received_at = ts WHERE received_at IS NULL",
-    "heartbeats": "UPDATE heartbeats SET received_at = ts WHERE received_at IS NULL",
-    "events": "UPDATE events SET received_at = ts WHERE received_at IS NULL",
-    "devices": "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL",
+    ("historical", "received_at"): (
+        "UPDATE historical SET received_at = ts WHERE received_at IS NULL"
+    ),
+    ("heartbeats", "received_at"): (
+        "UPDATE heartbeats SET received_at = ts WHERE received_at IS NULL"
+    ),
+    ("events", "received_at"): "UPDATE events SET received_at = ts WHERE received_at IS NULL",
+    ("devices", "last_reported_ts"): (
+        "UPDATE devices SET last_reported_ts = last_seen WHERE last_reported_ts IS NULL"
+    ),
     # Pre-fallback rows could only have come from the Event 307 collector.
-    "print_jobs": "UPDATE print_jobs SET source = 'events' WHERE source IS NULL",
+    ("print_jobs", "source"): "UPDATE print_jobs SET source = 'events' WHERE source IS NULL",
     # Same best-effort idea as the W0.2 backfills above: a legacy row is re-stamped
     # with the real server clock on its very next ingest anyway.
-    "device_source_trust": (
+    ("device_source_trust", "evidence_seen_at"): (
         "UPDATE device_source_trust SET evidence_seen_at = ts WHERE evidence_seen_at IS NULL"
     ),
 }
@@ -825,13 +869,11 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
             continue
         # PRAGMA/ALTER cannot be parameterized; *table*/*col* are fixed literals above.
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}  # nosec B608
-        added = False
         for col, col_type in cols:
             if col not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")  # nosec B608
-                added = True
-        if added and table in _BACKFILL:
-            conn.execute(_BACKFILL[table])
+                if (table, col) in _BACKFILL:
+                    conn.execute(_BACKFILL[(table, col)])
 
 
 # --------------------------------------------------------------------------- #
@@ -1209,6 +1251,28 @@ def store_disk_readings(
             _evict_inactive_disk_keys(conn, device_id, active_since)
 
 
+def get_disk_key_spans(device_id: str) -> list[dict[str, Any]]:
+    """X4: per disk key of the device -- its first receipt, whether the retention cap cut
+    the series (then the first reading is unknown) and its newest payload (the bus)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT r.disk_key, MIN(r.received_at) AS first, COUNT(*) AS n,
+                      (SELECT payload FROM disk_readings WHERE device_id = r.device_id
+                         AND disk_key = r.disk_key ORDER BY id DESC LIMIT 1) AS last
+               FROM disk_readings r WHERE r.device_id = ? GROUP BY r.disk_key""",
+            (device_id,),
+        ).fetchall()
+    return [
+        {
+            "disk_key": r["disk_key"],
+            "first": r["first"],
+            "truncated": r["n"] >= _retain_disk,
+            "last": json.loads(r["last"]) if r["last"] else {},
+        }
+        for r in rows
+    ]
+
+
 def get_disk_series(device_id: str, disk_key: str, limit: int = 200) -> list[dict[str, Any]]:
     """One physical disk's SMART readings, newest-first (append-only time series)."""
     with _connect() as conn:
@@ -1217,12 +1281,13 @@ def get_disk_series(device_id: str, disk_key: str, limit: int = 200) -> list[dic
                FROM disk_readings WHERE device_id=? AND disk_key=? ORDER BY id DESC LIMIT ?""",
             (device_id, disk_key, limit),
         ).fetchall()
+    # Payload first: server columns must win over a raw payload key of the same name.
     return [
         {
+            **json.loads(r["payload"]),
             "ts": r["ts"],
             "received_at": r["received_at"],
             "media_type": r["media_type"],
-            **json.loads(r["payload"]),
         }
         for r in rows
     ]
@@ -1966,6 +2031,30 @@ def store_heartbeat(
         )
 
 
+# calib D9: the agent re-sends its last 24 h of events on every 4 h run
+# (client/collectors/events.py) and the events table has no unique key, so one event
+# used to be stored up to 6 times. Twice that window bounds the stored-key lookup.
+_EVENT_DEDUP_LOOKBACK_H = 48
+
+
+def _first_event_copies(
+    events: list[dict[str, Any]], stored: list[sqlite3.Row]
+) -> list[dict[str, Any]]:
+    """*events* minus re-sent copies: a row whose (ts, source, event_id) is in *stored*
+    or appeared earlier in *events* is dropped. A row without ts cannot be identified
+    as a copy, so it is always kept. The single dedup rule of store and read paths."""
+    seen = {(r["ts"], r["source"], r["event_id"]) for r in stored}
+    kept: list[dict[str, Any]] = []
+    for e in events:
+        key = (e.get("ts"), e.get("source"), e.get("event_id"))
+        if key[0] is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(e)
+    return kept
+
+
 def store_events(
     device_id: str,
     events: list[dict[str, Any]],
@@ -1975,7 +2064,17 @@ def store_events(
     if not events:
         return
     recv = received_at or _now_iso()  # batch receipt = window anchor (W0.2)
+    lookback = timedelta(hours=_EVENT_DEDUP_LOOKBACK_H)
+    since = (datetime.fromisoformat(recv.replace("Z", "+00:00")) - lookback).isoformat()
     with _lock, _connect() as conn:
+        stored = conn.execute(
+            "SELECT ts, source, event_id FROM events"
+            " WHERE device_id=? AND received_at >= ? AND ts IS NOT NULL",
+            (device_id, since),
+        ).fetchall()
+        fresh = _first_event_copies(events, stored)
+        if not fresh:  # only re-sent copies: nothing to insert, roll up or trim
+            return
         conn.executemany(
             """INSERT INTO events
                  (device_id, ts, log, source, event_id, level, message,
@@ -1993,7 +2092,7 @@ def store_events(
                     recv,
                     clock_drift_sec,
                 )
-                for e in events
+                for e in fresh
             ],
         )
         # Свернуть ДО обрезки: при шторме (> _retain_ev в одном конверте) строки,
@@ -2988,8 +3087,169 @@ _DEVICE_TABLES: tuple[str, ...] = (
 _SECONDS_PER_DAY = 86_400
 
 
+# Health journal (spec 2026-10-30 H18): pseudonymous tables. They outlive a device on
+# purpose -- outcome labels are the future calibration set -- so a delete clears the
+# operator's free-text note (personal data, 152-FZ) and keeps the machine fields only.
+# tests/test_device_cleanup.py: every device_id table is in exactly one of the lists.
+_PSEUDONYMOUS_TABLES: tuple[str, ...] = ("health_transitions", "health_outcomes")
+_JOURNAL_TRANSITIONS_MAX = 1000  # per device; oldest rows are evicted
+_JOURNAL_OUTCOMES_MAX = 50  # per device; bounds an unauthenticated LAN writer (CWE-770)
+
+
+def _cap_journal(conn: sqlite3.Connection, table: str, device_id: str, keep: int) -> None:
+    # B608: table names are fixed module literals (_PSEUDONYMOUS_TABLES), never input.
+    conn.execute(
+        f"DELETE FROM {table} WHERE device_id=? AND id NOT IN "  # nosec B608
+        f"(SELECT id FROM {table} WHERE device_id=? ORDER BY id DESC LIMIT ?)",
+        (device_id, device_id, keep),
+    )
+
+
+def append_health_transition(
+    device_id: str,
+    ts: str,
+    from_state: Optional[str],
+    to_state: str,
+    *,
+    raw_state: Optional[str] = None,
+    dominant: Optional[str] = None,
+    rung_source: Optional[str] = None,
+    detail: Optional[dict[str, Any]] = None,
+) -> None:
+    """Append one level change of the health verdict (server-written only)."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO health_transitions (device_id, ts, from_state, to_state, raw_state,"
+            " dominant, rung_source, detail) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                device_id,
+                ts,
+                from_state,
+                to_state,
+                raw_state,
+                dominant,
+                rung_source,
+                json.dumps(detail, ensure_ascii=False) if detail is not None else None,
+            ),
+        )
+        _cap_journal(conn, "health_transitions", device_id, _JOURNAL_TRANSITIONS_MAX)
+
+
+def _insert_outcome(
+    conn: sqlite3.Connection,
+    device_id: str,
+    ts: str,
+    source: str,
+    outcome: str,
+    snapshot: tuple[Optional[str], Optional[str], Optional[str]],
+    note: Optional[str],
+) -> None:
+    conn.execute(
+        "INSERT INTO health_outcomes (device_id, ts, source, outcome, state_at, dominant_at,"
+        " action, note) VALUES (?,?,?,?,?,?,?,?)",
+        (device_id, ts, source, outcome, *snapshot, note),
+    )
+    _cap_journal(conn, "health_outcomes", device_id, _JOURNAL_OUTCOMES_MAX)
+
+
+def _verdict_snapshot(
+    conn: sqlite3.Connection, device_id: str
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(state, dominant, action) of the device's latest stored verdict, or Nones."""
+    row = conn.execute(
+        "SELECT risk FROM scores WHERE device_id=? ORDER BY id DESC LIMIT 1", (device_id,)
+    ).fetchone()
+    # _load_risk: a corrupt or non-dict row -> {} -- a delete/purge must never fail on it
+    health = _load_risk(row["risk"] if row else None).get("health")
+    if not isinstance(health, dict):
+        health = {}
+    return health.get("state"), health.get("dominant"), health.get("action")
+
+
+def add_health_outcome(
+    device_id: str,
+    ts: str,
+    source: str,
+    outcome: str,
+    note: Optional[str] = None,
+    *,
+    require_device: bool = False,
+) -> bool:
+    """Append an outcome label with the snapshot of the latest verdict it judges.
+
+    ``require_device``: check the device row under the same ``_lock`` a delete/purge
+    holds -- an operator note written after the delete committed would be orphaned
+    and never anonymised (152-FZ). Returns False when the device is gone.
+    """
+    with _lock, _connect() as conn:
+        if require_device and (
+            conn.execute("SELECT 1 FROM devices WHERE device_id=?", (device_id,)).fetchone() is None
+        ):
+            return False
+        snapshot = _verdict_snapshot(conn, device_id)
+        _insert_outcome(conn, device_id, ts, source, outcome, snapshot, note)
+    return True
+
+
+def _journal_rows(table: str, device_id: str, limit: int) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            # B608: table is a fixed module literal (_PSEUDONYMOUS_TABLES).
+            f"SELECT * FROM {table} WHERE device_id=? ORDER BY id DESC LIMIT ?",  # nosec B608
+            (device_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_health_transitions(device_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Newest-first verdict level changes; ``detail`` decoded from JSON."""
+    out = _journal_rows("health_transitions", device_id, limit)
+    for row in out:
+        try:
+            row["detail"] = json.loads(row["detail"]) if row["detail"] else None
+        except ValueError:
+            row["detail"] = None
+    return out
+
+
+def get_health_outcomes(device_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Newest-first outcome labels (operator + auto)."""
+    return _journal_rows("health_outcomes", device_id, limit)
+
+
+def devices_with_outcome(outcome: str) -> set[str]:
+    """Device ids already carrying *outcome* (idempotent auto marks)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT device_id FROM health_outcomes WHERE outcome=?", (outcome,)
+        ).fetchall()
+    return {r["device_id"] for r in rows}
+
+
+def prune_health_journal(days: int) -> int:
+    """Drop journal rows older than *days*; returns the number of rows removed."""
+    cutoff = _cutoff_iso(days=days)
+    removed = 0
+    with _lock, _connect() as conn:
+        for table in _PSEUDONYMOUS_TABLES:
+            # B608: table names are fixed module literals.
+            cur = conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))  # nosec B608
+            removed += cur.rowcount
+    return removed
+
+
+def _decommission_journal(conn: sqlite3.Connection, device_id: str) -> None:
+    """Before a device's rows go: clear operator notes (152-FZ) and mark it retired."""
+    if conn.execute("SELECT 1 FROM devices WHERE device_id=?", (device_id,)).fetchone() is None:
+        return
+    snapshot = _verdict_snapshot(conn, device_id)
+    conn.execute("UPDATE health_outcomes SET note=NULL WHERE device_id=?", (device_id,))
+    _insert_outcome(conn, device_id, _now_iso(), "auto", "decommissioned", snapshot, None)
+
+
 def _delete_device_rows(conn: sqlite3.Connection, device_id: str) -> None:
     """Delete every row for *device_id* across all per-device tables."""
+    _decommission_journal(conn, device_id)
     for table in _DEVICE_TABLES:
         # B608: table names are fixed module literals, never user input.
         conn.execute(f"DELETE FROM {table} WHERE device_id=?", (device_id,))  # nosec B608
@@ -3108,7 +3368,7 @@ def _latest_historical(conn: sqlite3.Connection, device_id: str) -> Optional[dic
 # "stale_after_sec" -> set_stale_threshold() при старте (main.create_app).
 # Это dashboard-only сигнал (fleet "stale" flag + KPI); он НЕ питает trust-гейт
 # (per-source trust-порог живёт отдельно в server/trust/gate.py).
-_AGENT_CADENCE_SEC = 14400  # полный телеметрийный цикл (справочно)
+_AGENT_CADENCE_SEC = 3600  # агент 0.3.8: полный телеметрийный цикл (справочно)
 _DEFAULT_STALE_AFTER_SEC = 600
 _STALE_AFTER_SEC = _DEFAULT_STALE_AFTER_SEC
 STALE_AFTER_SEC = _STALE_AFTER_SEC  # public alias for dashboard
@@ -3279,6 +3539,64 @@ def age_seconds(iso: Optional[str]) -> Optional[int]:
     return _age_seconds(iso)
 
 
+def _canon_rows() -> list[dict]:
+    """Минимум полей devices для правила server/fleet_canon; возрасты от СЕРВЕРНЫХ
+    меток first_seen/last_seen."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT device_id, hostname, org_code, site_code, dept_code, first_seen, last_seen"
+            " FROM devices"
+        ).fetchall()
+    shaped = []
+    for r in rows:
+        last_age = _age_seconds(r["last_seen"])
+        shaped.append(
+            {
+                **dict(r),
+                "first_seen_age_sec": _age_seconds(r["first_seen"]),
+                "last_seen_age_sec": last_age,
+                "stale": last_age is not None and last_age > _STALE_AFTER_SEC,
+            }
+        )
+    return shaped
+
+
+def superseded_map() -> dict[str, str]:
+    """{вытесненная запись: каноническая} по правилу server/fleet_canon -- одно на
+    все флотские срезы (spec 2026-10-24-canonical-devices). Один лёгкий SELECT."""
+    return fleet_canon.superseded_by(_canon_rows())
+
+
+def lineage(device_id: str) -> dict:
+    """Карточка ПК: кем вытеснена эта запись (successor) и какие старые записи
+    свёрнуты в неё (older). Только чтение, ничего не сливается."""
+    rows = _canon_rows()
+    by_id = {r["device_id"]: r for r in rows}
+    mapping = fleet_canon.superseded_by(rows)
+    succ = mapping.get(device_id)
+    older = sorted(
+        (by_id[g] for g, canon in mapping.items() if canon == device_id),
+        key=lambda r: r["last_seen_age_sec"],
+    )
+    return {"successor": by_id.get(succ) if succ else None, "older": older}
+
+
+def superseded_ids() -> frozenset[str]:
+    """Только id вытесненных -- для фильтров срезов."""
+    return frozenset(superseded_map())
+
+
+# Фильтр SQL «не вытеснена» с одним параметром -- JSON-массивом id. NOT IN по списку,
+# который SQLite строит ОДИН раз (коррелированный NOT EXISTS пересканировал бы массив на
+# каждую строку -- O(устройства x призраки), ревью 2026-10-24); WHERE value IS NOT NULL --
+# NULL в списке обнулил бы весь результат NOT IN.
+_NOT_SUPERSEDED_SQL = "d.device_id NOT IN (SELECT value FROM json_each(?) WHERE value IS NOT NULL)"
+
+
+def _superseded_param() -> str:
+    return json.dumps(sorted(superseded_ids()))
+
+
 def _days_until(iso: Optional[str]) -> Optional[int]:
     dt = _parse_iso(iso)
     return None if dt is None else (dt - datetime.now(timezone.utc)).days
@@ -3367,7 +3685,7 @@ def get_devices() -> list[dict[str, Any]]:
                    d.department, d.last_reported_ts, d.clock_drift_sec,
                    d.update_state, d.update_error, d.update_checked_at,
                    d.update_available_version,
-                   d.version_changed_at,
+                   d.version_changed_at, d.agent_arch,
                    s.performance, s.reliability, s.wear, s.risk_exposure, s.risk,
                    s.ts AS score_ts,
                    h.payload AS hist_payload,
@@ -3410,6 +3728,7 @@ def get_devices() -> list[dict[str, Any]]:
                 "model": r["model"],
                 "chassis": r["chassis"],
                 "agent_version": r["agent_version"],
+                "agent_arch": r["agent_arch"],
                 # first_seen питает бейдж/KPI «новых ≤7д» (_is_recent) -- он же
                 # маркирует свежую установку рядом со скрытым дублем-призраком.
                 "first_seen": r["first_seen"],
@@ -3449,6 +3768,7 @@ def get_devices() -> list[dict[str, Any]]:
                 "score_ts": r["score_ts"],
                 "top_risk": _top_risk(risk),
                 "device_trust": device_trust,
+                "identity_trust": risk.get("identity_trust") if isinstance(risk, dict) else None,
                 "unknown_domains": unknown_domains,
                 "regressed_count": regressed_count,
                 "cert_min_days": cert_min_days,
@@ -3533,6 +3853,7 @@ def get_device(device_id: str) -> Optional[dict[str, Any]]:
         "owner_position": d["owner_position_operator"] or d["owner_position"],
         "owner_phone": d["owner_phone_operator"] or d["owner_phone"],
         "agent_version": d["agent_version"],
+        "agent_arch": d["agent_arch"],
         "update_state": d["update_state"],
         "update_error": d["update_error"],
         "update_checked_at": d["update_checked_at"],
@@ -3572,12 +3893,14 @@ def get_historical_series(device_id: str, limit: int = 100) -> list[dict]:
                FROM historical WHERE device_id=? ORDER BY id DESC LIMIT ?""",
             (device_id, limit),
         ).fetchall()
+    # Payload first: the trend x-axis and span gates read received_at (W0.2), so
+    # the server columns must win over a raw payload key of the same name.
     return [
         {
+            **json.loads(r["payload"]),
             "ts": r["ts"],
             "received_at": r["received_at"],
             "clock_drift_sec": r["clock_drift_sec"],
-            **json.loads(r["payload"]),
         }
         for r in rows
     ]
@@ -3637,12 +3960,14 @@ def get_recent_heartbeats(device_id: str, limit: int = 20) -> list[dict]:
                FROM heartbeats WHERE device_id=? ORDER BY id DESC LIMIT ?""",
             (device_id, limit),
         ).fetchall()
+    # Payload first: it is stored raw (extra keys allowed), so the server columns must
+    # win over a payload key of the same name -- windows anchor on received_at (W0.2).
     return [
         {
+            **json.loads(r["payload"]),
             "ts": r["ts"],
             "received_at": r["received_at"],
             "clock_drift_sec": r["clock_drift_sec"],
-            **json.loads(r["payload"]),
         }
         for r in rows
     ]
@@ -3659,6 +3984,33 @@ def _loads_json_list(raw: Optional[str]) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+# Замер качества (ICMP до шлюза) от ПК, молчащего дольше суток по СЕРВЕРНОМУ
+# last_seen, -- не текущая правда: выключенный ПК не голосует в D9 (2026-10-24).
+_NET_QUALITY_FRESH_SEC = 86400
+
+
+def _net_snapshot_row(r: sqlite3.Row) -> Optional[dict[str, Any]]:
+    """Одна строка снапшота; все пять списков пусты -> None (контракт прежний)."""
+    lists = {
+        key: _loads_json_list(r[key])
+        for key in ("adapters", "neighbors", "quality", "routes", "lan_hints")
+    }
+    if not any(lists.values()):
+        return None
+    age = _age_seconds(r["last_seen"])
+    if age is not None and age > _NET_QUALITY_FRESH_SEC:
+        lists["quality"] = []
+    return {
+        "device_id": r["device_id"],
+        "hostname": r["hostname"],
+        "site_code": r["site_code"],
+        "site_name": r["site_name"],
+        "last_seen": r["last_seen"],
+        "snapshot_at": r["snapshot_at"],
+        **lists,
+    }
+
+
 def get_network_snapshots() -> list[dict[str, Any]]:
     """Latest network snapshot per device (map + subnet-anomaly read side, D7).
 
@@ -3673,7 +4025,13 @@ def get_network_snapshots() -> list[dict[str, Any]]:
     agent's own heartbeat time) -- a derived neighbour must be stamped with the
     former, never the latter (an agent can heartbeat for hours after its last
     ARP snapshot went stale).
+
+    2026-10-24 (spec canonical-devices), всё по СЕРВЕРНЫМ меткам (W0.2):
+    снапшот записи, вытесненной переустановкой, пропускается, если у канонической
+    записи есть свой (иначе узел, soft-FK и D9 доставались призраку); замер
+    качества ПК, молчащего > суток, обнуляется; порядок -- по last_seen.
     """
+    ghosts = superseded_map()
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -3682,33 +4040,12 @@ def get_network_snapshots() -> list[dict[str, Any]]:
                    n.adapters, n.neighbors, n.quality, n.routes, n.lan_hints
             FROM devices d
             JOIN net_snapshots n ON n.device_id = d.device_id
+            ORDER BY d.last_seen, d.device_id
             """
         ).fetchall()
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        adapters = _loads_json_list(r["adapters"])
-        neighbors = _loads_json_list(r["neighbors"])
-        quality = _loads_json_list(r["quality"])
-        routes = _loads_json_list(r["routes"])
-        lan_hints = _loads_json_list(r["lan_hints"])
-        if not (adapters or neighbors or quality or routes or lan_hints):
-            continue
-        out.append(
-            {
-                "device_id": r["device_id"],
-                "hostname": r["hostname"],
-                "site_code": r["site_code"],
-                "site_name": r["site_name"],
-                "last_seen": r["last_seen"],
-                "snapshot_at": r["snapshot_at"],
-                "adapters": adapters,
-                "neighbors": neighbors,
-                "quality": quality,
-                "routes": routes,
-                "lan_hints": lan_hints,
-            }
-        )
-    return out
+    snaps = [snap for snap in (_net_snapshot_row(r) for r in rows) if snap is not None]
+    present = {snap["device_id"] for snap in snaps}
+    return [snap for snap in snaps if ghosts.get(snap["device_id"]) not in present]
 
 
 def get_printer_port_hints() -> list[dict[str, Any]]:
@@ -4418,6 +4755,11 @@ def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
 
     Returns lightweight rows (no message body) so the disk-fill / servicing engine
     can filter WindowsUpdateClient failures by source rather than a bare numeric id.
+
+    calib D9: the only events input of errchain, disk_fill servicing and the app_hang
+    count. Copies stored before store_events deduplicated are collapsed here: one row
+    per (ts, source, event_id), the earliest-received copy kept, ts-less rows never
+    collapsed. One SELECT per call.
     """
     with _connect() as conn:
         rows = conn.execute(
@@ -4425,7 +4767,7 @@ def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
                FROM events WHERE device_id=? ORDER BY id DESC LIMIT ?""",
             (device_id, limit),
         ).fetchall()
-    return [
+    oldest_first = [
         {
             "ts": r["ts"],
             "received_at": r["received_at"],
@@ -4433,8 +4775,9 @@ def get_recent_events(device_id: str, limit: int = 200) -> list[dict]:
             "event_id": r["event_id"],
             "level": r["level"],
         }
-        for r in rows
+        for r in reversed(rows)
     ]
+    return _first_event_copies(oldest_first, [])[::-1]
 
 
 def count_recent_events(device_id: str, event_ids: list[int]) -> int:
@@ -4473,11 +4816,44 @@ def count_events_since(device_id: str, event_ids: list[int], since_iso: str) -> 
 # W4.2 fleet-anomaly helpers
 # --------------------------------------------------------------------------- #
 _COHORT_BOOT_CAP = 200  # ssd3 Ф6: devices sampled for the cohort boot-time p90
+# H15: the boot_time gate's range (validators.BOOT_MAX_MS; db cannot import server.trust:
+# its staleness imports db -- a test pins the two) -- a SUSPECT peer is no sample
+_BOOT_PLAUSIBLE_MAX_MS = 600_000
 
 
-def _cohort_boot_p90(conn: sqlite3.Connection, model: str) -> Optional[float]:
+_COHORT_DISK_DAYS = 30
+
+
+def _cohort_disk_errors(conn: sqlite3.Connection, model: str, ghosts: str) -> int:
+    """H14 (R4b): machines of the model cohort -- the cohort_size population: the model
+    plus a historical row, minus rows superseded by a reinstall (X1) -- with a disk error
+    (7 / 51 / 153 / 129 from the storage providers) received in the last 30 days."""
+    since = (datetime.now(timezone.utc) - timedelta(days=_COHORT_DISK_DAYS)).isoformat()
+    row = conn.execute(
+        # B608: literals only; model, the cutoff and the ghost id list (JSON) are bound.
+        f"""
+        SELECT COUNT(DISTINCT e.device_id) AS n
+        FROM events e JOIN devices d ON d.device_id = e.device_id
+        WHERE d.model = ?
+          AND EXISTS (SELECT 1 FROM historical h WHERE h.device_id = d.device_id)
+          AND e.event_id IN (7, 51, 153, 129)
+          AND e.source IN ('disk', 'storahci', 'stornvme')
+          AND e.received_at >= ?
+          AND {_NOT_SUPERSEDED_SQL}
+        """,  # nosec B608
+        (model, since, ghosts),
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def _cohort_boot_p90(
+    conn: sqlite3.Connection, model: str, ghosts: str, exclude_device_id: Optional[str] = None
+) -> tuple[Optional[float], int]:
     """90th-percentile ``avg_boot_ms`` across the model cohort (latest reading per
-    device, capped at 200). ``None`` when the cohort reports no boot samples.
+    device, capped at 200) and its sample count; ``None`` when the cohort reports no
+    boot samples. H15: exclude_device_id (the scored device) never sets its own bar --
+    with <= 9 samples the nearest-rank p90 IS the maximum -- nor do its own reinstall
+    ghosts (X1: a superseded row is no peer), nor a value the boot_time gate rejects.
 
     The field is named ``boot_p90_ms`` because that is health.py's locked cohort
     contract (ssd3 Ф6): it powers the "boot slower than 90% of similar devices"
@@ -4485,54 +4861,67 @@ def _cohort_boot_p90(conn: sqlite3.Connection, model: str) -> Optional[float]:
     loosely calls ``cohort_boot_ms``).
     """
     rows = conn.execute(
-        # B608: literals only; model and the cap are the sole bound parameters.
-        """
+        # B608: literals only; model, the bounds and the ghost id list (JSON) are bound.
+        f"""
         SELECT CAST(json_extract(h.payload, '$.avg_boot_ms') AS REAL) AS boot_ms
         FROM devices d
         JOIN historical h ON h.device_id = d.device_id
           AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
         WHERE d.model = ?
-          AND json_extract(h.payload, '$.avg_boot_ms') IS NOT NULL
+          AND d.device_id IS NOT ?
+          AND CAST(json_extract(h.payload, '$.avg_boot_ms') AS REAL) BETWEEN 0 AND ?
+          AND {_NOT_SUPERSEDED_SQL}
         ORDER BY h.id DESC
         LIMIT ?
         """,  # nosec B608
-        (model, _COHORT_BOOT_CAP),
+        (model, exclude_device_id, _BOOT_PLAUSIBLE_MAX_MS, ghosts, _COHORT_BOOT_CAP),
     ).fetchall()
     values = sorted(float(r["boot_ms"]) for r in rows if r["boot_ms"] is not None)
     if not values:
-        return None
+        return None, 0
     # Nearest-rank p90; integer ceil avoids the float 0.9*n off-by-one (0.9*10 !=
     # 9.0 in binary float, which would push the rank one value too far).
     rank = (9 * len(values) + 9) // 10
-    return values[rank - 1]
+    return values[rank - 1], len(values)
 
 
 def get_fleet_cohort_stats(
     model: Optional[str],
     site_code: Optional[str],
+    exclude_device_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Fleet-level aggregates for the model cohort and the site.
 
     Returns a dict with:
       cohort_size          — devices sharing the same model that have historical data
+                              (canonical rows only: a reinstall ghost is no peer, X1)
       cohort_bsod_pct      — fraction with bugchecks_30d >= 1
+      cohort_bsod_n        — H13: cohort machines with bugchecks_30d >= 1 (counted)
       cohort_kp41_pct      — fraction with kernel_power_41_30d >= 2
       cohort_rsi_low_pct   — fraction with reliability_stability_index < 5.0
       boot_p90_ms          — ssd3 Ф6: 90th-percentile avg_boot_ms across the cohort
                               (cap 200 devices); None when no cohort boot samples exist.
                               Field name matches health.py's locked cohort contract.
+      boot_n               — H15: samples behind boot_p90_ms (without exclude_device_id
+                              and superseded rows)
+      cohort_disk_err_n    — H14: cohort machines with a disk error 7/51/153/129 in 30 days
       site_size            — devices sharing the same site_code that have historical data
       site_kp41_pct        — fraction at site with kernel_power_41_30d >= 2
 
     All fractions are 0.0 when no devices with historical data exist in the group.
     Uses json_extract (SQLite 3.38+) to read fields from the historical payload blob.
     """
+    # X1: a row superseded by a reinstall is no peer -- one PC, one vote (fleet_canon).
+    # ponytail: one O(devices) canon scan per recompute (~1 ms at 55 rows); cache it per
+    # devices-table change if the fleet ever reaches thousands of rows.
+    ghosts = _superseded_param()
     with _connect() as conn:
         # Cohort stats: devices with the same model.
         if model:
             cohort_row = conn.execute(
-                # B608: table and column names are literals; only model is a parameter.
-                """
+                # B608: table and column names are literals; model and the ghost id list
+                # (JSON) are the only parameters.
+                f"""
                 SELECT
                     COUNT(*) AS cohort_size,
                     -- P0-6 (stoperrors.md): NO final ELSE -- a device that never
@@ -4549,6 +4938,12 @@ def get_fleet_cohort_stats(
                         WHEN json_extract(h.payload,'$.bugchecks_30d') IS NOT NULL
                           THEN 0.0
                         END) AS bsod_pct,
+                    -- H13: machines with a BSOD, counted -- cohort_size x bsod_pct would
+                    -- mix COUNT(*) with an AVG that skips non-reporting rows
+                    SUM(CASE
+                        WHEN CAST(json_extract(h.payload,'$.bugchecks_30d') AS REAL) >= 1
+                          THEN 1 ELSE 0
+                        END) AS bsod_n,
                     AVG(CASE
                         WHEN CAST(json_extract(h.payload,'$.kernel_power_41_30d') AS REAL) >= 2
                           THEN 1.0
@@ -4567,20 +4962,21 @@ def get_fleet_cohort_stats(
                 FROM devices d
                 JOIN historical h ON h.device_id = d.device_id
                   AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
-                WHERE d.model = ?
+                WHERE d.model = ? AND {_NOT_SUPERSEDED_SQL}
                 """,  # nosec B608
-                (model,),
+                (model, ghosts),
             ).fetchone()
-            boot_p90_ms = _cohort_boot_p90(conn, model)
+            boot_p90_ms, boot_n = _cohort_boot_p90(conn, model, ghosts, exclude_device_id)
+            disk_err_n = _cohort_disk_errors(conn, model, ghosts)
         else:
             cohort_row = None
-            boot_p90_ms = None
+            boot_p90_ms, boot_n, disk_err_n = None, 0, 0
 
         # Site stats: devices with the same site_code.
         if site_code:
             site_row = conn.execute(
-                # B608: same pattern — only site_code is a parameter.
-                """
+                # B608: same pattern — site_code and the ghost id list are the parameters.
+                f"""
                 SELECT
                     COUNT(*) AS site_size,
                     -- P0-6: same no-final-ELSE pattern as the cohort query above.
@@ -4593,9 +4989,9 @@ def get_fleet_cohort_stats(
                 FROM devices d
                 JOIN historical h ON h.device_id = d.device_id
                   AND h.id = (SELECT MAX(id) FROM historical WHERE device_id = d.device_id)
-                WHERE d.site_code = ?
+                WHERE d.site_code = ? AND {_NOT_SUPERSEDED_SQL}
                 """,  # nosec B608
-                (site_code,),
+                (site_code, ghosts),
             ).fetchone()
         else:
             site_row = None
@@ -4603,9 +4999,12 @@ def get_fleet_cohort_stats(
     return {
         "cohort_size": int(cohort_row["cohort_size"]) if cohort_row else 0,
         "cohort_bsod_pct": float(cohort_row["bsod_pct"] or 0.0) if cohort_row else 0.0,
+        "cohort_bsod_n": int(cohort_row["bsod_n"] or 0) if cohort_row else 0,  # H13
         "cohort_kp41_pct": float(cohort_row["kp41_pct"] or 0.0) if cohort_row else 0.0,
         "cohort_rsi_low_pct": float(cohort_row["rsi_low_pct"] or 0.0) if cohort_row else 0.0,
         "boot_p90_ms": boot_p90_ms,
+        "boot_n": boot_n,
+        "cohort_disk_err_n": disk_err_n,  # H14: machines with disk errors in 30 days
         "site_size": int(site_row["site_size"]) if site_row else 0,
         "site_kp41_pct": float(site_row["kp41_pct"] or 0.0) if site_row else 0.0,
     }
@@ -4647,22 +5046,24 @@ def get_cohort_slope_verdict(model: Optional[str], trajectory: dict[str, Any]) -
         if not isinstance(t, dict) or t.get("direction") != "worsening":
             continue
         slope = _finite_float(t.get("slope_per_day"))
-        if slope is not None:
+        # A 'worsening' counter may carry slope 0 (a single step): no rate to compare.
+        if slope:
             worsening[metric] = slope
     if not worsening or not model:
         return {}
+    ghosts = _superseded_param()  # X1: a reinstall ghost's frozen slope is no cohort point
     with _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.risk
             FROM devices d
             JOIN scores s ON s.device_id = d.device_id
               AND s.id = (SELECT MAX(id) FROM scores WHERE device_id = d.device_id)
-            WHERE d.model = ?
+            WHERE d.model = ? AND {_NOT_SUPERSEDED_SQL}
             ORDER BY s.id DESC
             LIMIT ?
-            """,  # literals only; model/cap are bound parameters -- no injection surface
-            (model, _COHORT_BOOT_CAP),
+            """,  # nosec B608 -- literals only; model, ghost ids (JSON) and the cap are bound
+            (model, ghosts, _COHORT_BOOT_CAP),
         ).fetchall()
     cohort_by_metric: dict[str, list[float]] = {}
     for r in rows:
@@ -4738,6 +5139,7 @@ def get_fleet_health(days: int = 7) -> list[dict]:
                    CAST(json_extract(risk, '$.health.resilience.value') AS REAL) AS resilience,
                    CAST(json_extract(risk, '$.health.observability.value') AS REAL) AS obs_pct,
                    json_extract(risk, '$.health.dominant') AS dominant,
+                   json_extract(risk, '$.health.action') AS action,
                    CAST(json_extract(risk, '$.health.delta_7d') AS REAL) AS delta_7d,
                    json_extract(risk, '$.health.damage.band') AS damage_band,
                    json_extract(risk, '$.health.resilience.band') AS resilience_band,
@@ -4767,6 +5169,7 @@ def get_fleet_health(days: int = 7) -> list[dict]:
             "resilience": r["resilience"],
             "observability_pct": r["obs_pct"],
             "dominant": r["dominant"],
+            "action": r["action"],
             "delta_7d": r["delta_7d"],
             "score_ts": r["ts"],
             "damage_band": r["damage_band"],
@@ -4802,11 +5205,17 @@ def get_fleet_verdicts() -> list[dict]:
 
     Оконная форма — как у ``get_fleet_health``: ровно самая свежая строка scores
     на устройство, одним проходом, без каскада запросов.
+
+    Записи, вытесненные переустановкой (spec 2026-10-24), не выгружаются: иначе
+    призрак и живой преемник с одним hostname оба уходили в ``duplicate_name`` и
+    живой ПК молчал в Zabbix до 30-дневной очистки.
     """
+    ghosts = _superseded_param()
     with _connect() as conn:
         rows = conn.execute(
-            # B608: только литералы; пользовательского ввода в запросе нет.
-            """
+            # B608: только литералы; пользовательского ввода в запросе нет
+            # (id вытесненных -- связанный параметр, JSON-массив).
+            f"""
             SELECT device_id, hostname, model, chassis, org_code, ts,
                    json_extract(risk, '$.health.state') AS state,
                    CAST(json_extract(risk, '$.health.damage.value') AS REAL) AS risk_value,
@@ -4819,8 +5228,10 @@ def get_fleet_verdicts() -> list[dict]:
                        s.ts AS ts, s.risk AS risk
                 FROM scores s JOIN devices d ON d.device_id = s.device_id
                 WHERE s.id = (SELECT MAX(id) FROM scores WHERE device_id = s.device_id)
+                  AND {_NOT_SUPERSEDED_SQL}
             )
             """,  # nosec B608
+            (ghosts,),
         ).fetchall()
     return [
         {
@@ -4840,12 +5251,12 @@ def get_fleet_verdicts() -> list[dict]:
     ]
 
 
-_FLEET_ESCALATION_CAP = 200  # ssd3 Ф6 (T6.2): per-device row cap for the escalation
+_FLEET_ESCALATION_CAP = 800  # ssd3 Ф6 (T6.2): per-device row cap for the escalation
 # lookback window. Real recompute cadence (traced in pipeline.py next to
 # _HEALTH_DELTA_DAYS): inventory/historical/heartbeat each trigger their own
-# recompute_scores call on the same 4h envelope cycle, so ~3 rows land per 4h
-# (~18/day) -- 200 rows reaches back ~11 days, comfortably past the default
-# 7-day comparison point. (Deliberately larger than the 30-60 the plan's prose
+# recompute_scores call on the same 1h envelope cycle (agent 0.3.8), so ~3 rows
+# land per hour (~72/day) -- 800 rows reaches back ~11 days, comfortably past the
+# default 7-day comparison point. (Deliberately larger than the 30-60 the plan's prose
 # suggests: that estimate assumes 1 row per 4h envelope, which undercounts by
 # ~3x once you trace how many msg_types actually rescore per cycle.)
 
@@ -4899,7 +5310,7 @@ def get_fleet_health_deltas(days: int = 7) -> list[dict]:
     return out
 
 
-# mirrors health.py's _STATE_ORDER (duplicated, not imported: db.py is a lower
+# mirrors health_hold.py's STATE_ORDER (duplicated, not imported: db.py is a lower
 # layer than server.analytics.*, so the storage layer never imports analytics).
 _STATE_RANK = {"h0": 0, "h1": 1, "h2": 2, "h3": 3, "h4": 4}
 
@@ -5015,8 +5426,12 @@ def upsert_source_trust(
     reason: str,
     ts: str,
     evidence_seen_at: Optional[str],
+    collector_reason: Optional[str] = None,
 ) -> None:
     """Insert or replace the per-source trust row for a (device, source) pair.
+
+    *collector_reason* (агент 0.3.5) -- токен причины сбоя сбора от агента. ПЕРЕЗАПИСЫВАЕТСЯ
+    каждым конвертом (не COALESCE): после ремонта причина должна уйти вместе со сбоем.
 
     *evidence_seen_at* is the SERVER clock at real ingest (P2-2) -- this is the
     ONLY write path that may advance it. The periodic staleness re-eval job
@@ -5034,8 +5449,8 @@ def upsert_source_trust(
             """
             INSERT INTO device_source_trust
               (device_id, source, state, weight, collector_status, semantic_status, reason, ts,
-               evidence_seen_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+               evidence_seen_at, collector_reason)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(device_id, source) DO UPDATE SET
               state            = excluded.state,
               weight           = excluded.weight,
@@ -5043,7 +5458,8 @@ def upsert_source_trust(
               semantic_status  = excluded.semantic_status,
               reason           = excluded.reason,
               ts               = excluded.ts,
-              evidence_seen_at = COALESCE(excluded.evidence_seen_at, evidence_seen_at)
+              evidence_seen_at = COALESCE(excluded.evidence_seen_at, evidence_seen_at),
+              collector_reason = excluded.collector_reason
             """,
             (
                 device_id,
@@ -5055,6 +5471,7 @@ def upsert_source_trust(
                 reason,
                 ts,
                 evidence_seen_at,
+                collector_reason,
             ),
         )
 
@@ -5093,10 +5510,12 @@ def apply_source_staleness(updates: list[Any]) -> int:
     path is structurally incapable of advancing the "last real evidence" clock a
     repeated re-evaluation must never reset (the P1-4 reset-trap, closed
     structurally rather than by convention). Guarded by an optimistic
-    ``WHERE evidence_seen_at IS <the value the job read>``: if a real ingest
-    updated the row between read and write, this stale write is safely dropped
-    (fresh ingest wins; the next cycle self-corrects -- STALE is the safe
-    direction to be temporarily wrong in, never OK). Returns rows actually changed.
+    ``WHERE evidence_seen_at IS <read value> AND state = <read state>``: if an
+    ingest touched the row between read and write, this write is dropped (fresh
+    ingest wins; the next cycle self-corrects). The state half matters because a
+    FAILED ingest keeps evidence_seen_at (COALESCE) yet changes the state -- and
+    since 2026-10-14 the job may also write OK (identity's raised threshold),
+    which must never land on a fresh gate-failed row. Returns rows changed.
     """
     if not updates:
         return 0
@@ -5107,9 +5526,17 @@ def apply_source_staleness(updates: list[Any]) -> int:
                 """
                 UPDATE device_source_trust
                 SET state = ?, weight = ?, reason = ?
-                WHERE device_id = ? AND source = ? AND evidence_seen_at IS ?
+                WHERE device_id = ? AND source = ? AND evidence_seen_at IS ? AND state = ?
                 """,
-                (u.state, u.weight, u.reason, u.device_id, u.source, u.evidence_seen_at),
+                (
+                    u.state,
+                    u.weight,
+                    u.reason,
+                    u.device_id,
+                    u.source,
+                    u.evidence_seen_at,
+                    u.prev_state,
+                ),
             )
             applied += cur.rowcount
     return applied
@@ -5120,7 +5547,8 @@ def get_source_trusts(device_id: str) -> dict[str, dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT source, state, weight, collector_status, semantic_status, reason, ts
+            SELECT source, state, weight, collector_status, semantic_status, reason, ts,
+                   collector_reason
             FROM device_source_trust
             WHERE device_id=?
             """,
@@ -5135,6 +5563,7 @@ def get_source_trusts(device_id: str) -> dict[str, dict]:
             "semantic_status": r["semantic_status"],
             "reason": r["reason"],
             "ts": r["ts"],
+            "collector_reason": r["collector_reason"],
         }
         for r in rows
     }
@@ -6205,6 +6634,18 @@ def set_device_owner_phone(device_id: str, owner_phone: Optional[str]) -> bool:
 # every subsequent real status forever -- tolerate a bit of clock skew, but
 # only that much, past the SERVER's own clock.
 _UPDATE_STATUS_FUTURE_TOLERANCE = timedelta(minutes=5)
+
+
+def set_agent_arch(device_id: str, arch: str) -> None:
+    """0.3.6: remember the agent build's bitness (row already ensured by the caller).
+
+    Only envelopes that carry ``agent_arch`` call this, so an old agent never
+    wipes it; the guard skips a no-op write on every envelope of a known device."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE devices SET agent_arch=? WHERE device_id=? AND agent_arch IS NOT ?",
+            (arch, device_id, arch),
+        )
 
 
 def set_update_status(

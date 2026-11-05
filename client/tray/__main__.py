@@ -61,7 +61,7 @@ def _config_path() -> Path:
 
 def _status_path(config_path: Path) -> Path:
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_bytes())
         buf = (
             str(data.get("buffer_path", "buffer.jsonl"))
             if isinstance(data, dict)
@@ -112,7 +112,7 @@ def _read_cert_config(config_path: Path) -> tuple[int, int, bool, str]:
     hold a malformed value instead of the file being absent entirely.
     """
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_bytes())
     except (OSError, ValueError):
         data = {}
     if not isinstance(data, dict):
@@ -177,7 +177,6 @@ class _TrayApp:
         self._next_cert_check = 0.0  # check on the first refresh, then every 30 min
         self.icon = TrayIcon(
             on_open=self.open_panel,
-            on_refresh=self.refresh,
             on_about=self.about,
             on_exit=self.request_exit,
             on_owner=self.open_owner_form,
@@ -305,18 +304,24 @@ def run_stop_agent(
     runner: Optional[Callable[[list[str]], int]] = None,
     wait_unlocked: Optional[Callable[[], bool]] = None,
     alert: Callable[[str], None] = _alert,
+    hold: Optional[Callable[[], None]] = None,
 ) -> int:
     """Elevated-ребёнок (``srp-tray --stop-agent``): выгрузить SYSTEM-агента.
 
-    Порядок обязателен: сначала ``schtasks /end`` гасит инстанс задачи -- иначе
-    её RestartOnFailure (3x/1min, task_template.xml) воскресит агента после
-    голого taskkill; затем ``taskkill`` добивает процессы вне задачи. Коды
-    возврата игнорируются (задача может не бежать, процесса может не быть);
-    честный сигнал успеха -- разблокировка EXE. Задача остаётся
-    зарегистрированной: после перезагрузки агент вернётся -- «Выход» выгружает
-    из памяти, а не удаляет (полное удаление = setup --uninstall).
+    Сначала ставится пауза ``C:\\SRP\\update\\hold`` (``stop``): 5-минутный
+    сторож в задаче иначе поднял бы агента снова через считанные минуты, а
+    «Выход» обещает тишину до перезагрузки (CHANGELOG 2026-07-12). Затем
+    ``schtasks /end`` завершает инстанс задачи (её состояние становится честным
+    «не выполняется»); затем ``taskkill`` добивает процессы вне задачи.
+    RestartOnFailure агента НЕ воскрешает -- он срабатывает только на неудачный
+    запуск exe (проверено 2026-10-15). Коды возврата игнорируются (задача может
+    не бежать, процесса может не быть); честный сигнал успеха -- разблокировка
+    EXE. Задача остаётся зарегистрированной: после перезагрузки агент вернётся --
+    «Выход» выгружает из памяти, а не удаляет (полное удаление = setup
+    --uninstall). ``hold`` инъецируется в тестах, чтобы не трогать реальный C:\\SRP.
     """
     try:
+        from client.deploy import update_recovery
         from client.deploy.setup import (
             AGENT_EXE,
             DEST,
@@ -347,6 +352,8 @@ def run_stop_agent(
         return proc.returncode
 
     run = runner or _default_runner
+    do_hold = hold or (lambda: update_recovery.set_hold(DEST, update_recovery.HOLD_STOP))
+    do_hold()  # ДО /end: сторож не должен поднять агента между остановкой и перезагрузкой
     run(schtasks_stop_cmd())
     run(taskkill_agent_cmd())
     wait = wait_unlocked or (

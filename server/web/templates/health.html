@@ -3,7 +3,7 @@
 {% block subtitle %}три координаты: D · R · O{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+<script src="/static/plotly-2.35.2.min.js" defer></script>
 <style>
 .no-data { text-align: center; padding: 40px 20px; color: var(--muted); }
 .heatmap-legend { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -148,7 +148,7 @@
   var elHeat = document.getElementById("chart-heatmap");
   if (!elDonut || !elHeat) return;
   var data = JSON.parse(document.getElementById("health-data").textContent || "{}");
-  var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: []};
+  var hm = data.heatmap || {z: [], cols: [], hostnames: [], device_ids: [], state_labels: [], dominant_labels: [], older_counts: []};
   var sd = data.state_dist || [];
   var BAND_WORDS = ["хорошо", "наблюдение", "плохо", "неизвестно"];
 
@@ -197,7 +197,9 @@
       var host = window.srpEsc(hm.hostnames[i]);
       return row.map(function (val, j) {
         if (j === 0) {
-          return host + ": " + hm.state_labels[i] + " · доминирующий фактор: " + hm.dominant_labels[i];
+          var older = (hm.older_counts || [])[i] || 0;
+          return host + ": " + hm.state_labels[i] + " · доминирующий фактор: " + hm.dominant_labels[i]
+            + (older > 0 ? " · ещё старых записей: " + Number(older) + " (клик → карточка)" : "");
         }
         return host + ": " + hm.cols[j] + " = " + BAND_WORDS[val];
       });

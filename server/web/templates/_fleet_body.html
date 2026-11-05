@@ -31,13 +31,21 @@
     <div class="kn {{ 'bad' if summary.expiring else 'na' }}">{{ summary.expiring }}</div>
     <div class="kl">cert ≤30д</div>
   </div>
-  <div class="kpi" data-filter="untrusted">
+  <div class="kpi" data-filter="untrusted" title="ПК без подтверждённого описания (инвентаризации). С токеном не связано: причина — в подсказке значка у ПК.">
     <div class="kn {{ 'bad' if summary.untrusted else 'na' }}">{{ summary.untrusted }}</div>
     <div class="kl">untrusted</div>
+  </div>
+  <div class="kpi" data-filter="ps_broken" title="PowerShell на ПК не загружает свои модули (обычно повреждён .NET Framework) — агент ничего не может собрать. Что делать — в подсказке значка untrusted у ПК.">
+    <div class="kn {{ 'bad' if summary.ps_broken else 'na' }}">{{ summary.ps_broken }}</div>
+    <div class="kl">PowerShell сломан</div>
   </div>
   <div class="kpi" data-filter="update_pending">
     <div class="kn {{ 'warn' if summary.update_pending else 'na' }}">{{ summary.update_pending }}</div>
     <div class="kl">не применяют обновл.</div>
+  </div>
+  <div class="kpi" data-filter="update_failed" title="Агент не смог обновиться — причина в подсказке значка у ПК и в его карточке">
+    <div class="kn {{ 'bad' if summary.update_failed else 'na' }}">{{ summary.update_failed }}</div>
+    <div class="kl">ошибки обновл.</div>
   </div>
   <div class="kpi" data-filter="outdated"
        title="Версия агента ниже выложенной на сервере — устройства ждут обновления">
@@ -77,7 +85,7 @@
         <th>Статус</th>
         <th class="sortable" data-col="2" title="сводный индекс здоровья: свод повреждений и устойчивости, 0–100, выше = лучше"><span>Индекс</span><span class="sort-icon"></span></th>
         <th class="sortable" data-col="3" title="состояние по координатной модели: от «здоров» до «предотказ»"><span>Состояние</span><span class="sort-icon"></span></th>
-        <th title="главный фактор деградации и прогноз окна до ухудшения">Главный фактор</th>
+        <th title="главный фактор и срок реакции (по состоянию) или прогноз по тренду, если он короче">Главный фактор</th>
         <th>Сертификат</th>
         <th title="страниц за сегодня">Печать</th>
         <th>Связь</th>
@@ -99,7 +107,7 @@
         <div class="dev-sub2">
           {%- if d.org_label.text %}{{ d.org_label.text }}{% if not d.org_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
           {%- if d.dept_label.text and d.dept_label.text != "Без отдела" %} / {{ d.dept_label.text }}{% if not d.dept_label.known %} <span class="chip-unk">нет в спр.</span>{% endif %}{% endif -%}
-          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновл.</span>{% endif %}{% if d.update_available_version %} <span class="badge warn" title="агент видит обновление, но не применяет его">доступна {{ d.update_available_version }}</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}
+          <span class="ver">v{{ d.agent_version or "?" }}</span>{% if d.version_outdated %} <span class="badge warn">устар.</span>{% endif %}{% if d.update_state == "failed" %} <span class="badge bad" title="{{ d.update_error or '' }}">ошибка обновл.</span>{% endif %}{% if d.update_available_version and d.update_state == "ok" %} <span class="badge warn" title="агент видит обновление, но не применяет его">доступна {{ d.update_available_version }}</span>{% endif %}{% if d.is_new %} <span class="badge good">NEW</span>{% endif %}{% if d.namesakes and d.namesakes > 1 %} <span class="badge na" title="одно имя в одном объекте/отделе, жизни записей пересекаются — доказательства переустановки нет, показаны все">тёзка ×{{ d.namesakes }}</span>{% endif %}
         </div>
       </td>
 
@@ -107,10 +115,11 @@
       <td>
         <div class="alerts">
           {% if d.stale %}<span class="badge warn">OFFLINE</span>{% endif %}
-          {% if d.device_trust == "untrusted" %}<span class="badge bad">untrusted</span>{% endif %}
+          {% if d.device_trust == "untrusted" %}<span class="badge bad" title="{{ identity_reason_ru(d.identity_trust) }}">untrusted</span>{% endif %}
           {% if d.unknown_domains %}<span class="badge na">{{ d.unknown_domains }}×unkn</span>{% endif %}
           {% if d.regressed_count %}<span class="badge high">{{ d.regressed_count }}×пропал</span>{% endif %}
-          {% if not d.stale and not d.device_trust and not d.unknown_domains and not d.regressed_count and not d.cert_expiring %}
+          {# OK = доверенный ПК со спокойным вердиктом: зелёный «OK» рядом с «предотказом» -- ложная уверенность #}
+          {% if not d.stale and d.device_trust == "ok" and d.health and d.health.state == "h0" and not d.unknown_domains and not d.regressed_count and not d.cert_expiring %}
             <span class="badge good">OK</span>
           {% endif %}
         </div>
@@ -136,10 +145,10 @@
           <span class="hstate {{ hband }}">{{ state_label_for(hh.state) }}</span>
         </td>
         <td class="hfactor">
-          {# dominant is only ever a watch/bad axis (health._dominant), so a healthy
+          {# dominant is only ever a watch/bad axis (health_dominant._dominant), so a healthy
              machine with a bad network axis still names its mechanism here. #}
           {% if hh.state != 'unknown' and hh.dominant %}
-            {{ dominant_label_for(hh.dominant) }}{% if hh.horizon_days %} <span class="hfar" title="{{ hh.horizon_reason or 'прогноз окна до ухудшения состояния' }}">≤{{ hh.horizon_days }}дн</span>{% endif %}
+            {{ dominant_label_for(hh.dominant) }}{% if hh.horizon_days %} <span class="hfar" title="{{ hh.horizon_reason or 'срок реакции по состоянию — не прогноз отказа' }}">≤{{ hh.horizon_days }}дн</span>{% endif %}
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
       {% else %}
@@ -201,18 +210,19 @@
 {% endif %}
 
 {# ── Скрытые дубликаты имени (переустановка агента) ────────────────────────
-   Производное от get_devices(): при одинаковом hostname свежая запись выше, а
-   старые OFFLINE-тёзки собраны здесь. Ничего не удалено — удаляет автоочистка
-   по молчанию (device_retention_days) или кнопка ✕. Свёрнуто по умолчанию. #}
+   Производное от get_devices() по правилу server/fleet_canon: старая запись
+   свёрнута, если тот же ПК (имя + объект/орг/отдел) появился под новым id ПОСЛЕ
+   того, как она замолчала. Ничего не удалено — удаляет автоочистка по молчанию
+   (device_retention_days) или кнопка ✕. Свёрнуто по умолчанию. #}
 {% if dupes_total %}
 <details class="site dupes">
   <summary class="site-head">
     <span class="site-name">Скрытые дубликаты имени: {{ dupes_total }}</span>
-    <span class="muted small">старые записи тех же ПК (переустановка агента); свежая осталась в списке — удалятся автоочисткой по молчанию или кнопкой ✕</span>
+    <span class="muted small">старые записи тех же ПК (переустановка агента): замолчали раньше, чем появилась новая запись; она осталась в списке</span>
   </summary>
   <table>
     <thead>
-      <tr><th>Устройство</th><th>Версия</th><th>Связь</th><th></th></tr>
+      <tr><th>Устройство</th><th>Версия</th><th>Почему скрыта</th><th></th></tr>
     </thead>
     <tbody>
     {% for d in dupes %}
@@ -225,7 +235,11 @@
         <a href="/device/{{ d.device_id }}" title="{{ d.device_id }}">{{ d.display_name }}</a>
       </td>
       <td class="mono"><span class="ver">v{{ d.agent_version or "?" }}</span></td>
-      <td class="mono" title="{{ d.last_seen or '' }}">{{ fmt_age(d.last_seen_age_sec) }}</td>
+      <td class="small" title="{{ d.last_seen or '' }}">
+        замолчала {{ d.silent_since or fmt_age(d.last_seen_age_sec) }} ·
+        новая запись <a href="/device/{{ d.successor_id }}">{{ d.successor_name }}</a>{% if d.successor_since %} с {{ d.successor_since }}{% endif %} ·
+        {% if d.purge_off %}автоочистка выключена{% else %}удалится после {{ d.purge_after or "—" }}{% endif %}
+      </td>
       <td>
         <button class="delbtn"
                 data-id="{{ d.device_id }}"

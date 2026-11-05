@@ -34,6 +34,30 @@ def _env(device_id: str, msg_type: str, payload: dict, source_health: dict) -> d
     }
 
 
+def test_failed_inventory_keeps_the_last_good_inventory(client):
+    """2026-10-14: a failed inventory (the agent sends payload {} with an
+    identity timeout) overwrote the stored inventory with {} -- the device card
+    went blank and scoring lost its disks until the next good run. The stored
+    inventory must survive, while the identity row still records the failure."""
+    from server import db
+
+    good = healthy("inventory")
+    resp = client.post(
+        "/api/v1/ingest", json=_env("dinv", "inventory", good, {"identity": _sh("ok")})
+    )
+    assert resp.status_code == 200, resp.text
+    failed = _env("dinv", "inventory", {}, {"identity": _sh("timeout")})
+    resp = client.post("/api/v1/ingest", json=failed)
+    assert resp.status_code == 200, resp.text
+
+    stored = db.get_inventory("dinv")
+    assert stored is not None
+    assert stored["model"] == good["model"]
+    assert stored["hostname"] == good["hostname"]
+    identity = db.get_source_trusts("dinv")["identity"]
+    assert (identity["state"], identity["collector_status"]) == ("unavailable", "timeout")
+
+
 def test_heartbeat_throttle_timeout_makes_thermal_unknown(client):
     from server import db
 
@@ -99,6 +123,40 @@ def test_smart_blocked_optional_source_is_dropped_not_fatal(client):
     # required source alone still trusts the domain; optional smart is only dropped
     assert trust["domains"]["storage"]["state"] == "trusted"
     assert "smart" in trust["domains"]["storage"]["dropped"]
+
+
+# 0.3.4: removable disks (USB/1394) never feed the storage verdict -- the gate included.
+_USB = {"disk": "Kingston DataTraveler 3.0", "bus_type": "USB", "serial_hash": "usb01"}
+_NVME = {"disk": "Samsung SSD 980", "bus_type": "NVMe", "serial_hash": "nvme01", "wear_pct": 1.0}
+_SH_STORAGE = {"storage_reliability": _sh("ok"), "reliability": _sh("ok"), "boot_time": _sh("ok")}
+
+
+def test_trust_gate_validates_the_first_fixed_disk_not_a_usb_stick(client):
+    """The agent does not sort Get-PhysicalDisk: an implausible USB stick listed first
+    failed the gate and hid the internal disk's whole storage axis."""
+    from server import db
+    from server.pipeline import _extract_reading
+
+    payload = {**healthy("historical"), "storage": [{**_USB, "wear_pct": 300.0}, _NVME]}
+    assert _extract_reading("storage_reliability", payload) == _NVME
+    assert _extract_reading("smart", payload)["serial_hash"] == "nvme01"
+    sh = {**_SH_STORAGE, "smart": _sh("ok")}
+    resp = client.post("/api/v1/ingest", json=_env("dev-usbgate", "historical", payload, sh))
+    assert resp.status_code == 200, resp.text
+    assert db.get_trust("dev-usbgate")["domains"]["storage"]["state"] == "trusted"
+
+
+def test_usb_only_storage_reads_empty_never_a_confident_zero(client):
+    from server import db
+    from server.pipeline import _extract_reading
+
+    payload = {**healthy("historical"), "storage": [{**_USB, "wear_pct": 90.0}]}
+    assert _extract_reading("storage_reliability", payload) == {}
+    assert _extract_reading("smart", payload)["serial_hash"] is None
+    client.post("/api/v1/ingest", json=_env("dev-usbonly", "historical", payload, _SH_STORAGE))
+    trust = db.get_trust("dev-usbonly")
+    assert trust["sources"]["storage_reliability"]["collector_status"] == "empty"
+    assert trust["domains"]["storage"]["state"] == "unknown"
 
 
 def test_trust_accumulates_across_message_types(client):
@@ -257,3 +315,35 @@ def test_legacy_db_migrates_evidence_seen_at_column(tmp_path: Path) -> None:
         ("dev-legacy-row",),
     ).fetchone()
     assert row["evidence_seen_at"] == "2020-01-01T00:00:00+00:00"  # backfilled from legacy ts
+
+
+def test_adding_another_column_does_not_restamp_evidence(client, monkeypatch) -> None:
+    """Ревью 2026-10-24: бэкфилл evidence_seen_at бежит, только когда добавлена ИМЕННО
+    эта колонка. Новая колонка device_source_trust не должна штамповать строку, которая
+    никогда не была OK (partial), иначе staleness мигает её в STALE."""
+    from server import db
+
+    db.upsert_source_trust(
+        "dev-bf2",
+        "reliability",
+        "degraded",
+        0.5,
+        "partial",
+        "plausible",
+        "",
+        "2026-10-01T00:00:00+00:00",
+        None,  # partial -- не доказательство: evidence_seen_at не ставится
+    )
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id='dev-bf2'"
+        ).fetchone()
+        assert row["evidence_seen_at"] is None
+    extra = {**db._ADD_COLUMNS, "device_source_trust": (*db._ADD_COLUMNS["device_source_trust"], ("zz_probe", "TEXT"))}
+    monkeypatch.setattr(db, "_ADD_COLUMNS", extra)
+    db.init_db(db._db_path)
+    with db._connect() as conn:
+        row = conn.execute(
+            "SELECT evidence_seen_at FROM device_source_trust WHERE device_id='dev-bf2'"
+        ).fetchone()
+    assert row["evidence_seen_at"] is None

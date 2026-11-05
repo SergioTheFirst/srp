@@ -32,7 +32,7 @@ _BLIND_SPOT = "видимость только с этой машины: пут�
 
 _GW_LOSS_FULL_PTS = 45.0
 _GW_LOSS_HEAVY_PTS = 30.0
-_GW_LOSS_LIGHT_PTS = 15.0
+_GW_LOSS_LIGHT_PTS = 8.0  # 1 of 3 echoes lost: factor shown, axis stays good (< 15)
 _GW_LAT_HIGH_PTS = 15.0
 _GW_LAT_WARN_PTS = 8.0
 _DNS_PARTIAL = 8.0
@@ -43,7 +43,10 @@ _WIFI_LOW = 6.0  # < 50%
 # Thresholds the _PTS deltas above fire at (KodSR L8: kept separate from the
 # score weights themselves -- tuning the % boundary should not require also
 # touching the score, and vice versa).
-_GW_LOSS_HEAVY_PCT = 20.0
+# The agent sends 3 echoes per target (client/collectors/network.py), so loss is
+# quantized to 0 / 33.3 / 66.7 / 100 %: one lost echo is the light tier, two are
+# heavy, and 100 % is its own rule (gateway silent).
+_GW_LOSS_HEAVY_PCT = 50.0  # >= 2 of 3 echoes lost
 _GW_LOSS_LIGHT_PCT = 5.0
 _GW_LAT_HIGH_MS = 100.0
 _GW_LAT_WARN_MS = 30.0

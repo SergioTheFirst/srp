@@ -51,10 +51,23 @@
 {% if update_info %}
 <p class="hint">Пакет: <code>{{ update_info.file }}</code> · версия <b>{{ update_info.version }}</b> ·
 {{ (update_info.size / 1048576) | round(1) }} МБ. Выложен в <code>server/updates/</code>.</p>
+{% elif update_problem %}
+<div class="alert-banner alert-warn" role="alert">Пакет в <code>server/updates/</code> отклонён:
+<b>{{ update_problem }}</b>. Агентам он не раздаётся. Запустите <code>update.bat</code> на этом
+сервере — он соберёт пакет, подпишет его ключом этого сервера и выложит заново.</div>
 {% else %}
-<p class="hint">Пакет обновления не выложен. Соберите <code>build.bat</code> — он положит
-<code>srp-agent-update-&lt;версия&gt;.zip</code> и <code>manifest.json</code> в <code>dist\updates\</code>;
-скопируйте оба файла на сервер в <code>server/updates/</code>.</p>
+<p class="hint">Пакет обновления не выложен. Запустите <code>update.bat</code> на этом сервере — он
+соберёт агента, подпишет пакет ключом этого сервера и сам выложит его в <code>server/updates/</code>.
+Пакет, собранный на другой машине, агенты не примут.</p>
+{% endif %}
+
+{% if update_info_x86 %}
+<p class="hint">Пакет x86 (32-битная Windows): <code>{{ update_info_x86.file }}</code> · версия
+<b>{{ update_info_x86.version }}</b> · {{ (update_info_x86.size / 1048576) | round(1) }} МБ.
+Выложен в <code>server/updates/x86/</code>.</p>
+{% elif update_problem_x86 %}
+<div class="alert-banner alert-warn" role="alert">Пакет x86 в <code>server/updates/x86/</code>
+отклонён: <b>{{ update_problem_x86 }}</b>. x86-агентам он не раздаётся.</div>
 {% endif %}
 
 <div class="section-label" title="Сколько устройств в парке на какой версии агента">Версии агентов в парке</div>
@@ -62,7 +75,7 @@
 {% for row in version_counts %}
 <div class="riskrow"{% if row.outdated %} title="Версия агента ниже выложенной на сервере — устройства ждут обновления"{% endif %}>
   <div class="head">
-    <span class="name mono">{{ row.v }}</span>
+    <span class="name mono">{{ row.v }}{% if row.arch == "x86" %} · x86{% endif %}</span>
     <span class="chip {{ 'warn' if row.outdated else 'na' }}">{{ row.n }}</span>
   </div>
   <div class="riskbar {{ 'warn' if row.outdated else 'na' }}"><i style="width:{{ row.pct }}%"></i></div>
@@ -141,13 +154,16 @@
   function build() {
     var server = (elServer.value || "").trim() || "http://СЕРВЕР:8000";
     var share = (elShare.value || "").trim().replace(/[\\\/]+$/, "") || "\\\\SERVER\\srp$";
-    var parts = [q(share + "\\setup.exe"), "--server " + q(server), "--org " + q(elOrg.value || "<КОД-ОРГ>")];
+    // 0.3.6: one BAT for every PC -- a 32-bit Windows (x86, no WOW64) takes the x86 build.
+    var pick = 'set "SRP=' + share.replace(/"/g, "") + '"\r\n' +
+      'if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 set "SRP=%SRP%\\x86"\r\n';
+    var parts = ['"%SRP%\\setup.exe"', "--server " + q(server), "--org " + q(elOrg.value || "<КОД-ОРГ>")];
     if (elDept.value) parts.push("--dept " + q(elDept.value));
     if (elNoTray.checked) parts.push("--no-tray");
     if (elOffline.checked) parts.push("--allow-offline");
     if (elPwd.checked) parts.push('--password "<ПАРОЛЬ>"');
     if (elTok.checked) parts.push('--token "<ТОКЕН>"');
-    elBat.value = "@echo off\r\n" + parts.join(" ");
+    elBat.value = "@echo off\r\n" + pick + parts.join(" ");
     elWarn.textContent = elOrg.value ? "" : "выберите организацию";
   }
 

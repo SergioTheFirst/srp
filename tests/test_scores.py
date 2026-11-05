@@ -46,7 +46,10 @@ def test_healthy_machine_has_no_negative_factors():
 # --------------------------------------------------------------------------- #
 def test_degrading_machine_scores_drop():
     s = _scores(degrading)
-    assert s["performance"] < 70
+    # 900 MB free RAM still costs performance; the 78 % clock at 22 % CPU is idle
+    # SpeedStep, not throttling (H3, F-09 -- was "< 70" with the idle penalty)
+    assert s["performance"] < 90
+    assert not any("Троттлинг" in f["label"] for f in s["factors"]["performance"])
     assert s["reliability"] < 40
     assert s["wear"] < 10  # 82% SSD wear + high power-on hours + old hardware
     assert s["risk_exposure"] > 30
@@ -130,3 +133,36 @@ def test_day1_scores_ignore_unvalidated_disks_beyond_first():
     s = compute_day1_scores(None, hist, None)
     assert s["wear"] >= 90.0  # only SSD0's wear_pct=5 should count
     assert s["risk_exposure"] == 0.0  # HDD1's realloc/read-errors must not leak in
+
+
+# --------------------------------------------------------------------------- #
+# Throttling only under load (spec H3, F-09; R7: 55 % of heartbeats idle with perf < 95)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("hb", "perf"),
+    [
+        ({"cpu_pct": 80.0, "cpu_perf_pct": 40.0}, 40.0),
+        ({"cpu_pct": 50.0, "cpu_perf_pct": 70.0}, 70.0),  # the busy gate is inclusive
+        ({"cpu_pct": 49.9, "cpu_perf_pct": 40.0}, None),  # idle SpeedStep, not throttling
+        ({"cpu_perf_pct": 40.0}, None),  # load unknown -> no point
+        (None, None),
+    ],
+)
+def test_loaded_perf_counts_only_a_busy_cpu(hb, perf) -> None:
+    from server.scoring.scores import loaded_perf
+
+    assert loaded_perf(hb) == perf
+
+
+def test_idle_low_perf_is_no_throttle_penalty() -> None:
+    idle = compute_day1_scores(None, None, {"cpu_pct": 5.0, "cpu_perf_pct": 40.0})
+    assert idle["performance"] == 100.0
+    assert not any("Троттлинг" in f["label"] for f in idle["factors"]["performance"])
+
+
+@pytest.mark.parametrize(("perf", "penalty"), [(90.0, 5.0), (80.0, 15.0), (40.0, 20.0)])
+def test_throttle_penalty_under_load_is_linear_and_capped(perf: float, penalty: float) -> None:
+    s = compute_day1_scores(None, None, {"cpu_pct": 90.0, "cpu_perf_pct": perf})
+    assert s["performance"] == 100.0 - penalty
+    deltas = [f["delta"] for f in s["factors"]["performance"] if "Троттлинг" in f["label"]]
+    assert deltas == [-penalty]

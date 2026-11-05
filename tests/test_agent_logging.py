@@ -88,8 +88,8 @@ def test_main_logs_effective_user(monkeypatch, tmp_path) -> None:
         def __init__(self, cfg: ClientConfig) -> None:
             pass
 
-        def run_once(self) -> None:
-            pass
+        def run_once(self) -> bool:
+            return True
 
     monkeypatch.setattr(
         agent_mod, "load_config", lambda: ClientConfig(server_url="http://x:8000", device_id="d")
@@ -99,7 +99,9 @@ def test_main_logs_effective_user(monkeypatch, tmp_path) -> None:
 
     agent_mod.main(["--once", "--log-file", str(log)])
 
-    assert "user=SYSTEM" in log.read_text(encoding="utf-8")
+    text = log.read_text(encoding="utf-8")
+    assert "user=SYSTEM" in text
+    assert f"version={agent_mod.AGENT_VERSION}" in text  # the running build after an auto-update
 
 
 def test_redacted_url_strips_userinfo() -> None:

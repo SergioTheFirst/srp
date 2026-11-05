@@ -1,7 +1,9 @@
 """Day-1 scores (Part 1 §9).
 
 Four numbers an engineer can read the instant the agent is installed, derived
-from the machine's *own* past + current vitals -- no fleet, no training needed:
+from the machine's *own* past + current vitals -- no training needed; the one fleet
+input is the slow-boot threshold (H15: ``boot_threshold`` from the model cohort's
+peers, the 180 s floor without them) -- any recompute passes it as the pipeline does:
 
   performance    0..100, higher = snappier now
   reliability    0..100, higher = more stable historically
@@ -38,6 +40,39 @@ def _num(d: Optional[dict], key: str) -> Optional[float]:
         return None
 
 
+# D10 / H3: % Processor Performance is naturally low at idle (SpeedStep) -- below-nominal
+# clocks count as throttling only while the CPU is busy; unknown load (no cpu_pct) is not
+# busy. ONE definition for the legacy score, the throttle trend and bayes (bayesian
+# imports this module, so the reverse import would cycle).
+BUSY_CPU_PCT = 50.0
+# H9 (R6): the agent reads AvgDisksecPerRead/Write from the formatted perf class -- whole
+# seconds, so sub-second latency is 0 and only an I/O stall of >= 1 s is ever visible.
+# ONE threshold for the legacy score, the storage confirmation and bayes; latency
+# levels by the p50/p95 ms fields are research (plan, stage 7).
+STALL_SEC = 1.0
+# H15 (R10): boot time relative to the model cohort. Fleet median 120 s, p95 243 s: the
+# old absolute 40/60/90 s (and the OS engine's 60/120 s) marked half of it «slow».
+# T = max(180 s, 1.5 x the cohort's boot p90) with >= 5 peer samples, else 180 s;
+# >= T is slow, >= 2T very slow. ONE threshold for the legacy score and the OS engine.
+BOOT_FLOOR_MS = 180_000.0
+_BOOT_COHORT_MIN = 5
+
+
+def boot_threshold_ms(cohort: Optional[dict]) -> float:
+    """H15: the slow-boot threshold T for a device of this cohort (get_fleet_cohort_stats)."""
+    c = cohort or {}
+    p90 = c.get("boot_p90_ms")
+    if (c.get("boot_n") or 0) >= _BOOT_COHORT_MIN and isinstance(p90, (int, float)):
+        return max(BOOT_FLOOR_MS, 1.5 * float(p90))
+    return BOOT_FLOOR_MS
+
+
+def loaded_perf(hb: Optional[dict]) -> Optional[float]:
+    """cpu_perf_pct while the CPU is busy (cpu_pct >= BUSY_CPU_PCT), else None."""
+    busy = (_num(hb, "cpu_pct") or 0.0) >= BUSY_CPU_PCT
+    return _num(hb, "cpu_perf_pct") if busy else None
+
+
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
@@ -71,7 +106,9 @@ def device_age_years(inventory: Optional[dict]) -> Optional[float]:
 
 
 # --------------------------------------------------------------------------- #
-def _performance(hb: Optional[dict], hist: Optional[dict]) -> tuple[float, list[Factor]]:
+def _performance(
+    hb: Optional[dict], hist: Optional[dict], boot_t: float = BOOT_FLOOR_MS
+) -> tuple[float, list[Factor]]:
     val = 100.0
     factors: list[Factor] = []
 
@@ -80,9 +117,9 @@ def _performance(hb: Optional[dict], hist: Optional[dict]) -> tuple[float, list[
         val += delta
         factors.append({"label": label, "delta": round(delta, 1)})
 
-    perf = _num(hb, "cpu_perf_pct")  # throttle-residency proxy for thermal health
+    perf = loaded_perf(hb)  # throttle-residency proxy for thermal health, under load only
     if perf is not None and perf < 95:
-        hit(f"Троттлинг CPU ({perf:.0f}% номинала)", -_clamp((95 - perf) * 1.5, 0, 30))
+        hit(f"Троттлинг CPU ({perf:.0f}% номинала)", -_clamp(95 - perf, 0, 20))
 
     avail = _num(hb, "mem_avail_mb")
     if avail is not None:
@@ -102,20 +139,14 @@ def _performance(hb: Optional[dict], hist: Optional[dict]) -> tuple[float, list[
 
     for key, label in (("disk_read_sec", "чтения"), ("disk_write_sec", "записи")):
         lat = _num(hb, key)
-        if lat is not None:
-            if lat > 0.05:
-                hit(f"Высокая задержка {label} диска ({lat * 1000:.0f} мс)", -15)
-            elif lat > 0.020:
-                hit(f"Повышенная задержка {label} диска ({lat * 1000:.0f} мс)", -8)
+        if lat is not None and lat >= STALL_SEC:
+            hit(f"Зависание {label} диска ≥ 1 с ({lat:.0f} с)", -15)
 
     boot = _num(hist, "avg_boot_ms")
-    if boot is not None:
-        if boot > 90000:
-            hit(f"Очень медленная загрузка ({boot / 1000:.0f} с)", -15)
-        elif boot > 60000:
-            hit(f"Медленная загрузка ({boot / 1000:.0f} с)", -10)
-        elif boot > 40000:
-            hit(f"Загрузка дольше целевой ({boot / 1000:.0f} с)", -5)
+    if boot is not None and boot >= 2 * boot_t:  # H15: relative to the cohort
+        hit(f"Очень медленная загрузка ({boot / 1000:.0f} с)", -15)
+    elif boot is not None and boot >= boot_t:
+        hit(f"Медленная загрузка ({boot / 1000:.0f} с)", -5)
 
     return _clamp(val), factors
 
@@ -257,8 +288,10 @@ def compute_day1_scores(
     inventory: Optional[dict],
     historical: Optional[dict],
     heartbeat: Optional[dict],
+    *,
+    boot_threshold: float = BOOT_FLOOR_MS,
 ) -> dict[str, Any]:
-    perf, perf_f = _performance(heartbeat, historical)
+    perf, perf_f = _performance(heartbeat, historical, boot_threshold)
     rel, rel_f = _reliability(historical)
     wear, wear_f = _wear(inventory, historical)
     risk, risk_f = _risk_exposure(inventory, historical, heartbeat)

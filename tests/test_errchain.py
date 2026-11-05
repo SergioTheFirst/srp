@@ -1,7 +1,8 @@
 """ssd3 Ф3 (T3.2/T3.4): errchain -- deterministic event-chain escalation
-detector. Pure function; time is anchored on received_at only (the agent's
-own ``ts`` is never trusted -- clocks drift/lie), matching the rest of the
-ssd3 series (K3: observations, never invented causality).
+detector. Pure function; the 30-day window is anchored on received_at (the
+agent's own ``ts`` can drift/lie and only orders a pair while plausible, calib
+D9 -- tests/test_calib_events.py), matching the rest of the ssd3 series (K3:
+observations, never invented causality).
 """
 
 from __future__ import annotations
@@ -41,7 +42,21 @@ def test_empty_input_is_stage_zero_and_no_crash():
 def test_errchain_is_asdict_serializable():
     chain = analyze_events([], now=_NOW)
     d = asdict(chain)
-    assert set(d) == {"stage", "burstiness", "recurrent_weeks", "counts", "factors"}
+    # H4 added "delivered" (additive: the events collector reported)
+    keys = {
+        "stage",
+        "burstiness",
+        "recurrent_weeks",
+        "counts",
+        "factors",
+        "delivered",
+        "stage_disk_only",
+        "fs_isolated",
+        "fs_power_likely",
+        "bugcheck_days",  # H13: distinct BugCheck days in the window
+        "disk_errors",  # H14: own 7/51/153/129
+    }  # + H6
+    assert set(d) == keys
 
 
 # --------------------------------------------------------------------------- #
@@ -72,19 +87,22 @@ def test_stage_2_damage_without_any_early_still_counts_as_damage():
 
 
 def test_stage_3_damage_then_crash_within_7_days():
-    events = [_event("disk", 51, 10), _event("System", 41, 5)]  # damage day10, crash day5 (5d gap)
+    # damage day10, BugCheck day5 (5d gap); no ts -> the inclusive received_at rule
+    events = [_event("disk", 51, 10), _event("Microsoft-Windows-WER-SystemErrorReporting", 1001, 5)]
     chain = analyze_events(events, now=_NOW)
     assert chain.stage == 3
 
 
 def test_stage_not_3_when_crash_more_than_7_days_after_damage():
-    events = [_event("disk", 51, 25), _event("System", 6008, 5)]  # 20-day gap
+    # a still-recent BugCheck 20 days after the damage: only the 7-day gap decides
+    events = [_event("disk", 51, 25), _event("Microsoft-Windows-WER-SystemErrorReporting", 1001, 5)]
     chain = analyze_events(events, now=_NOW)
     assert chain.stage == 2
 
 
 def test_stage_not_3_when_crash_precedes_damage():
-    events = [_event("System", 41, 20), _event("disk", 7, 5)]  # crash BEFORE damage
+    # a still-recent BugCheck received a day BEFORE the damage: only the order decides
+    events = [_event("Microsoft-Windows-WER-SystemErrorReporting", 1001, 6), _event("disk", 7, 5)]
     chain = analyze_events(events, now=_NOW)
     assert chain.stage == 2
 
@@ -261,3 +279,36 @@ def test_rollup_weeks_tolerate_malformed_rows_without_raising():
     ]
     chain = analyze_events([], now=_NOW, rollup_counts=rollups)
     assert chain.recurrent_weeks == 0  # every row malformed/filtered -> no crash, no weeks
+
+
+# --------------------------------------------------------------------------- #
+# X4 (2026-11-02): the replaced only disk's own 153/129 + 7/51 leave the chain
+# --------------------------------------------------------------------------- #
+def test_disk_since_drops_the_old_disks_own_errors():
+    since = _NOW - timedelta(days=5)
+    events = [_event("disk", 7, 10), _event("disk", 153, 9), _event("disk", 7, 1)]
+    chain = analyze_events(events, now=_NOW, disk_since=since)
+    assert chain.stage == 2
+    assert (chain.counts["early"], chain.counts["damage"], chain.disk_errors) == (0, 1, 1)
+    assert analyze_events(events[:2], now=_NOW, disk_since=since).stage == 0
+
+
+def test_disk_since_orders_by_the_plausible_event_ts():
+    """Logged before the swap, sent after it: the event's own ts decides; an implausible
+    ts (> 26 h before the receipt) falls back to the receipt."""
+    cut = _NOW - timedelta(hours=2)
+    before = _event("disk", 7, 0, ts=(_NOW - timedelta(hours=3)).isoformat())
+    assert analyze_events([before], now=_NOW, disk_since=cut).stage == 0
+    odd = _event("disk", 7, 0, ts=(_NOW - timedelta(days=3)).isoformat())
+    assert analyze_events([odd], now=_NOW, disk_since=cut).stage == 2
+
+
+def test_disk_since_keeps_crashes_power_loss_and_ntfs():
+    since = _NOW - timedelta(days=1)
+    events = [
+        _event("Microsoft-Windows-WER-SystemErrorReporting", 1001, 3),
+        _event("Ntfs", 55, 3),
+        _event("EventLog", 6008, 3),
+    ]
+    cut = analyze_events(events, now=_NOW, disk_since=since)
+    assert asdict(cut) == asdict(analyze_events(events, now=_NOW))

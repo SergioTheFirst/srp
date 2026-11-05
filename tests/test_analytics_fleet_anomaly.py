@@ -73,8 +73,8 @@ def test_strong_site_kp41_cluster_raises_risk():
 
 
 def test_moderate_site_kp41_cluster_raises_risk():
-    # 30-50% site cluster → suspicious, adds moderate risk.
-    s = compute_fleet_anomaly_risk(_stats(cohort_size=4, site_size=6, site_kp41_pct=0.33))
+    # 30-50% site cluster → suspicious, adds moderate risk (3 of 9: >= _MIN_AFFECTED).
+    s = compute_fleet_anomaly_risk(_stats(cohort_size=4, site_size=9, site_kp41_pct=0.33))
     assert s.value is not None and s.value > 0
 
 
@@ -101,8 +101,8 @@ def test_high_cohort_bsod_rate_raises_risk():
 
 
 def test_moderate_cohort_bsod_rate_raises_risk():
-    # 30%+ adds moderate signal.
-    s = compute_fleet_anomaly_risk(_stats(cohort_size=6, cohort_bsod_pct=0.33))
+    # 30%+ adds moderate signal (3 of 9 affected: >= _MIN_AFFECTED).
+    s = compute_fleet_anomaly_risk(_stats(cohort_size=9, cohort_bsod_pct=0.33))
     assert s.value is not None and s.value > 0
 
 
@@ -113,14 +113,17 @@ def test_low_cohort_bsod_rate_adds_nothing():
 
 
 def test_cohort_bsod_score_same_confidence_differs_by_size():
-    # The score delta is identical for both sizes (no per-device scaling — the pattern
-    # is binary: either enough devices are affected or not).  What differs is confidence:
-    # a large cohort gets "medium", a small one gets "low".
-    small = compute_fleet_anomaly_risk(_stats(cohort_size=2, cohort_bsod_pct=1.0))
+    # Once enough devices are affected the score delta is identical for both sizes (no
+    # per-device scaling — the pattern is binary).  What differs is confidence: a large
+    # cohort gets "medium", a small one gets "low".  A cohort of 2 at 100 % is only 2
+    # affected devices (< _MIN_AFFECTED = 3; the cohort includes this device) -> 0.
+    pair = compute_fleet_anomaly_risk(_stats(cohort_size=2, cohort_bsod_pct=1.0))
+    small = compute_fleet_anomaly_risk(_stats(cohort_size=3, cohort_bsod_pct=1.0))
     large = compute_fleet_anomaly_risk(_stats(cohort_size=10, cohort_bsod_pct=1.0))
-    assert small.value == large.value  # same signal strength regardless of size
+    assert pair.value == 0.0
+    assert small.value == large.value == 35.0  # same signal strength regardless of size
     assert large.confidence == "medium"  # 10 >= _COHORT_MEDIUM (5)
-    assert small.confidence == "low"  # 2 < _COHORT_MEDIUM
+    assert small.confidence == "low"  # 3 < _COHORT_MEDIUM
 
 
 # --------------------------------------------------------------------------- #

@@ -898,3 +898,36 @@ def test_spool_read_survives_vanishing_file(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(ui.Path, "stat", _flaky)
     assert ui.read_owner_identity(tmp_path, now=1000.0)["owner_full_name"] == "Настоящий"
+
+
+def test_push_owner_identity_passes_the_contract_gate(client, tmp_path, monkeypatch) -> None:
+    """Agent 1.0.0: the tray push must declare contract_version -- without it the 406 gate
+    falls back to agent_version (MAJOR 1 != contract MAJOR 0) and every direct push fails."""
+    import json
+    import urllib.request
+
+    from client.tray.push import push_owner_identity
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"server_url": "http://srv/", "device_id": "dev-tray"}), encoding="utf-8"
+    )
+    statuses: list = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def via_server(req, timeout=None):
+        r = client.post("/api/v1/ingest", content=req.data, headers=dict(req.header_items()))
+        statuses.append(r.status_code)
+        if r.status_code >= 400:
+            raise OSError(r.status_code)  # urlopen raises HTTPError (an OSError) on non-2xx
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", via_server)
+    assert push_owner_identity(config_path, "Иванов И.И.", "инженер", "+7900") is True
+    assert statuses == [200]

@@ -78,7 +78,7 @@ def test_scan_device_confirmed_episode():
         _row(t0, flags=["pending_gt10"]),
         _row(t0 + timedelta(days=1), flags=["pending_gt10"]),
         _row(t0 + timedelta(days=2), flags=[]),  # closes the run; end_ts = t0+1d
-        _row(t0 + timedelta(days=10), flags=[], band="bad"),  # within 45d -> confirms
+        _row(t0 + timedelta(days=10), flags=[], stage=2),  # errchain stage 2 within 45d
     ]
     outcomes = rulestats.scan_device(rows, now=t0 + timedelta(days=20))
     assert ("pending_high", "confirmed") in _pairs(outcomes)
@@ -92,7 +92,7 @@ def test_scan_device_return_tuple_carries_the_episodes_own_end_ts_iso():
         _row(t0, flags=["pending_gt10"]),
         _row(t0 + timedelta(days=1), flags=["pending_gt10"]),
         _row(t0 + timedelta(days=2), flags=[]),  # closes the run; end_ts = t0+1d
-        _row(t0 + timedelta(days=10), flags=[], band="bad"),  # confirms
+        _row(t0 + timedelta(days=10), flags=["predict_fail"]),  # escalation flag confirms
     ]
     outcomes = rulestats.scan_device(rows, now=t0 + timedelta(days=20))
     expected_end_ts = (t0 + timedelta(days=1)).isoformat()
@@ -284,10 +284,10 @@ def test_run_rulestats_scan_records_and_is_idempotent_on_repeat(db_init):
     db.upsert_device("dev-confirm", iso(0), "1.0.0")
     db.upsert_device("dev-refute", iso(0), "1.0.0")
 
-    # dev-confirm: early_chain flag run closes, a bad-band row confirms it within 45d.
+    # dev-confirm: early_chain flag run closes, an escalation flag confirms it within 45d.
     _seed_score(db, "dev-confirm", iso(40), flags=["early_events"])
     _seed_score(db, "dev-confirm", iso(39), flags=[])
-    _seed_score(db, "dev-confirm", iso(35), flags=[], band="bad")
+    _seed_score(db, "dev-confirm", iso(35), flags=["predict_fail"])
 
     # dev-refute: media_recurrence flag run closes, then 60+ clean days follow.
     _seed_score(db, "dev-refute", iso(65), flags=["recurrence"])
@@ -415,7 +415,7 @@ def test_record_rule_outcomes_rejects_unknown_outcome(db_init):
 # regression pin below is the stop-gate this whole ssd3 phase exists to satisfy.
 # --------------------------------------------------------------------------- #
 def _recurring_disk_series(serial_hash="abc123"):
-    """Two readings >=7d apart with a growing attr 197 -- trips _has_recurrence."""
+    """A seeding attr 197 reading, then a new maximum on the newest row -- recent growth."""
     return [
         {
             "serial_hash": serial_hash,
@@ -439,7 +439,7 @@ def test_empty_or_none_rule_stats_reproduces_byte_for_byte_pre_f8_result():
     sites, not just one."""
     disk = {"disk": "PhysicalDisk0", "serial_hash": "abc123", "smart_attrs": {"197": 15}}
     disk_series = _recurring_disk_series()
-    chain = SimpleNamespace(stage=0, counts={"early": 1, "damage": 0}, burstiness=None)
+    chain = SimpleNamespace(stage=0, counts={"early": 2, "damage": 0}, burstiness=None)
 
     # no rule_stats kwarg at all -- the exact call shape of every pre-Task-2 caller.
     baseline = _score_disk(disk, None, disk_series=disk_series, chain=chain)

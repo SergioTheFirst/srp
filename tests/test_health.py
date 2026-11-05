@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pytest
@@ -19,15 +19,13 @@ from server.analytics.health import (
     _STALE_UNKNOWN_MSG,
     Coordinate,
     HealthVerdict,
-    _dominant,
-    _horizon,
-    _is_systemic,
     _observability,
     _state,
     apply_health_staleness,
     compute_health,
     health_staleness,
 )
+from server.analytics.health_dominant import _dominant, _is_systemic
 from server.scoring.score100 import band_for_risk_score
 
 IMMATURE = "оценка устойчивости незрелая"
@@ -101,7 +99,10 @@ def _mature_key_trend() -> dict:
     return {"nvme_spare": _trend(direction="stable", n_points=8, slope_per_day=0.0)}
 
 
-def _call(score100_axes, *, bayes=None, trends=None, errchain=None, cohort=None, prev=None):
+def _call(
+    score100_axes, *, bayes=None, trends=None, errchain=None, cohort=None, prev=None, now=None
+):
+    clock = {} if now is None else {"now": now}
     return compute_health(
         score100_axes,
         bayes or {"classes": [], "top": None, "overall": 0.0},
@@ -109,6 +110,7 @@ def _call(score100_axes, *, bayes=None, trends=None, errchain=None, cohort=None,
         errchain,
         cohort,
         prev,
+        **clock,
     )
 
 
@@ -132,9 +134,10 @@ def test_damage_os_multiplier_is_0_6() -> None:
 
 
 def test_rloss_max_plus_spare_and_tail_surcharges() -> None:
-    axes = {"storage_risk": _axis(30, coords=_st_coords(rloss=10))}
+    # spare ETA within 90 days; the tail flag needs corroboration (command timeouts)
+    axes = {"storage_risk": _axis(30, coords=_st_coords(rloss=10, flags=["cmd_timeouts"]))}
     trends = {
-        "nvme_spare": _trend(direction="worsening", n_points=8),  # +25
+        "nvme_spare": _trend(direction="worsening", n_points=8, eta_days=60),  # +25
         "disk_tail_ratio": _trend(direction="worsening", n_points=8),  # +20
     }
     v = _call(axes, trends=trends)
@@ -216,7 +219,8 @@ def test_k2_pure_aging_no_damage_contribution() -> None:
     }
     v = _call(axes, trends=_mature_key_trend())
     assert v.damage.value == 0  # aging feeds R only, never D (K2)
-    assert v.resilience.value == 30  # rloss 70
+    assert v.resilience.value == 61  # aging R-loss capped at 39: aging alone keeps R > 60
+    assert v.state == "h1"  # software aging is not device degradation (D2)
     assert "aging_leak" not in v.damage.flags
 
 
@@ -286,30 +290,30 @@ def test_ratchet_h3_to_h1_forbidden_without_evidence() -> None:
     assert v.state == "h3"  # no positive evidence -> hold
 
 
-def test_ratchet_flat_counters_one_step_up() -> None:
+def test_ratchet_releases_one_step_after_48_observed_hours() -> None:
     axes = {"storage_risk": _axis(20, coords=_st_coords(damage=20))}  # computes h1
-    flat = {
-        "smart_pending": _trend(direction="stable", n_points=14, slope_per_day=0.0),
-        "smart_realloc": _trend(direction="stable", n_points=14, slope_per_day=0.0),
-        "smart_media_errors": _trend(direction="stable", n_points=14, slope_per_day=0.0),
-    }
-    v = _call(axes, trends=flat, prev={"state": "h3"})
+    now = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+    seen = (now - timedelta(hours=4)).isoformat()
+    prev = {"state": "h3", "below_h": 47.0, "below_seen_at": seen}
+    v = _call(axes, trends=_mature_key_trend(), prev=prev, now=now)
     assert v.state == "h2"  # exactly one step of improvement, not h1
 
 
 def test_ratchet_disk_replacement_permits_reset() -> None:
     axes = {"storage_risk": _axis(0.0, coords=_st_coords(), worst_disk="diskB")}
+    # diskA left the inventory too (pipeline adds it); still listed would be blindness
+    axes["storage_risk"]["source_lineage"]["inventory_disk_ids"] = ["hB"]
     v = _call(axes, trends=_mature_key_trend(), prev={"state": "h4", "worst_disk": "diskA"})
     assert v.state == "h0"  # new hardware -> full reset permitted
 
 
-def test_ratchet_reboot_restores_clears_one_aging_rung() -> None:
+def test_ratchet_reboot_restores_is_not_release_evidence() -> None:
     axes = {
         "storage_risk": _axis(0.0, coords=_st_coords()),
         "software_aging_risk": _axis(0.0, coords={"flags": ["reboot_restores"]}),
     }
     v = _call(axes, trends=_mature_key_trend(), prev={"state": "h2"})
-    assert v.state == "h1"  # one step up on reboot evidence
+    assert v.state == "h2"  # a reboot releases nothing; only observed time does
 
 
 # --------------------------------------------------------------------------- #
@@ -398,13 +402,18 @@ def test_h0_with_bad_band_never_happens() -> None:
         assert not (v.state == "h0" and v.band == "bad")
 
 
-def test_systemic_three_watch_axes() -> None:
+def _three_mechanisms() -> tuple[dict, dict]:
+    # storage + os axes in watch + a worsening throttle (thermal) trend
     axes = {
         "storage_risk": _axis(20, coords=_st_coords(damage=20)),
-        "disk_fill_risk": _axis(20),
         "os_degradation_risk": _axis(20),
     }
-    v = _call(axes, trends=_mature_key_trend())
+    return axes, {**_mature_key_trend(), "throttle": _trend(direction="worsening", n_points=8)}
+
+
+def test_systemic_three_watch_axes() -> None:
+    axes, trends = _three_mechanisms()
+    v = _call(axes, trends=trends)
     assert v.dominant == "systemic"
     assert v.state in ("h2", "h3", "h4")  # floored at h2
     assert v.band in ("watch", "bad")  # reconciliation must clamp systemic-floored state too
@@ -414,37 +423,47 @@ def test_systemic_needs_three_distinct_material_mechanisms() -> None:
     # one dying disk: three SMART counters + a tail ratio are ONE mechanism (storage),
     # a noise-level boot_time drift is no mechanism at all -> dominant stays storage.
     axes = {"storage_risk": _axis(60, coords=_st_coords(damage=60))}
+    # Trends own materiality now: an immaterial drift arrives as "flat".
     one_disk = {
         "smart_pending": _trend(direction="worsening", n_points=8),
         "smart_realloc": _trend(direction="worsening", n_points=8),
         "smart_media_errors": _trend(direction="worsening", n_points=8),
         "disk_tail_ratio": _trend(direction="worsening", n_points=8, current=3.0),
-        "boot_time": _trend(direction="worsening", n_points=8, slope_per_day=2.0, current=22000.0),
-        "throttle": _trend(direction="worsening", n_points=8, slope_per_day=-0.01, current=99.0),
+        "boot_time": _trend(direction="flat", n_points=8, slope_per_day=2.0, current=22000.0),
+        "throttle": _trend(direction="flat", n_points=8, slope_per_day=-0.01, current=99.0),
         "storage_wear": _trend(direction="worsening", n_points=8, eta_days=1600),
     }
     v = _call(axes, trends=one_disk)
     assert v.dominant == "storage"
-    # three independent mechanisms with material drift -> systemic
-    three = {
+    # H2 (F-04): boot time is a rolling median of <= 20 boots (autocorrelated by build),
+    # so a worsening boot trend is no degradation mechanism -- disk + boot + heat is not
+    # three mechanisms (was: test pinned boot as the third)
+    boot = {
         "smart_realloc": _trend(direction="worsening", n_points=8),
         "boot_time": _trend(
             direction="worsening", n_points=8, slope_per_day=200.0, current=30000.0
         ),
-        "disk_fill": _trend(direction="worsening", n_points=8, eta_days=120),
+        "throttle": _trend(direction="worsening", n_points=8),
     }
-    assert _call(axes, trends=three).dominant == "systemic"
+    assert _call(axes, trends=boot).dominant == "storage"
+    # ...nor the dominant: boot never makes a good-band OS axis "the" mechanism (spec H2)
+    assert _dominant({"os_degradation_risk": _axis(5.0)}, boot)[0] is None
+    # three independent degradation mechanisms: storage, thermal and the OS axis in watch
+    three = {k: boot[k] for k in ("smart_realloc", "throttle")}
+    with_os = {**axes, "os_degradation_risk": _axis(15.0)}
+    assert _call(with_os, trends=three).dominant == "systemic"
     # a good-band axis never becomes "the" mechanism: healthy machine -> no dominant
     quiet = {"storage_risk": _axis(0.0, coords=_st_coords()), "disk_fill_risk": _axis(4)}
     assert _call(quiet, trends=_mature_key_trend()).dominant is None
     # state driven by Resilience trend surcharges while the axis band still reads
     # good: the mechanism is still storage, never "данных недостаточно".
     surcharged = {
-        "nvme_spare": _trend(direction="worsening", n_points=8, eta_days=200),
+        "nvme_spare": _trend(direction="worsening", n_points=8, eta_days=60),
         "disk_tail_ratio": _trend(direction="worsening", n_points=8, current=3.0),
     }
     v = _call({"storage_risk": _axis(0.0, coords=_st_coords())}, trends=surcharged)
-    assert v.state != "h0"
+    assert v.resilience.value == 55  # 100 - 25 (spare) - 20 (tail)
+    assert v.state == "h2"
     assert v.dominant == "storage"
 
 
@@ -459,13 +478,16 @@ def test_systemic_counts_axis_mechanisms_not_axis_names() -> None:
     }
     assert _is_systemic(one_disk_plus_network, {}) is False
     assert _dominant(one_disk_plus_network, {})[0] == "storage"
-    # three genuinely distinct mechanisms -> systemic
-    three_mechanisms = {
+    # network is not a degradation mechanism: storage + os + network axes are two
+    two_mechanisms = {
         "storage_risk": _axis(60, coords=_st_coords(damage=60)),
         "os_degradation_risk": _axis(60),
         "network_risk": _axis(60),
     }
-    assert _is_systemic(three_mechanisms, {}) is True
+    assert _is_systemic(two_mechanisms, {}) is False
+    # a worsening throttle trend adds the third (thermal) -> systemic
+    throttle = {"throttle": _trend(direction="worsening", n_points=8)}
+    assert _is_systemic(two_mechanisms, throttle) is True
 
 
 def test_systemic_never_overrides_blind_zone() -> None:
@@ -488,23 +510,29 @@ def test_horizon_state_beats_eta() -> None:
     v = _call(axes, trends=trends)
     assert v.state == "h3"
     assert v.horizon_days == 30  # state rule (30) beats the 90-day ETA
+    assert v.horizon_kind == "state"
 
 
 def test_horizon_nvme_spare_eta_under_30() -> None:
-    axes = {"storage_risk": _axis(20, coords=_st_coords(damage=20))}  # h1 -> no state horizon
+    # spare ETA 20 days -> spare_depleting (h2, window 90); the shorter ETA wins
+    axes = {"storage_risk": _axis(20, coords=_st_coords(damage=20))}
     trends = {"nvme_spare": _trend(direction="worsening", n_points=8, eta_days=20)}
     v = _call(axes, trends=trends)
     assert v.horizon_days == 30
+    assert v.horizon_kind == "eta"
 
 
 def test_horizon_eta_within_180_days() -> None:
     # KodSR L9: an ETA of 91-180 days used to fall through both buckets and
     # come back as no horizon at all -- a resource dying this half-year with
     # no state-level horizon (h1) must still surface a 180-day window.
-    trends = {"storage_wear": _trend(direction="worsening", n_points=8, eta_days=120)}
-    days, reason = _horizon("h1", trends)
+    from server.analytics.health_hold import horizon
+
+    trends = {"disk_fill": _trend(direction="worsening", n_points=8, eta_days=120)}
+    days, reason, kind = horizon("h1", trends)
     assert days == 180
-    assert reason and _has_cyr(reason)
+    assert "прогноз по тренду" in reason
+    assert kind == "eta"
 
 
 def test_actions_cover_every_dominant_key() -> None:
@@ -533,25 +561,25 @@ def test_actions_cover_every_dominant_key() -> None:
         assert v.dominant == short
         assert v.action == _ACTIONS[short]  # each key routes to its own russian action
         assert _has_cyr(v.action)
+        if short == "aging":
+            # aging 50 -> R-loss capped at 39 -> R 61 -> h0, still the aging action
+            assert (v.resilience.value, v.state) == (61, "h0")
     # storage dominant needs real storage damage to win max(r*s)
     storage_v = _call(
         {"storage_risk": _axis(50, coords=_st_coords(damage=50))}, trends=_mature_key_trend()
     )
     assert storage_v.dominant == "storage"
+    assert storage_v.state == "h1"
     assert storage_v.action == _ACTIONS["storage"]
-    # None dominant (no risky axis at all)
+    # None dominant (no risky axis at all): healthy h0 -> neutral "observe" action
+    from server.analytics.health import _OBSERVE_ACTION
+
     none_v = _call({"storage_risk": _axis(0.0, coords=_st_coords())}, trends=_mature_key_trend())
     assert none_v.dominant is None
-    assert none_v.action == _ACTIONS[None]
+    assert none_v.action == _OBSERVE_ACTION
     # systemic
-    sysv = _call(
-        {
-            "storage_risk": _axis(20, coords=_st_coords(damage=20)),
-            "disk_fill_risk": _axis(20),
-            "os_degradation_risk": _axis(20),
-        },
-        trends=_mature_key_trend(),
-    )
+    sys_axes, sys_trends = _three_mechanisms()
+    sysv = _call(sys_axes, trends=sys_trends)
     assert sysv.dominant == "systemic"
     assert sysv.action == _ACTIONS["systemic"]
     # blind (O<40) overrides all of the above
@@ -564,9 +592,8 @@ def test_bayes_disagreement_is_a_factor_not_an_override() -> None:
         "storage_risk": _axis(50, coords=_st_coords(damage=50)),
         "network_risk": _axis(10),
     }
-    v = _call(
-        axes, bayes={"classes": [], "top": "network", "overall": 0.5}, trends=_mature_key_trend()
-    )
+    bayes = {"classes": [{"name": "network", "level": "high"}], "top": "network", "overall": 0.5}
+    v = _call(axes, bayes=bayes, trends=_mature_key_trend())
     assert v.dominant == "storage"  # coordinate-derived wins
     assert any("bayes" in (f.get("label") or "") for f in v.factors)
 
@@ -831,7 +858,7 @@ def test_state_both_coords_none_is_unknown_regardless_of_o_val() -> None:
     # defensive gate (P0-9): zero D/R signal -> unknown even with o_val well above
     # its own 40 threshold, proving this gate is independent of o_val calibration.
     none_coord = Coordinate(None, "unknown", "unknown", [], [])
-    state, label, _ev = _state(none_coord, none_coord, 90.0, set())
+    state, label, _ev, _fs = _state(none_coord, none_coord, 90.0, {})
     assert state == "unknown"
     assert label == "нет видимости"
 
@@ -865,20 +892,20 @@ def test_hidden_damage_is_not_read_as_healthy() -> None:
 
     d_hidden = Coordinate(None, "unknown", "unknown")
     r_alive = Coordinate(85.0, "good", "high")
-    state, _label, _ev = _state(d_hidden, r_alive, 65.0, set())
+    state, _label, _ev, _fs = _state(d_hidden, r_alive, 65.0, {})
     assert state == "unknown", f"скрытый ущерб выдан за здоровье: {state}"
 
 
 def test_unknown_cycle_does_not_erase_ratchet_memory() -> None:
     """Повторное ревью блока E (HIGH): «нет видимости» обходит храповик, а
-    prev_state='unknown' нет в _STATE_ORDER — поэтому ОДИН цикл недоверия стирал
+    prev_state='unknown' нет в STATE_ORDER — поэтому ОДИН цикл недоверия стирал
     память, и на следующем цикле машина в предотказе объявлялась здоровой."""
-    from server.analytics.health import _ratchet
+    from server.analytics.health_hold import hold_state
 
     # Предыдущий вердикт: цикл «нет видимости», но до него было h3.
     prev = {"state": "unknown", "last_known_state": "h3", "worst_disk": "d0"}
-    got = _ratchet("h0", prev, set(), {}, "d0")
-    assert got != "h0", "храповик забыл предотказ после цикла «нет видимости»"
+    got = hold_state("h0", prev, now=None, blind=False, replaced=False).state
+    assert got == "h3", "удержание забыло предотказ после цикла «нет видимости»"
 
 
 def test_unknown_state_is_not_painted_good() -> None:

@@ -1,7 +1,8 @@
 """PUBLIC STUB replacement for ``server/updates.py``.
 
 The private module validates and serves a fleet auto-update package
-(SHA-256 + HMAC checked against ``server/updates/manifest.json``). That
+(SHA-256, Ed25519 signature and the server's own public key checked against
+``server/updates/manifest.json``). That
 machinery is deployment plumbing for one specific network and is not part
 of the public tree -- see the public README's «Чего нет в этом срезе».
 The public build never has an update package staged, so this stub always
@@ -27,6 +28,15 @@ def reset_cache() -> None:
     return None
 
 
-def get_update_info(updates_dir: Path, token: str = "") -> Optional[dict]:  # nosec B107 -- empty = no token
+def get_update_info(
+    updates_dir: Path,
+    token: str = "",  # nosec B107 -- empty = no token
+    arch: str = "x64",
+) -> Optional[dict]:
     """Always report "no update package offered" -- see module docstring."""
     return None
+
+
+def problem(updates_dir: Path, arch: str = "x64") -> str:
+    """Nothing is ever staged in the public tree -> nothing is refused."""
+    return ""

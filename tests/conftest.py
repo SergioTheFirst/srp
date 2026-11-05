@@ -21,6 +21,13 @@ from fastapi.testclient import TestClient
 from server.config import ServerConfig
 from server.main import create_app
 
+# Сервер отвечает голым 404 всем не-внутренним адресам (server/external_access.py), а
+# TestClient по умолчанию представляется хостом "testclient". В тестах это оператор на
+# том же ПК; внешнего клиента тест задаёт явно: TestClient(app, client=("8.8.8.8", 1)).
+_TC_DEFAULTS = TestClient.__init__.__defaults__ or ()
+assert _TC_DEFAULTS[-1:] == (("testclient", 50000),), "сменилась сигнатура TestClient"
+TestClient.__init__.__defaults__ = (*_TC_DEFAULTS[:-1], ("127.0.0.1", 50000))
+
 HEALTHY_DEVICE = "test-healthy-001"
 DEGRADING_DEVICE = "test-degrading-001"
 
@@ -73,6 +80,9 @@ _HEALTHY: dict[str, dict[str, Any]] = {
                 "power_on_hours": 5200,
                 "read_errors_total": 0,
                 "write_errors_total": 0,
+                # a healthy disk reports its uncorrected pair: health data (H5), no phantom
+                "read_errors_uncorrected": 0,
+                "write_errors_uncorrected": 0,
                 "temperature_c": 38,
             }
         ],
@@ -231,11 +241,13 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     db_file = tmp_path / "test_srp.db"
     # Point the org directory at an absent file -> empty directory, so tests are
     # isolated from the repo's example. A decode test writes this path then calls
-    # reload_if_changed() (tray spec §7 mtime reload).
+    # reload_if_changed() (tray spec §7 mtime reload). Same for the update package:
+    # an absent updates_dir, not this box's real server/updates.
     app = create_app(
         ServerConfig(
             db_path=str(db_file),
             org_directory_path=str(tmp_path / "org_directory.json"),
+            updates_dir=str(tmp_path / "updates"),
         )
     )
     with TestClient(app) as c:

@@ -9,6 +9,7 @@ to None on every one of the six fields, never raise.
 
 from __future__ import annotations
 
+import pytest
 from client.collectors import heartbeat
 from client.collectors.ps import PsResult
 
@@ -55,6 +56,24 @@ def test_tail_latency_fields_parsed(monkeypatch):
     assert p["disk_lat_max_ms"] == 12.3
     assert p["disk_lat_samples"] == 7
     assert isinstance(p["disk_lat_samples"], int)
+
+
+def test_tail_latency_survives_ingest_to_the_trend_extractor(monkeypatch, client):
+    """H9 end to end: the PS micro-series (ms) -> agent payload -> /ingest -> the stored
+    heartbeat row -> the disk_tail_ratio extractor reads p95/p50; the whole-second
+    disk_read_sec beside it stays 0 (only a stall of >= 1 s ever shows there)."""
+    from server import db
+    from server.analytics.trends import _disk_tail_ratio
+
+    from tests.conftest import envelope
+
+    monkeypatch.setattr(heartbeat, "run_ps", lambda *a, **k: _ok(_HB_WITH_TAIL))
+    payload = heartbeat.collect_heartbeat().payload
+    resp = client.post("/api/v1/ingest", json=envelope("lat-e2e", "heartbeat", payload))
+    assert resp.status_code == 200, resp.text
+    row = db.get_recent_heartbeats("lat-e2e", limit=1)[0]
+    assert row["disk_read_sec"] == 0.0
+    assert _disk_tail_ratio(row) == pytest.approx(8.5 / 1.234)
 
 
 def test_old_agent_without_tail_fields_is_none_not_crash(monkeypatch):

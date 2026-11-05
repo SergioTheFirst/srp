@@ -133,7 +133,8 @@ def main() -> int:
     job_ts1 = job_ts.strftime("%Y-%m-%dT10:00:00Z")
     job_ts2 = job_ts.strftime("%Y-%m-%dT10:05:00Z")
 
-    with TestClient(app) as client:
+    # Как оператор на этом ПК: внешним адресам сервер отвечает 404 (external_access).
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
         if client.get("/api/v1/health").json().get("status") != "ok":
             failures.append("health endpoint not ok")
 

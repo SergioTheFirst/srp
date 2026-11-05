@@ -20,7 +20,7 @@ from server.scoring.score100 import (
     compute_day1_score100,
     compute_observability_score,
 )
-from server.scoring.scores import compute_day1_scores
+from server.scoring.scores import boot_threshold_ms, compute_day1_scores
 
 pytestmark = pytest.mark.unit
 
@@ -106,7 +106,7 @@ def test_scoring_factors_are_russian_with_allowed_tech_terms():
             bugchecks_30d=2,
             app_crashes_30d=2,
             whea_errors_30d=15,
-            avg_boot_ms=95_000,
+            avg_boot_ms=400_000,  # >= 2T (H15)
             storage=[
                 {
                     "wear_pct": 85,
@@ -118,11 +118,12 @@ def test_scoring_factors_are_russian_with_allowed_tech_terms():
             ],
         ),
         _hb(
+            cpu_pct=90.0,  # under load: reaches the throttle label (H3)
             cpu_perf_pct=80.0,
             mem_avail_mb=400,
             pagefile_pct=90.0,
-            disk_read_sec=0.06,
-            disk_write_sec=0.06,
+            disk_read_sec=2.0,  # whole seconds (H9): a stall
+            disk_write_sec=2.0,
             free_space_pct=3.0,
             nic_errors=5,
         ),
@@ -131,15 +132,15 @@ def test_scoring_factors_are_russian_with_allowed_tech_terms():
         _inv(bios_release_date="2020-01-01"),
         _hist(
             reliability_stability_index=4.0,
-            avg_boot_ms=65_000,
+            avg_boot_ms=200_000,  # >= T
             whea_errors_30d=3,
             storage=[{"reallocated_sectors": 5, "power_on_hours": 30_000}],
         ),
         _hb(
             mem_avail_mb=900,
             pagefile_pct=60.0,
-            disk_read_sec=0.03,
-            disk_write_sec=0.03,
+            disk_read_sec=1.0,
+            disk_write_sec=1.0,
             free_space_pct=8.0,
         ),
     )
@@ -154,7 +155,8 @@ def test_scoring_factors_are_russian_with_allowed_tech_terms():
             for f in factors:
                 _assert_russian_prose(f["label"], where=f"scores.py factor[{axis}]")
                 checked += 1
-    assert checked >= 25, "fixtures did not exercise the expected number of factor branches"
+    # H15: the 40 s «Загрузка дольше целевой» tier is gone (boot is relative to the cohort)
+    assert checked >= 33, "fixtures did not exercise the expected number of factor branches"
 
 
 def test_score100_reason_and_missing_evidence_are_russian():
@@ -359,18 +361,24 @@ def test_bugcheck_penalty_capped_at_40():
 
 
 def test_cpu_perf_95_is_no_penalty():
-    """cpu_perf_pct = 95.0 is NOT < 95 → no throttle penalty."""
-    assert _s(hb=_hb(cpu_perf_pct=95.0))["performance"] == 100.0
+    """cpu_perf_pct = 95.0 is NOT < 95 → no throttle penalty, even under load."""
+    assert _s(hb=_hb(cpu_pct=90.0, cpu_perf_pct=95.0))["performance"] == 100.0
 
 
 def test_cpu_perf_94_gets_small_penalty():
-    """cpu_perf_pct = 94 → (95-94)*1.5 = 1.5 → performance == 98.5."""
-    assert _s(hb=_hb(cpu_perf_pct=94.0))["performance"] == 98.5
+    """Under load: cpu_perf_pct = 94 → (95-94)*1.0 = 1.0 → performance == 99.0 (H3)."""
+    assert _s(hb=_hb(cpu_pct=90.0, cpu_perf_pct=94.0))["performance"] == 99.0
 
 
-def test_cpu_perf_throttle_capped_at_30():
-    """cpu_perf_pct = 74 → (95-74)*1.5 = 31.5, clamped to 30 → performance == 70.0."""
-    assert _s(hb=_hb(cpu_perf_pct=74.0))["performance"] == 70.0
+def test_cpu_perf_throttle_capped_at_20():
+    """Under load: cpu_perf_pct = 74 → 21, clamped to 20 → performance == 80.0 (H3)."""
+    assert _s(hb=_hb(cpu_pct=90.0, cpu_perf_pct=74.0))["performance"] == 80.0
+
+
+def test_cpu_perf_idle_or_unknown_load_is_no_penalty():
+    """H3 (F-09): idle SpeedStep or unknown load (no cpu_pct) is not throttling."""
+    assert _s(hb=_hb(cpu_pct=10.0, cpu_perf_pct=40.0))["performance"] == 100.0
+    assert _s(hb=_hb(cpu_perf_pct=40.0))["performance"] == 100.0
 
 
 # --------------------------------------------------------------------------- #
@@ -389,48 +397,59 @@ def test_mem_511_is_critical():
 
 
 # --------------------------------------------------------------------------- #
-# Performance — disk latency thresholds (0.020 s and 0.050 s)
+# Performance — disk I/O stall (H9: the agent sends whole seconds, >= 1 s)
 # --------------------------------------------------------------------------- #
 
 
-def test_disk_latency_0_020_is_no_penalty():
-    """read latency = 0.020 is NOT > 0.020 → no penalty."""
-    assert _s(hb=_hb(disk_read_sec=0.020))["performance"] == 100.0
+def test_disk_latency_below_a_second_is_no_penalty():
+    """H9 (R6): the formatted perf class gives whole seconds -- every healthy disk reads 0,
+    and a sub-second value (never sent) is no penalty: the 20/50 ms tiers were dead."""
+    assert _s(hb=_hb(disk_read_sec=0))["performance"] == 100.0
+    assert _s(hb=_hb(disk_read_sec=0.999))["performance"] == 100.0
 
 
-def test_disk_latency_0_021_is_elevated():
-    """read latency = 0.021 > 0.020 (elevated tier) → -8 → performance == 92.0."""
-    assert _s(hb=_hb(disk_read_sec=0.021))["performance"] == 92.0
-
-
-def test_disk_latency_0_051_is_high():
-    """read latency = 0.051 > 0.050 (high tier) → -15 → performance == 85.0."""
-    assert _s(hb=_hb(disk_read_sec=0.051))["performance"] == 85.0
+def test_disk_stall_of_one_second_keeps_the_high_tier_points():
+    """read stall = 1 s (>= 1) → -15 → performance == 85.0 (the old high tier's points)."""
+    assert _s(hb=_hb(disk_read_sec=1.0))["performance"] == 85.0
 
 
 # --------------------------------------------------------------------------- #
-# Performance — boot-time tiers (40 s / 60 s / 90 s)
+# Performance — boot time relative to the cohort (H15: T = max(180 s, 1.5 x p90), 2T)
 # --------------------------------------------------------------------------- #
 
 
-def test_boot_40000ms_is_no_penalty():
-    """avg_boot_ms = 40 000 is NOT > 40 000 → no boot penalty."""
-    assert _s(hist=_hist(avg_boot_ms=40_000))["performance"] == 100.0
+def test_boot_below_the_180s_floor_is_no_penalty():
+    """H15 (R10): fleet median 120 s -- the old 40/60/90 s tiers marked half the fleet."""
+    assert _s(hist=_hist(avg_boot_ms=179_999))["performance"] == 100.0
 
 
-def test_boot_40001ms_is_above_target():
-    """avg_boot_ms = 40 001 > 40 000 (first tier) → -5 → performance == 95.0."""
-    assert _s(hist=_hist(avg_boot_ms=40_001))["performance"] == 95.0
+def test_boot_at_the_threshold_is_slow():
+    """avg_boot_ms = 180 000 >= T (no cohort) → -5 → performance == 95.0."""
+    assert _s(hist=_hist(avg_boot_ms=180_000))["performance"] == 95.0
 
 
-def test_boot_60001ms_is_slow():
-    """avg_boot_ms = 60 001 > 60 000 (second tier) → -10 → performance == 90.0."""
-    assert _s(hist=_hist(avg_boot_ms=60_001))["performance"] == 90.0
+def test_boot_at_twice_the_threshold_is_very_slow():
+    """avg_boot_ms = 360 000 >= 2T → -15 → performance == 85.0."""
+    assert _s(hist=_hist(avg_boot_ms=360_000))["performance"] == 85.0
 
 
-def test_boot_90001ms_is_very_slow():
-    """avg_boot_ms = 90 001 > 90 000 (third tier) → -15 → performance == 85.0."""
-    assert _s(hist=_hist(avg_boot_ms=90_001))["performance"] == 85.0
+@pytest.mark.parametrize(
+    ("cohort", "threshold"),
+    [
+        (None, 180_000.0),
+        ({"boot_n": 4, "boot_p90_ms": 240_000}, 180_000.0),  # too few peer samples
+        ({"boot_n": 5, "boot_p90_ms": 240_000}, 360_000.0),  # 1.5 x p90
+        ({"boot_n": 9, "boot_p90_ms": 60_000}, 180_000.0),  # never below the floor
+        ({"boot_n": 9, "boot_p90_ms": None}, 180_000.0),
+        ({"cohort_size": 9, "boot_p90_ms": 240_000}, 180_000.0),  # machines, not samples
+    ],
+)
+def test_the_boot_threshold_is_relative_to_the_cohort(cohort, threshold):
+    assert boot_threshold_ms(cohort) == threshold
+    slow_cohort = compute_day1_scores(
+        None, _hist(avg_boot_ms=300_000), None, boot_threshold=boot_threshold_ms(cohort)
+    )
+    assert slow_cohort["performance"] == (100.0 if threshold > 300_000 else 95.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -573,6 +592,7 @@ def test_extreme_degrading_inputs_clamped_to_range():
         ],
     )
     extreme_hb = _hb(
+        cpu_pct=90.0,
         cpu_perf_pct=10.0,
         mem_avail_mb=100,
         pagefile_pct=99.0,

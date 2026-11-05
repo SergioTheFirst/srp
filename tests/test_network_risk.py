@@ -68,7 +68,9 @@ def test_healthy_gateway_confident_zero_capped_medium():
     assert any("за пределами шлюза" in m for m in s.missing_evidence)
 
 
-@pytest.mark.parametrize("loss,expected", [(7.0, 15.0), (25.0, 30.0)])
+# 3 echoes per target: below 50 % (at most 1 of 3 lost) is the light tier, the axis
+# stays good; 2 of 3 lost (67 %) is heavy.
+@pytest.mark.parametrize("loss,expected", [(7.0, 8.0), (25.0, 8.0), (67.0, 30.0)])
 def test_gateway_partial_loss_grades(loss, expected):
     s = compute_network_risk(_hist([_eth()], [_gw(loss=loss)]))
     assert s.value == expected

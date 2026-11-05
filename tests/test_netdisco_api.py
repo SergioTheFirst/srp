@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 
+import server.api as api
 import server.db as db
 from fastapi.testclient import TestClient
 
@@ -144,13 +145,17 @@ def test_discovery_poll_is_rate_limited_after_a_burst(client: TestClient) -> Non
     assert 429 in statuses  # the flood is throttled
 
 
-def test_topology_poll_runs_a_cycle(client: TestClient) -> None:
+def test_topology_poll_runs_a_cycle(client: TestClient, monkeypatch) -> None:
     # o5-B2: the "собрать топологию сейчас" button now hands the reconcile cycle to a
     # worker thread and answers "started" at once -- it no longer waits for (or
-    # echoes) the cycle's own result shape.
+    # echoes) the cycle's own result shape. The cycle is stubbed: a real one outlives
+    # the test on the executor and writes its snapshot into the NEXT test's DB.
+    seen: list = []
+    monkeypatch.setattr(api, "_run_topology_cycle_then_invalidate", lambda c, a: seen.append(1))
     resp = client.post("/api/v1/topology/poll")
     assert resp.status_code == 200
     assert resp.json() == {"started": 1}
+    assert _wait_until(lambda: seen == [1])  # handed to the worker
 
 
 def test_poll_topology_returns_immediately(client: TestClient, monkeypatch) -> None:
@@ -226,8 +231,10 @@ def test_topology_poll_returns_busy_when_a_cycle_is_running(tmp_path, monkeypatc
             reconcile._poll_lock.release()
 
 
-def test_topology_poll_is_rate_limited_after_a_burst(client: TestClient) -> None:
+def test_topology_poll_is_rate_limited_after_a_burst(client: TestClient, monkeypatch) -> None:
     # Unauthenticated force button that can trigger SNMP probes -> must be throttled.
+    # No real cycle: 40 worker cycles would outlive the test and write into other DBs.
+    monkeypatch.setattr(api, "_run_topology_cycle_then_invalidate", lambda c, a: None)
     assert client.post("/api/v1/topology/poll").status_code == 200  # within budget
     statuses = {client.post("/api/v1/topology/poll").status_code for _ in range(40)}
     assert 429 in statuses  # the flood is throttled

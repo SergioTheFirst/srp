@@ -297,7 +297,10 @@ def test_collect_status_route_returns_the_status_shape(client: TestClient):
     assert "running" in body and "phases" in body and "result" in body
 
 
-def test_collect_route_is_rate_limited_after_a_burst(netdisco_client: TestClient):
+def test_collect_route_is_rate_limited_after_a_burst(netdisco_client: TestClient, monkeypatch):
+    # No real pipeline: its daemon thread would outlive the test and write a topology
+    # snapshot into the next test's DB (flaky test_get_latest_topology_snapshot).
+    monkeypatch.setattr(collect, "_run_pipeline", lambda *a, **k: None)
     assert netdisco_client.post("/api/v1/network-map/collect").status_code == 200  # in budget
     statuses = {netdisco_client.post("/api/v1/network-map/collect").status_code for _ in range(40)}
     assert 429 in statuses  # the flood is throttled

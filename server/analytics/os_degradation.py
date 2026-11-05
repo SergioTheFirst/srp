@@ -11,15 +11,19 @@ stability from the three Windows signals we can measure:
     are the strongest evidence — a BSOD is a hard system crash regardless of cause.
     ``dirty_shutdowns_30d`` (event 6008, unexpected shutdown) add moderate weight.
     Per cctodo D6, KP41 specificity ≈ 0 (power/transient noise, not OS failure), so
-    it is excluded here.
-  * **Boot-rot (avg_boot_ms) is an independent degradation signal.** A machine
-    that takes 2+ minutes to boot has accumulated cruft or has a failing component.
-    The boot-time *slope* is the trajectory engine's job (W4.1); this engine reads
-    the current-state level.
+    it is excluded here. RSI already contains the dip a BSOD causes, so a known BSOD
+    count takes that dip (10) off the RSI contribution: one crash is not counted twice.
+  * **Boot-rot (avg_boot_ms) is an independent degradation signal.** A boot at or
+    above the cohort-relative threshold T (scores.boot_threshold_ms, H15: max(180 s,
+    1.5 x the peers' boot p90), the 180 s floor without five peers) is slow (+5), at
+    2T very slow (+12) -- accumulated cruft or a failing component. The boot-time
+    *slope* is the trajectory engine's job (W4.1); this engine reads the current level.
 
 Hard limits that shape the engine:
   * App crashes are application-level (not OS-level); they appear in source_lineage
-    but do not drive the risk score — excluding them keeps the signal clean.
+    and never add risk. When ≥ 3 of them are the only crashes on record (BSOD and
+    WHEA known zero, dirty shutdowns known < 2) they explain a low RSI, which is then
+    capped at 10 — RSI from app crashes alone is not OS degradation (D11).
   * Pending restart state is not collected. A machine awaiting a driver or security
     patch reboot is in a degraded state we cannot detect. Permanently disclosed as a
     blind spot in ``missing_evidence``.
@@ -43,6 +47,7 @@ from server.scoring.score100 import (
     band_for_risk_score,
     make_score100,
 )
+from server.scoring.scores import BOOT_FLOOR_MS
 
 # RSI bands → risk contribution (RSI 1.0–10.0, lower is worse).
 # Each constant is the exclusive upper bound of its band (strict <).
@@ -59,9 +64,15 @@ _BSOD_ONE = 1  # one BSOD -> +15
 _DIRTY_MANY = 5  # dirty shutdowns -> +12
 _DIRTY_SOME = 2  # -> +6
 
-# Boot-time thresholds (milliseconds).
-_BOOT_SLOW = 60_000  # 60 s -> +5
-_BOOT_VERY_SLOW = 120_000  # 2 min -> +12
+# D11: RSI already reflects the crashes counted above. A BSOD dips RSI by itself and
+# is scored by its own +15/+30, so a known BSOD count takes this off the RSI delta.
+_RSI_ONE_CRASH_DIP = 10.0
+# RSI lowered by application crashes alone is not OS degradation: the RSI delta is
+# capped here only when BSOD and WHEA are known zero, dirty shutdowns are known below
+# _DIRTY_SOME and at least _APP_CRASHES_MIN app crashes explain the dip.
+_RSI_APP_ONLY_CAP = 10.0
+_APP_CRASHES_MIN = 3
+
 
 _UNTRUSTED_REASON = "идентификатор устройства не подтверждён (контракт §7)"
 _PENDING_REBOOT_BLIND_SPOT = (
@@ -110,6 +121,55 @@ def _rsi_contribution(rsi: float) -> tuple[float, Optional[Factor]]:
     return delta, {"label": label, "delta": delta}
 
 
+def _app_crashes_only(
+    bugchecks: Optional[float],
+    dirty: Optional[float],
+    whea: Optional[float],
+    app_crashes: Optional[float],
+) -> bool:
+    """App crashes alone explain a low RSI: every system crash counter is known clean.
+
+    Deliberately narrow (FN critic): one or two app crashes exist on almost every PC,
+    so they must not cap a hardware-caused RSI dip. An unknown counter (None) never
+    qualifies -- UNKNOWN over false confidence keeps the RSI-led value.
+    """
+    # Positive conditions only: None and NaN fail every one of them.
+    return (
+        bugchecks == 0
+        and whea == 0
+        and dirty is not None
+        and dirty < _DIRTY_SOME
+        and app_crashes is not None
+        and app_crashes >= _APP_CRASHES_MIN
+    )
+
+
+def _rsi_adjusted(
+    rsi: float,
+    bugchecks: Optional[float],
+    dirty: Optional[float],
+    whea: Optional[float],
+    app_crashes: Optional[float],
+) -> tuple[float, Optional[Factor]]:
+    """RSI contribution net of what the crash counters already explain (D11).
+
+    A known BSOD count takes the BSOD's own RSI dip off (one crash is not counted
+    twice); RSI lowered by app crashes alone is capped and labelled as such.
+    """
+    delta, factor = _rsi_contribution(rsi)
+    if factor is None:
+        return 0.0, None
+    label = factor["label"]
+    if bugchecks is not None and bugchecks >= _BSOD_ONE:
+        delta = max(0.0, delta - _RSI_ONE_CRASH_DIP)
+    elif _app_crashes_only(bugchecks, dirty, whea, app_crashes):
+        delta = min(delta, _RSI_APP_ONLY_CAP)
+        label = f"RSI {rsi:.1f}/10 — снижен сбоями приложений (системных сбоев нет)"
+    if delta == 0.0:
+        return 0.0, None  # the BSOD factor alone explains this RSI dip
+    return delta, {"label": label, "delta": delta}
+
+
 def _crash_contribution(
     bugchecks: Optional[float],
     dirty: Optional[float],
@@ -155,18 +215,21 @@ def _crash_contribution(
     return value, factors
 
 
-def _boot_contribution(avg_boot_ms: Optional[float]) -> tuple[float, Optional[Factor]]:
-    """Risk delta from the current average boot time."""
+def _boot_contribution(
+    avg_boot_ms: Optional[float], threshold: float
+) -> tuple[float, Optional[Factor]]:
+    """Risk delta from the current average boot time: +5 at T, +12 at 2T (H15, the
+    cohort-relative scores.boot_threshold_ms)."""
     if avg_boot_ms is None:
         return 0.0, None
-    if avg_boot_ms >= _BOOT_VERY_SLOW:
+    if avg_boot_ms >= 2 * threshold:
         delta = 12.0
         label = (
             f"средняя загрузка {avg_boot_ms / 1000:.0f} с — очень медленно "
             "(деградация OS или отказывающий компонент)"
         )
         return delta, {"label": label, "delta": delta}
-    if avg_boot_ms >= _BOOT_SLOW:
+    if avg_boot_ms >= threshold:
         delta = 5.0
         return delta, {
             "label": f"средняя загрузка {avg_boot_ms / 1000:.0f} с — медленно",
@@ -180,6 +243,7 @@ def compute_os_degradation_risk(
     *,
     device_trust: str = "ok",
     domain_state: Optional[str] = None,
+    boot_threshold: float = BOOT_FLOOR_MS,
 ) -> Score100:
     """Deterministic OS-degradation risk for one device (current-state verdict).
 
@@ -205,6 +269,7 @@ def compute_os_degradation_risk(
     dirty = _num(historical, "dirty_shutdowns_30d")
     avg_boot = _num(historical, "avg_boot_ms")
     app_crashes = _num(historical, "app_crashes_30d")
+    whea = _num(historical, "whea_errors_30d")
 
     # Without RSI or crash counts we have no OS stability signal.
     if rsi is None and bugchecks is None and dirty is None:
@@ -237,7 +302,7 @@ def compute_os_degradation_risk(
     value = 0.0
 
     if rsi is not None:
-        rsi_delta, rsi_factor = _rsi_contribution(rsi)
+        rsi_delta, rsi_factor = _rsi_adjusted(rsi, bugchecks, dirty, whea, app_crashes)
         value += rsi_delta
         if rsi_factor is not None:
             factors.append(rsi_factor)
@@ -246,7 +311,7 @@ def compute_os_degradation_risk(
     value += crash_delta
     factors.extend(crash_factors)
 
-    boot_delta, boot_factor = _boot_contribution(avg_boot)
+    boot_delta, boot_factor = _boot_contribution(avg_boot, boot_threshold)
     value += boot_delta
     if boot_factor is not None:
         factors.append(boot_factor)

@@ -59,7 +59,7 @@ def test_untrusted_device_withholds():
 def test_ample_free_space_is_confident_zero():
     # Free space is directly measured, so a healthy drive is a confident all-clear
     # (unlike an engine whose sensor has a hidden failure mode it cannot see).
-    s = compute_disk_fill_risk(_series(50, 55, 52, 48), [])
+    s = compute_disk_fill_risk(_series(*([50, 55, 52, 48] * 3)), [])  # 12 часовых показаний
     assert s.value == 0.0
     assert s.confidence == "high"
     assert s.band == "good"
@@ -115,9 +115,11 @@ def test_single_low_sample_is_reported_but_lower_confidence():
 def test_critically_full_with_enough_samples_is_high_confidence():
     # Free space is directly measured -> a persistently critical drive is high
     # confidence once we have enough samples to rule out a transient.
-    s = compute_disk_fill_risk(_series(2, 1.5, 2, 1), [])
+    s = compute_disk_fill_risk(_series(*([2, 1.5, 2, 1] * 3)), [])  # 12 часовых показаний
     assert s.value is not None and s.value >= 55
     assert s.confidence == "high"
+    few = compute_disk_fill_risk(_series(2, 1.5, 2, 1), [])  # ~4 ч при часовом цикле (0.3.8)
+    assert few.confidence != "high"
 
 
 def test_stale_low_samples_outside_recency_window_are_ignored():

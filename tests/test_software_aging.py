@@ -16,6 +16,12 @@ def _series(rows_oldest_first):
     return list(reversed(rows_oldest_first))
 
 
+# Usable session hours: past the 4 h warm-up and spanning >= 48 h, so a slope is
+# assessed at all (calibration D2). _SIX keeps exactly six usable readings.
+_LONG = [4 + 8 * k for k in range(8)]  # 4 .. 60 h
+_SIX = [4 + 10 * k for k in range(6)]  # 4 .. 54 h
+
+
 def _row(uptime, handles=None, mem=None, pagefile=None):
     row: dict = {"uptime_hours": uptime}
     if handles is not None:
@@ -59,8 +65,8 @@ def test_missing_uptime_rows_do_not_count_toward_session():
 
 
 def test_linear_severe_handle_leak_hits_watch_or_bad():
-    # +400 handles/hour over a 5h session -> severe (>300/h).
-    rows = _series([_row(h, handles=1000 + h * 400) for h in range(6)])
+    # +400 handles/hour over a 56 h session -> severe (>300/h).
+    rows = _series([_row(h, handles=1000 + h * 400) for h in _LONG])
     s = compute_software_aging_risk(rows)
     assert s.value == 45.0
     assert s.band == "bad"
@@ -70,7 +76,7 @@ def test_linear_severe_handle_leak_hits_watch_or_bad():
 
 def test_watch_band_handle_growth_below_severe():
     # +150 handles/hour -> watch tier (>100/h, <=300/h).
-    rows = _series([_row(h, handles=1000 + h * 150) for h in range(6)])
+    rows = _series([_row(h, handles=1000 + h * 150) for h in _LONG])
     s = compute_software_aging_risk(rows)
     assert s.value == 25.0
     assert s.band == "watch"
@@ -78,7 +84,7 @@ def test_watch_band_handle_growth_below_severe():
 
 
 def test_falling_memory_hits_factor():
-    rows = _series([_row(h, mem=8000 - h * 80) for h in range(6)])  # -80 MB/h
+    rows = _series([_row(h, mem=8000 - h * 80) for h in _LONG])  # -80 MB/h
     s = compute_software_aging_risk(rows)
     assert s.value == 20.0
     assert any("свободной памяти" in f["label"] for f in s.factors)
@@ -91,16 +97,15 @@ def test_two_weeks_uptime_factor():
 
 
 def test_pagefile_confirmation_factor():
-    # pagefile p95 clearly higher in the session's second half.
-    rows = _series(
-        [_row(h, pagefile=10) for h in range(4)] + [_row(h, pagefile=60) for h in range(4, 8)]
-    )
+    # pagefile p95 clearly higher in the session's second half -- it only confirms
+    # a real leak, so the session also leaks handles (+400/h).
+    rows = _series([_row(h, handles=1000 + h * 400, pagefile=10 if h < 30 else 60) for h in _LONG])
     s = compute_software_aging_risk(rows)
     assert any("pagefile" in f["label"] for f in s.factors)
 
 
 def test_no_signal_is_healthy_zero():
-    rows = _series([_row(h, handles=1000, mem=8000, pagefile=10) for h in range(6)])
+    rows = _series([_row(h, handles=1000, mem=8000, pagefile=10) for h in _LONG])
     s = compute_software_aging_risk(rows)
     assert s.value == 0.0
     assert s.band == "good"
@@ -113,8 +118,8 @@ def test_no_signal_is_healthy_zero():
 
 
 def test_uptime_reset_cuts_session_old_leak_does_not_bleed_through():
-    session1 = [_row(h, handles=1000 + h * 400) for h in range(6)]  # severe leak, then reboot
-    session2 = [_row(h, handles=2000) for h in range(6)]  # flat, healthy new session
+    session1 = [_row(h, handles=1000 + h * 400) for h in _LONG]  # severe leak, then reboot
+    session2 = [_row(h, handles=2000) for h in _SIX]  # flat, healthy new session
     s = compute_software_aging_risk(_series(session1 + session2))
     assert s.value == 0.0  # only the CURRENT session is judged
     assert s.source_lineage["sessions_seen"] == 2
@@ -124,8 +129,8 @@ def test_uptime_reset_cuts_session_old_leak_does_not_bleed_through():
 def test_reboot_restores_flag_when_new_session_starts_healthier():
     # Session 1 leaks handles up to 3000, then a reboot; session 2 starts at
     # 1000 (well below session 1's last value) and stays flat.
-    session1 = [_row(h, handles=1000 + h * 400) for h in range(6)]
-    session2 = [_row(h, handles=1000) for h in range(6)]
+    session1 = [_row(h, handles=1000 + h * 400) for h in _LONG]
+    session2 = [_row(h, handles=1000) for h in _LONG]
     s = compute_software_aging_risk(_series(session1 + session2))
     assert "reboot_restores" in s.source_lineage["coords"]["flags"]
     assert any(
@@ -135,32 +140,32 @@ def test_reboot_restores_flag_when_new_session_starts_healthier():
 
 
 def test_reboot_restores_absent_when_no_previous_leak():
-    session1 = [_row(h, handles=1000) for h in range(6)]  # flat, no leak
-    session2 = [_row(h, handles=900) for h in range(6)]
+    session1 = [_row(h, handles=1000) for h in _LONG]  # flat, no leak
+    session2 = [_row(h, handles=900) for h in _LONG]
     s = compute_software_aging_risk(_series(session1 + session2))
     assert "reboot_restores" not in s.source_lineage["coords"]["flags"]
 
 
 def test_reboot_restores_flag_via_memory_leak_too():
-    # Session 1 bleeds free memory down to ~7500 MB, then a reboot; session 2
+    # Session 1 bleeds free memory down to 2000 MB, then a reboot; session 2
     # starts back up near 8000 MB (healthier) and stays flat.
-    session1 = [_row(h, mem=8000 - h * 100) for h in range(6)]  # -100 MB/h leak
-    session2 = [_row(h, mem=8000) for h in range(6)]
+    session1 = [_row(h, mem=8000 - h * 100) for h in _LONG]  # -100 MB/h leak
+    session2 = [_row(h, mem=8000) for h in _LONG]
     s = compute_software_aging_risk(_series(session1 + session2))
     assert "reboot_restores" in s.source_lineage["coords"]["flags"]
 
 
 def test_acceleration_flag_when_current_session_leaks_twice_as_fast():
-    session1 = [_row(h, handles=1000 + h * 50) for h in range(6)]  # 50/h, sub-watch
-    session2 = [_row(h, handles=1000 + h * 150) for h in range(6)]  # 150/h >= 2x
+    session1 = [_row(h, handles=1000 + h * 150) for h in _LONG]  # 150/h, above watch
+    session2 = [_row(h, handles=1000 + h * 400) for h in _LONG]  # 400/h >= 2x
     s = compute_software_aging_risk(_series(session1 + session2))
     assert "aging_accelerating" in s.source_lineage["coords"]["flags"]
     assert any("ускоряется" in f["label"] for f in s.factors)
 
 
 def test_acceleration_absent_when_previous_session_was_flat():
-    session1 = [_row(h, handles=1000) for h in range(6)]  # 0/h
-    session2 = [_row(h, handles=1000 + h * 150) for h in range(6)]  # 150/h, still watch
+    session1 = [_row(h, handles=1000) for h in _LONG]  # 0/h
+    session2 = [_row(h, handles=1000 + h * 150) for h in _LONG]  # 150/h, still watch
     s = compute_software_aging_risk(_series(session1 + session2))
     assert "aging_accelerating" not in s.source_lineage["coords"]["flags"]
 
@@ -174,7 +179,7 @@ def test_k2_pin_coords_carry_only_flags_never_damage():
     """Software aging is PURELY Resilience (K2): its coords dict has no
     damage/resilience_loss split, unlike storage.py's worst-disk coords --
     the whole axis value already IS the resilience-loss number."""
-    rows = _series([_row(h, handles=1000) for h in range(6)])
+    rows = _series([_row(h, handles=1000) for h in _LONG])
     s = compute_software_aging_risk(rows)
     coords = s.source_lineage["coords"]
     assert set(coords.keys()) == {"flags"}

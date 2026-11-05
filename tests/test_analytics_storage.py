@@ -9,7 +9,43 @@ untrusted identity withholds; no SMART data -> UNKNOWN (never a confident zero).
 
 from __future__ import annotations
 
+import pytest
+from server.analytics.disk_bus import disk_reading, fixed_disks, is_removable_disk
 from server.analytics.storage import compute_storage_risk
+
+
+@pytest.mark.parametrize(
+    "disk",
+    [{"bus_type": "USB"}, {"bus_type": "usb"}, {"bus_type": "1394"}, {"interface": "USB"}],
+)
+def test_removable_disk_is_only_a_positively_identified_hot_plug_bus(disk):
+    assert is_removable_disk(disk)
+
+
+@pytest.mark.parametrize(
+    "disk",
+    # SD/MMC stay counted: built-in eMMC system disks enumerate on those buses.
+    [{"bus_type": "SD"}, {"bus_type": "MMC"}, {"bus_type": "NVMe"}, {"bus_type": "SATA"}]
+    + [{"bus_type": None}, {}, None, "USB"],
+)
+def test_unknown_or_fixed_bus_counts_as_before(disk):
+    assert not is_removable_disk(disk)
+
+
+def test_fixed_disks_drops_removable_keeps_order_and_old_agent_rows():
+    nvme, usb, legacy = {"bus_type": "NVMe"}, {"bus_type": "USB"}, {"disk": "pre-bus agent"}
+    assert fixed_disks([usb, nvme, None, legacy]) == [nvme, legacy]
+    assert fixed_disks(None) == []
+
+
+def test_disk_reading_reads_the_counters_unpopulated_zero_as_none():
+    """S2: MSFT_StorageReliabilityCounter's 0 wear / 0 degC means "not populated"."""
+    raw = {"bus_type": "RAID", "wear_pct": 0, "temperature_c": 0.0, "power_on_hours": 0}
+    assert disk_reading(raw) == {**raw, "wear_pct": None, "temperature_c": None}
+    assert raw["wear_pct"] == 0  # the stored row is not mutated
+    assert disk_reading({"wear_pct": "0", "temperature_c": "41"})["wear_pct"] is None
+    real = {"wear_pct": 3, "temperature_c": 41, "nvme_percentage_used": 0}
+    assert disk_reading(real) == real
 
 
 def _disk(**kw):
@@ -26,6 +62,24 @@ def test_no_storage_data_is_unknown():
     s = compute_storage_risk({"storage": []}, None)
     assert s.value is None
     assert s.confidence == "unknown"
+
+
+def test_no_health_data_never_claims_smart_ok():
+    """S2: «SMART в норме» needs health data (H5) -- a temperature alone proves nothing."""
+    ghost = compute_storage_risk(_hist([_disk(serial_hash="p", temperature_c=41)]), None)
+    assert ghost.value == 0.0
+    assert ghost.reason == ""
+    real = compute_storage_risk(_hist([_disk(temperature_c=41, smart_attrs={"5": 0})]), None)
+    assert real.reason == "SMART в норме на всех отчитывающихся дисках"
+
+
+def test_counter_zero_only_disk_stays_a_scored_phantom():
+    """S2 keeps engine presence on purpose: H5 caps the phantom and H1 "lost" is not tripped
+    (presence-as-H5 sent 21 NVMe 0.3.x PCs to UNKNOWN in the 2026-11-02 replay)."""
+    disk = _disk(bus_type="RAID", serial_hash="r", wear_pct=0, temperature_c=0)
+    s = compute_storage_risk(_hist([disk]), None)
+    assert s.value == 0.0
+    assert s.source_lineage["health_disk_ids"] == []
 
 
 def test_disk_without_any_smart_field_is_unknown():
@@ -57,7 +111,7 @@ def test_io_errors_high_risk():
 
 def test_high_latency_alone_does_not_raise_risk():
     """The key W4.2 rule: latency without a SMART signal is confounded noise."""
-    hb = {"disk_read_sec": 0.2, "disk_write_sec": 0.2}  # 200 ms, very high
+    hb = {"disk_read_sec": 2.0, "disk_write_sec": 2.0}  # a 2 s I/O stall (H9)
     s = compute_storage_risk(
         _hist([_disk(wear_pct=3.0, read_errors_total=0, write_errors_total=0)]), hb
     )
@@ -66,11 +120,14 @@ def test_high_latency_alone_does_not_raise_risk():
 
 
 def test_latency_confirms_existing_smart_signal():
-    hb = {"disk_read_sec": 0.2}
+    hb = {"disk_read_sec": 2.0}  # a 2 s I/O stall (H9: whole seconds)
     without = compute_storage_risk(_hist([_disk(read_errors_total=5)]), None)
     with_lat = compute_storage_risk(_hist([_disk(read_errors_total=5)]), hb)
     # confirmation may only ADD when SMART already flags a problem.
-    assert with_lat.value >= without.value
+    assert with_lat.value > without.value
+    # H9: below a second never confirms (the agent cannot send it; 0.2 s was "high")
+    sub = compute_storage_risk(_hist([_disk(read_errors_total=5)]), {"disk_read_sec": 0.2})
+    assert sub.value == without.value
 
 
 def test_high_wear_ssd_moderate_risk():

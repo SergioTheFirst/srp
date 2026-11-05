@@ -51,6 +51,12 @@ function Grab($ht, $max) {
       $msg = "$($e.Message)"
       $msg = ($msg -replace '\s+', ' ').Trim()
       if ($msg.Length -gt 600) { $msg = $msg.Substring(0, 600) }
+      # Номер диска -- из пути \Device\HarddiskN\ в данных события (не из текста). Свой try:
+      # сбой здесь не должен терять само событие.
+      $dn = $null
+      if ($e.ProviderName -eq 'disk') {
+        try { if ("$($e.Properties[0].Value)" -match '\\Device\\Harddisk(\d+)\\') { $dn = [int]$Matches[1] } } catch {}
+      }
       $out += [ordered]@{
         ts       = $e.TimeCreated.ToUniversalTime().ToString('o')
         log      = "$($e.LogName)"
@@ -58,22 +64,24 @@ function Grab($ht, $max) {
         event_id = [int]$e.Id
         level    = $lvl
         message  = $msg
+        disk     = $dn
       }
     } catch { continue }
   }
   return $out
 }
 
+# Порядок = приоритет улик: при лимите 120 первыми остаются BSOD/питание/диск, не шум программ.
 $queries = @(
   @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; Id=41; StartTime=$start},
   @{LogName='System'; Id=6008; StartTime=$start},
   @{LogName='System'; ProviderName='Microsoft-Windows-WER-SystemErrorReporting'; Id=1001; StartTime=$start},
-  @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=$start},
   @{LogName='System'; ProviderName='disk'; Id=7,11,51,52,153; StartTime=$start},
   @{LogName='System'; ProviderName='disk'; Id=157; StartTime=$start},
   @{LogName='System'; ProviderName='storahci'; Id=129; StartTime=$start},
   @{LogName='System'; ProviderName='stornvme'; Id=129; StartTime=$start},
   @{LogName='System'; ProviderName='Ntfs'; Id=55; StartTime=$start},
+  @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; StartTime=$start},
   @{LogName='System'; ProviderName='Microsoft-Windows-WindowsUpdateClient'; Id=20,25,31; StartTime=$start},
   @{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$start},
   @{LogName='Application'; ProviderName='Application Hang'; Id=1002; StartTime=$start}
@@ -82,10 +90,58 @@ $queries = @(
 $all = @()
 foreach ($q in $queries) { $all += Grab $q 40 }
 
-$all = $all | Sort-Object { $_.ts } -Descending | Select-Object -First 120
+# Лимит -- ДО сортировки по времени, иначе всплеск WHEA/падений программ вытесняет BugCheck 1001.
+$all = @(@($all | Select-Object -First 120) | Sort-Object { $_.ts } -Descending)
 
-[ordered]@{ events = @($all); window_hours = $H } | ConvertTo-Json -Depth 4 -Compress
+# Шина диска на момент события: журнал подключений 1006 (последние 200). Берём только номер
+# диска и шину -- числа; остальное в записи (модель, серийник, MBR) не читаем.
+$arr = @()
+if (@($all | Where-Object { $null -ne $_.disk }).Count) {
+  $recs = @()
+  try { $recs = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Partition/Diagnostic'; Id=1006} -MaxEvents 200 -ErrorAction SilentlyContinue) } catch { $recs = @() }
+  foreach ($r in $recs) {
+    try {
+      # Регэксп по имени поля, не XML-разбор: у дешёвых флешек в серийнике управляющие символы
+      # (0x1F, 0x06) -- разбор на них падает, а это ровно те записи, что нужны.
+      $x = $r.ToXml()
+      if ($x -match "<Data Name='DiskNumber'>(\d+)</Data>") { $num = [int]$Matches[1] } else { continue }
+      if ($x -match "<Data Name='BusType'>(\d+)</Data>") { $bus = [int]$Matches[1] } else { continue }
+      $arr += [ordered]@{ ts = $r.TimeCreated.ToUniversalTime().ToString('o'); disk = $num; bus = $bus }
+    } catch { continue }
+  }
+}
+
+[ordered]@{ events = @($all); arrivals = @($arr); window_hours = $H } | ConvertTo-Json -Depth 4 -Compress
 """
+
+_REMOVABLE_BUSES = (4, 7)  # STORAGE_BUS_TYPE: 4 = 1394, 7 = USB
+
+
+def _mark_removable(ev: Any, arrivals: list[Any]) -> Any:
+    """disk-событие флешки/внешнего диска -> source "disk-removable": errchain его не считает.
+
+    Решает последнее подключение (журнал 1006) того же номера диска не позже события --
+    номера переиспользуются, текущий список дисков тут не годится. Нет совпадения или шина
+    не съёмная -> событие как есть (считается, как раньше). Метка без «:» и стабильна между
+    24-часовыми пересылками (дедуп сервера -- по (ts, source, event_id)).
+    """
+    if not isinstance(ev, dict) or ev.get("source") != "disk":
+        return ev
+    disk, ts = ev.get("disk"), ev.get("ts")
+    if not isinstance(disk, int) or not isinstance(ts, str):
+        return ev
+    # ponytail: оба ts -- PowerShell ToString('o') в UTC: порядок строк = порядок времени.
+    seen = [
+        a
+        for a in arrivals
+        if isinstance(a, dict)
+        and a.get("disk") == disk
+        and isinstance(a.get("ts"), str)
+        and a["ts"] <= ts
+    ]
+    if not seen or max(seen, key=lambda a: a["ts"]).get("bus") not in _REMOVABLE_BUSES:
+        return ev
+    return {**ev, "source": "disk-removable"}
 
 
 def _clean_event(ev: Any) -> Optional[dict[str, Any]]:
@@ -113,9 +169,15 @@ def collect_events() -> CollectorResult:
     result = run_ps(_SCRIPT, timeout=60)
     if result.status != "ok" or not isinstance(result.data, dict):
         status = result.status if result.status != "ok" else "partial"
-        return CollectorResult(None, failed([EVENTS], status))
+        return CollectorResult(None, failed([EVENTS], status, result.reason))
     raw = result.data
-    events = [e for e in (_clean_event(x) for x in as_list(raw.get("events"))) if e]
+    arrivals = as_list(raw.get("arrivals"))
+    # _clean_event собирает запись из фиксированных ключей -- служебный "disk" на сервер не уходит.
+    events = [
+        e
+        for e in (_clean_event(_mark_removable(x, arrivals)) for x in as_list(raw.get("events")))
+        if e
+    ]
     window = raw.get("window_hours")
     try:
         window = float(window) if window is not None else 24.0

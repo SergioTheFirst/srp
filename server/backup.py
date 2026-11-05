@@ -93,7 +93,7 @@ def _copy_extras(final: Path, extras: Iterable[Union[str, Path]]) -> List[Path]:
 
     Без них откат кода ложный: `server/config.json` и `org_directory.json` лежат
     в git, но на боевом сервере их правят на месте — там `ingest_token`,
-    `admin_token`, `update_hmac_secret` и настоящий справочник организаций.
+    `admin_token` и настоящий справочник организаций.
     `git reset --hard` вернул бы шаблон из репозитория, то есть выключил бы
     проверку токена вообще. Копия рядом с базой делает откат безопасным.
     """

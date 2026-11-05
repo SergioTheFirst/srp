@@ -17,7 +17,7 @@ RULE_KEYS = ("pending_high", "media_recurrence", "early_chain")
 # same words) rather than inventing new phrasing.
 RULE_LABELS: dict[str, str] = {
     "pending_high": "повышенное число pending-секторов",
-    "media_recurrence": "рецидив дефектов диска",
+    "media_recurrence": "рост дефектов диска",
     "early_chain": "ранние сигналы без повреждений",
 }
 
@@ -36,6 +36,8 @@ _BOOST_MULT = 1.2
 _CEILING_MULT = 1.5
 _MUTE_MULT = 0.8
 _NEUTRAL_MULT = 1.0
+# Storage coords flags that confirm an episode on their own (D12, F11).
+_ESCALATION_FLAGS = frozenset({"predict_fail", "cw_readonly", "cw_reliability", "chain_stage3"})
 
 
 # --------------------------------------------------------------------------- #
@@ -61,12 +63,12 @@ def _row_flags(row: dict[str, Any]) -> list:
 
 
 def _confirms(row: dict[str, Any]) -> bool:
-    """errchain.stage>=2 OR storage_risk.band=='bad' -- the Ф8 confirm condition."""
+    """errchain.stage>=2 OR an escalation flag: evidence independent of the counter
+    that raised the rule's flag (F11 -- band 'bad' was that very counter)."""
     risk = row.get("risk") or {}
     stage = (risk.get("errchain") or {}).get("stage", 0)
-    storage = (risk.get("score100") or {}).get("storage_risk") or {}
     stage_ok = isinstance(stage, (int, float)) and stage >= 2
-    return stage_ok or storage.get("band") == "bad"
+    return stage_ok or bool(_ESCALATION_FLAGS & set(_row_flags(row)))
 
 
 def _has_row_in_window(

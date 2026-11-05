@@ -17,12 +17,16 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 CONTRACT_VERSION = "0.1.0"
+
+# Разрядность сборки агента (0.3.6): машинное значение, English. Нет поля = x64.
+AgentArch = Literal["x64", "x86"]
 
 MsgType = Literal[
     "inventory", "historical", "heartbeat", "events", "print_jobs", "liveness", "update_status"
@@ -88,6 +92,14 @@ class MemoryModule(_Base):
     part_number: Optional[str] = None
 
 
+class AntivirusInfo(_Base):
+    """Продукт из SecurityCenter2 (0.3.8). max_length = клип агента (MAX_AV_NAME)."""
+
+    name: Optional[str] = Field(default=None, max_length=128)
+    enabled: Optional[bool] = None
+    up_to_date: Optional[bool] = None
+
+
 class InventoryPayload(_Base):
     hostname: Optional[str] = None
     manufacturer: Optional[str] = None
@@ -104,8 +116,17 @@ class InventoryPayload(_Base):
     total_ram_gb: Optional[float] = None
     memory_modules: list[MemoryModule] = Field(default_factory=list)
     disks: list[DiskInfo] = Field(default_factory=list)
-    driver_problem_count: Optional[int] = None  # PnP ConfigManagerErrorCode<>0
+    driver_problem_count: Optional[int] = None  # PnP код ≠0 и ≠22, без периферии (печать/BT/флешки)
     pending_reboot: Optional[bool] = None
+    # Агент 0.3.8 («маленькие победы»): гигиена безопасности. Аддитивно-опционально,
+    # null = «неизвестно» (сбой запроса), не «плохо».
+    last_patch_date: Optional[str] = Field(default=None, max_length=10)  # YYYY-MM-DD
+    antivirus: Optional[list[AntivirusInfo]] = Field(default=None, max_length=8)
+    bitlocker_system: Optional[Literal["on", "off", "unknown"]] = None
+    tpm_present: Optional[bool] = None
+    tpm_version: Optional[str] = Field(default=None, max_length=16)
+    secure_boot: Optional[bool] = None
+    windows_activated: Optional[bool] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -179,6 +200,16 @@ PRINTER_PORTS_MAX = 256  # cap on agent spooler-port discovery hints (printers p
 # Связь пинится tests/test_contract.py::test_print_jobs_cap_is_above_agent_byte_budget.
 PRINT_JOBS_MAX = 8192
 STORAGE_DISKS_MAX = 64  # ssd3 Ф2: caps store_disk_readings' per-envelope DB write fan-out too
+# H17 (agent 1.0.0): BugCheck / Kernel-Power 41 records of 30 days. The agent clips to
+# the same caps (client/collectors/historical.py; tests pin the two) -- a 422 would lose
+# the whole envelope, so the schema only bounds sizes; formats are the validators'.
+BUGCHECKS_MAX = 20
+KP41_MAX = 20
+BUGCHECK_PARAMS_MAX = 4
+EVENT_TS_MAX = 40
+BUGCHECK_CODE_MAX = 10  # 0x%08x
+BUGCHECK_PARAM_MAX = 18  # 0x + 16 hex (x64)
+BUGCHECK_DUMP_MAX = 8  # mini | full | none | other
 
 
 class NetAdapter(_Base):
@@ -278,6 +309,27 @@ class PrinterPortHint(_Base):
     ip: Optional[str] = Field(default=None, max_length=64)
 
 
+class BugCheckItem(_Base):
+    """H17: one BugCheck 1001 of the last 30 days -- the code normalised to 0x%08x by the
+    agent (else None), up to 4 parameters, the dump kind; the dump path never leaves it."""
+
+    ts: Optional[str] = Field(default=None, max_length=EVENT_TS_MAX)
+    code: Optional[str] = Field(default=None, max_length=BUGCHECK_CODE_MAX)
+    params: list[Annotated[str, Field(max_length=BUGCHECK_PARAM_MAX)]] = Field(
+        default_factory=list, max_length=BUGCHECK_PARAMS_MAX
+    )
+    dump: Optional[str] = Field(default=None, max_length=BUGCHECK_DUMP_MAX)
+
+
+class KP41Item(_Base):
+    """H17: one Kernel-Power 41 -- a crash (bugcheck_code != 0) apart from a power loss or
+    a held power button (power_button)."""
+
+    ts: Optional[str] = Field(default=None, max_length=EVENT_TS_MAX)
+    bugcheck_code: Optional[int] = None  # uint32, decimal
+    power_button: Optional[bool] = None
+
+
 class HistoricalPayload(_Base):
     reliability_stability_index: Optional[float] = None  # 0..10, latest sample
     kernel_power_41_30d: Optional[int] = None  # unexpected power loss / hang
@@ -286,6 +338,11 @@ class HistoricalPayload(_Base):
     app_crashes_30d: Optional[int] = None  # Application Error 1000
     whea_errors_30d: Optional[int] = None  # WHEA-Logger (corrected HW err)
     avg_boot_ms: Optional[int] = None  # Diagnostics-Performance 100
+    # H17 (agent 1.0.0): the newest normal boot, the BugCheck / KP41 records of 30 days.
+    # Additive optional -> no CONTRACT_VERSION bump; old agents send none of them.
+    last_boot_ms: Optional[int] = None
+    bugchecks: Optional[list[BugCheckItem]] = Field(default=None, max_length=BUGCHECKS_MAX)
+    kp41: Optional[list[KP41Item]] = Field(default=None, max_length=KP41_MAX)
     storage: list[StorageReliability] = Field(default_factory=list, max_length=STORAGE_DISKS_MAX)
     observation_days: Optional[int] = None  # how far back the data reaches
     certificates: list[CertInfo] = Field(default_factory=list)
@@ -320,6 +377,7 @@ class HeartbeatPayload(_Base):
     disk_write_sec: Optional[float] = None
     disk_queue: Optional[float] = None
     free_space_pct: Optional[float] = None  # system drive
+    free_space_gb: Optional[float] = None  # H17 (agent 1.0.0): system drive, GB
     handle_count_total: Optional[int] = None  # leak proxy
     nic_errors: Optional[int] = None
     user_present: Optional[bool] = None
@@ -382,15 +440,34 @@ class EventBatchPayload(_Base):
 # --------------------------------------------------------------------------- #
 # Source health (collector-trust, per logical source, §5 / §12 of contract)
 # --------------------------------------------------------------------------- #
+SOURCE_REASON_MAX = 64  # = client/collectors/ps.py REASON_MAX (пин в тестах)
+_REASON_BAD_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _clean_reason(value: Any) -> Optional[str]:
+    """Причина сбоя -- машинный ASCII-токен, не текст. Мусор ЧИСТИТСЯ, а не валит
+    конверт: 422 из-за диагностического поля = потеря живого конверта."""
+    if not isinstance(value, str):
+        return None
+    token = _REASON_BAD_CHARS.sub("_", value.strip())
+    return token if re.search(r"[A-Za-z0-9]", token) else None
+
+
 class SourceHealth(_Base):
     """Per-source collector status reported by the agent on every envelope.
 
     status: one of ok | partial | empty | timeout | blocked | absent
     collected_at: UTC ISO timestamp when the collector ran (None if it never ran).
+    reason: агент 0.3.5 -- токен причины сбоя PowerShell (FullyQualifiedErrorId до
+      запятой, ``rc_<код>``, ``cim_hollow``). Аддитивно: старые агенты не шлют,
+      старые серверы игнорируют (extra='allow'); статусы и доверие не меняет.
     """
 
     status: Literal["ok", "partial", "empty", "timeout", "blocked", "absent"]
     collected_at: Optional[str] = None
+    reason: Annotated[Optional[str], BeforeValidator(_clean_reason)] = Field(
+        default=None, max_length=SOURCE_REASON_MAX
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -406,6 +483,10 @@ class Envelope(_Base):
     # max_length: ревью LOW-1 — единственное поле конверта без капа; "0."+"1"*4290+".0"
     # проходило MAJOR-гейт и оседало в devices.agent_version (раздувание Флота).
     agent_version: str = Field(default=CONTRACT_VERSION, max_length=32)
+    # Stage 5: the contract the agent speaks -- the 406 gate reads it, so the agent's own
+    # version (1.0.0) no longer has to share the contract's MAJOR. Old agents omit it and
+    # the gate falls back to agent_version (MAJOR 0 = the contract's). Additive optional.
+    contract_version: Optional[str] = Field(default=None, max_length=32)
     msg_type: MsgType
     ts: str = Field(default_factory=utcnow_iso)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -428,6 +509,9 @@ class Envelope(_Base):
     org_code: Optional[str] = None
     dept_code: Optional[str] = None
     comment: Optional[str] = None
+    # Build bitness (0.3.6): the dashboard compares an x86 agent with the x86 package.
+    # Additive optional (old agents omit it -> None = x64); CONTRACT_VERSION not bumped.
+    agent_arch: Optional[AgentArch] = None
     # Персональные данные владельца ПК: вводятся пользователем в трее, доезжают
     # через спул -> агент. Аддитивно/опционально, COALESCE на сервере ->
     # CONTRACT_VERSION намеренно НЕ бампается (как site_code/org_code выше).
@@ -440,6 +524,17 @@ class Envelope(_Base):
     # max_length=64: UUID4.hex is 32 chars; cap prevents oversized keys from
     # inflating the in-memory dedup dict before the 50k-entry trim fires.
     idempotency_key: Optional[str] = Field(default=None, max_length=64)
+    # 0.3.4: when THIS delivery attempt left the agent (UTC ISO, like ts). Clock drift
+    # is measured against it -- ts is collection time and stays old on a buffered
+    # replay. Additive optional: old agents omit it -> drift from ts as before;
+    # CONTRACT_VERSION NOT bumped. max_length above the agent's 32-char stamp.
+    sent_ts: Optional[str] = Field(default=None, max_length=64)
+
+    @property
+    def spoken_contract(self) -> str:
+        """The contract version for the compatibility gate: the agent's declared one, else
+        its own version (agents before the split shared the contract's MAJOR)."""
+        return self.contract_version or self.agent_version
 
 
 class PrintJobRecord(_Base):

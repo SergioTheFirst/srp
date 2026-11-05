@@ -31,8 +31,9 @@ def test_source_staleness_glue_logs_on_transitions(monkeypatch: pytest.MonkeyPat
 
 def test_server_config_has_source_staleness_defaults() -> None:
     cfg = ServerConfig()
-    # 43200 = 3 пропущенных 4-часовых цикла агента (config.template.json).
+    # 21600 = 6 пропущенных часовых циклов агента 0.3.8 (config.template.json);
+    # агенты до обновления (раз в 4 ч) не становятся STALE.
     # Кратко о грабле: поднимать этот порог, глядя на client/config.json, нельзя —
     # тот файл не разворачивается установщиком (см. test_trust_gate.py).
-    assert cfg.source_stale_after_sec == 43200
+    assert cfg.source_stale_after_sec == 21600
     assert cfg.source_stale_reeval_interval_sec == 3600

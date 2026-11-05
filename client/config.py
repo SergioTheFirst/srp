@@ -55,11 +55,11 @@ class ClientConfig:
     server_url: str = ""  # required: operator sets this per deployment (no default)
     device_id: str = ""  # resolved on first run, then persisted
     hostname: str = ""  # live machine name (platform.node), refreshed each load
-    inventory_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
-    historical_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
-    heartbeat_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
-    events_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
-    print_interval_sec: int = 14400  # full telemetry cycle -> every 4 h
+    inventory_interval_sec: int = 3600  # full telemetry cycle -> every 1 h (0.3.8)
+    historical_interval_sec: int = 3600  # full telemetry cycle -> every 1 h (0.3.8)
+    heartbeat_interval_sec: int = 3600  # full telemetry cycle -> every 1 h (0.3.8)
+    events_interval_sec: int = 3600  # full telemetry cycle -> every 1 h (0.3.8)
+    print_interval_sec: int = 3600  # full telemetry cycle -> every 1 h (0.3.8)
     liveness_interval_sec: int = 300  # пинг «я жив»; offline на дашборде виден за ~10 мин
     http_timeout_sec: int = 15
     buffer_path: str = "buffer.jsonl"  # offline spool, relative to config dir
@@ -83,7 +83,6 @@ class ClientConfig:
     tray_notify_hours: int = 4  # balloon cadence while in the warning window
     tray_require_cert: bool = False  # nag daily when no signing cert is present at all
     ingest_token: str = ""  # nosec B105 -- empty = no token sent; set per deployment
-    update_hmac_secret: str = ""  # nosec B105 -- empty = fall back to ingest_token
     # Operating mode: when True the agent collects but does NOT attempt server calls.
     offline_mode: bool = False
     # Самолечение журнала печати (PrintService/Operational): SYSTEM-агент включает
@@ -211,16 +210,38 @@ def _type_matches(expected: type, value: object) -> bool:
     return isinstance(value, expected)
 
 
+# 0.3.8: полный цикл 4 ч -> 1 ч. Обновление агента не переписывает config.json
+# установленных ПК, поэтому прежнее значение по умолчанию мигрируется при чтении.
+_LEGACY_CYCLE_SEC = 14400
+_CYCLE_SEC = 3600
+_CYCLE_KEYS = frozenset(
+    {
+        "inventory_interval_sec",
+        "historical_interval_sec",
+        "heartbeat_interval_sec",
+        "events_interval_sec",
+        "print_interval_sec",
+    }
+)
+
+
 def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
     cfg = ClientConfig()
+    # AUTH-2: a file we could not parse must never be overwritten with defaults
+    # and a fresh device_id -- that wiped the operator's server_url/token and
+    # forked the PC's identity on the dashboard.
+    unreadable = False
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            # bytes, not text: json.detect_encoding handles the BOM Notepad /
+            # `Set-Content -Encoding UTF8` writes and the UTF-16 of PS 5.1 `>`.
+            data = json.loads(path.read_bytes())
+        except (ValueError, OSError) as exc:
             log.error("config.json unreadable or not valid JSON (%s) -- using defaults", exc)
-            data = {}
+            data = None
         if not isinstance(data, dict):
-            log.error("config.json top-level value is not an object -- using defaults")
+            log.error("config.json is not a JSON object -- using defaults, file left untouched")
+            unreadable = True
             data = {}
         known = {f.name for f in fields(ClientConfig)}
         hints = get_type_hints(ClientConfig)
@@ -235,6 +256,8 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
                     type(value).__name__,
                 )
                 continue
+            if key in _CYCLE_KEYS and value == _LEGACY_CYCLE_SEC:
+                value = _CYCLE_SEC  # 0.3.8: старый дефолт 4 ч -> 1 ч; своё значение не трогаем
             setattr(cfg, key, value)
 
     # hostname is display/identity, not a stable key: always reflect the CURRENT
@@ -244,6 +267,8 @@ def load_config(path: Path = _CONFIG_PATH) -> ClientConfig:
 
     if not cfg.device_id:
         cfg.device_id = resolve_device_id(_machine_guid(), _hostname())
+        if unreadable:
+            return cfg  # in-memory id only; never clobber a file we failed to read
         try:
             _persist(cfg, path)
         except OSError as exc:

@@ -11,6 +11,7 @@ queue behind it.
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import logging
 import os
@@ -23,12 +24,16 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from client.config import ClientConfig
+from client.winflags import AGENT_ARCH
 
 log = logging.getLogger(__name__)
 
-# Stamped onto every envelope. Keep in sync with shared.schema.CONTRACT_VERSION
-# (duplicated, not imported, so the client needs no pydantic install).
-AGENT_VERSION = "0.3.0"
+# Stamped onto every envelope; root VERSION carries the same number (test_version_pin).
+AGENT_VERSION = "1.0.0"
+# The contract the agent speaks (shared.schema.CONTRACT_VERSION; the agent is stdlib-only
+# and cannot import it -- a test pins the two). The server's 406 gate reads it, so the
+# agent's own version may have its own MAJOR.
+CONTRACT_VERSION = "0.1.0"
 
 _MAX_BUFFER_LINES = 5000  # oldest dropped past this -- bound disk use
 # Строковый кап не ограничивает БАЙТЫ: 5000 крупных конвертов -- это гигабайты
@@ -48,6 +53,14 @@ _MAX_THROTTLE_SEC = 300.0
 _DEFAULT_THROTTLE_SEC = 60.0  # столько же, сколько окно server/ingest_guards
 
 
+def _major(version: Any) -> Optional[int]:
+    """MAJOR of a strict MAJOR.MINOR.PATCH string as the ingest gate reads it, else None
+    (shared.schema.parse_version; duplicated -- the agent is stdlib-only)."""
+    parts = version.split(".") if isinstance(version, str) else []
+    strict = len(parts) == 3 and all(p.isascii() and p.isdigit() for p in parts)
+    return int(parts[0]) if strict else None
+
+
 class Transport:
     """Stateless-ish sender bound to one client config."""
 
@@ -58,6 +71,7 @@ class Transport:
         # Last delivery outcome, surfaced in status.json for the tray panel.
         self.last_ok_ts: Optional[float] = None
         self.last_error: str = ""
+        self._down = ""  # причина обрыва (сеть/5xx) -- только для «связь восстановлена»
         # До этого момента сеть не трогаем: сервер уже сказал «слишком часто».
         self._throttled_until: float = 0.0
 
@@ -66,7 +80,7 @@ class Transport:
         if not self._buffer.exists():
             return 0
         try:
-            with self._buffer.open("r", encoding="utf-8") as fh:
+            with self._buffer.open("r", encoding="utf-8", errors="replace") as fh:
                 return sum(1 for line in fh if line.strip())
         except OSError as exc:
             log.error("could not read buffer: %s", exc)
@@ -82,7 +96,9 @@ class Transport:
         """Build and deliver an envelope. Buffer it on transient failure.
 
         Returns True if the envelope was delivered (or permanently rejected),
-        False if it was buffered for a later retry. An envelope with no payload
+        False if it was buffered for a later retry (liveness: never buffered --
+        the server stamps last_seen on receipt, a replayed ping says nothing,
+        and pings were 91 % of the buffer's lines). An envelope with no payload
         is still sent when it carries source_health (so the server learns a
         source is down); a fully empty send is a no-op.
         """
@@ -102,7 +118,8 @@ class Transport:
         if self._deliver(envelope):
             self.flush_buffer()  # server is reachable -- drain backlog too
             return True
-        self._append_buffer(envelope)
+        if msg_type != "liveness":
+            self._append_buffer(envelope)
         return False
 
     def flush_buffer(self) -> int:
@@ -115,6 +132,7 @@ class Transport:
         if not lines:
             return 0
         handled = 0
+        foreign = 0
         remaining: list[str] = []
         blocked = False
         for line in lines:
@@ -127,13 +145,25 @@ class Transport:
                 log.warning("dropping corrupt buffer line")
                 handled += 1
                 continue
+            if envelope.get("msg_type") == "liveness":
+                handled += 1  # pings buffered by 0.3.3: purged, never POSTed
+                continue
+            if envelope.get("device_id") != self._cfg.device_id:
+                # 0.3.5: конверт прежнего device_id (сброс клона, потеря config.json)
+                # досылать нельзя -- он «оживит» старую запись поверх новой
+                # (spec 2026-10-24-canonical-devices). Данные мёртвой личности не нужны.
+                foreign += 1
+                handled += 1
+                continue
             if self._deliver(envelope):
                 handled += 1
             else:
                 blocked = True
                 remaining.append(line)
-        self._write_buffer(remaining)
-        if handled:
+        if foreign:  # одна строка, а не по строке на конверт (буфер до 5000 строк)
+            log.warning("dropped %d buffered envelope(s) of a previous device_id", foreign)
+        if handled:  # nothing sent = file unchanged -- no rewrite every minute (F4)
+            self._write_buffer(remaining)
             log.info("flushed %d buffered envelope(s), %d remaining", handled, len(remaining))
         return handled
 
@@ -148,6 +178,8 @@ class Transport:
             # Empty -> None so the server's COALESCE keeps any stored name.
             "hostname": self._cfg.hostname or None,
             "agent_version": AGENT_VERSION,
+            "contract_version": CONTRACT_VERSION,
+            "agent_arch": AGENT_ARCH,  # 0.3.6: x86-агента дашборд сверяет с x86-пакетом
             "msg_type": msg_type,
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
@@ -195,7 +227,10 @@ class Transport:
 
     def _attempt(self, envelope: dict[str, Any]) -> str:
         """One POST. Returns 'ok' | 'drop' | 'retry'."""
-        body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+        # sent_ts = момент ЭТОЙ попытки: по нему сервер меряет дрейф часов (ts -- время
+        # сбора, у повтора из буфера оно старое). Строка буфера остаётся исходной.
+        sent = {**envelope, "sent_ts": datetime.now(timezone.utc).isoformat()}
+        body = json.dumps(sent, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self._cfg.ingest_token:
             headers["X-SRP-Token"] = self._cfg.ingest_token
@@ -208,41 +243,70 @@ class Transport:
         try:
             # B310: scheme is the operator-configured server_url, not user input.
             with urllib.request.urlopen(req, timeout=self._cfg.http_timeout_sec):  # nosec B310
+                if self._down:  # 4xx/429/негабарит -- не обрыв связи
+                    log.info("связь восстановлена (было: %s)", self._down)
+                    self._down = ""
                 self.last_ok_ts = time.time()
                 self.last_error = ""
                 return "ok"  # urlopen only returns for 2xx/3xx
         except urllib.error.HTTPError as exc:  # subclass of URLError -> catch first
-            # HTTPError -- это ЕЩЁ И объект ответа. Не дочитав и не закрыв его, мы
-            # оставляем сокет на сборщик мусора: сервер видит принудительный обрыв
-            # (WinError 10054) и печатает трейсбек в окне оператора.
-            with contextlib.suppress(OSError, ValueError):
-                exc.read()
-            with contextlib.suppress(OSError, AttributeError):
-                exc.close()
-            self.last_error = f"HTTP {exc.code}"
-            if exc.code in (408, 425, 429):
-                # Сервер тормозит (ingest_guards: 30 конвертов / 60 с на устройство), а не
-                # отвергает содержимое: это ровно тот случай, ради которого буфер и есть.
-                wait = self._retry_after(exc)
-                self._throttled_until = time.time() + wait
-                log.warning(
-                    "server throttled %s (HTTP %d) -- buffering, retry in %.0fs",
-                    envelope.get("msg_type"),
-                    exc.code,
-                    wait,
-                )
-                return "throttled"
-            if 400 <= exc.code < 500:
-                log.warning(
-                    "server rejected %s (HTTP %d) -- dropping", envelope.get("msg_type"), exc.code
-                )
-                return "drop"
-            log.warning("server error HTTP %d on %s", exc.code, envelope.get("msg_type"))
+            return self._http_error(exc, envelope)
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+            # HTTPException (BadStatusLine...): urllib не оборачивает ошибки getresponse()
+            # -- это не OSError, конверт терялся, а flush ронял цикл агента.
+            level = self._record_error(str(exc)[:200])
+            self._down = self.last_error
+            log.log(level, "network error sending %s: %s", envelope.get("msg_type"), exc)
             return "retry"
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            self.last_error = str(exc)[:200]
-            log.warning("network error sending %s: %s", envelope.get("msg_type"), exc)
-            return "retry"
+
+    def _http_error(self, exc: urllib.error.HTTPError, envelope: dict[str, Any]) -> str:
+        """An HTTP error reply -> 'throttled' | 'drop' | 'retry' (split out of _attempt)."""
+        msg_type = envelope.get("msg_type")
+        # HTTPError -- это ЕЩЁ И объект ответа. Не дочитав и не закрыв его, мы
+        # оставляем сокет на сборщик мусора: сервер видит принудительный обрыв
+        # (WinError 10054) и печатает трейсбек в окне оператора.
+        with contextlib.suppress(OSError, ValueError, http.client.HTTPException):
+            exc.read()
+        with contextlib.suppress(OSError, AttributeError):
+            exc.close()
+        level = self._record_error(f"HTTP {exc.code}")
+        spoken = envelope.get("contract_version") or envelope.get("agent_version")
+        stale = exc.code == 406 and _major(spoken) != _major(CONTRACT_VERSION)
+        if exc.code in (401, 406, 408, 425, 429) and not stale:
+            # Сервер тормозит (ingest_guards: 30 конвертов / 60 с на устройство), а не
+            # отвергает содержимое: это ровно тот случай, ради которого буфер и есть.
+            # 401 туда же (AUTH-4): токен не принят -- состояние сервера, а не плохой
+            # конверт; «выбросить» выжигало весь офлайн-буфер одним циклом.
+            # 406 туда же, если конверт говорит на MAJOR текущего контракта агента (агент
+            # 1.0.0: сервер откатили ниже развязки контракта) -- выбросить = сжечь буфер.
+            # Строку другого MAJOR (записана до самообновления; у 0.3.x контракт -- их
+            # agent_version, как читает сервер) сервер этого контракта не примет никогда:
+            # она «ядовитая» (ниже), иначе клинит голову буфера навсегда. MINOR/PATCH
+            # гейт не проверяет (D2) -- такая строка остаётся в буфере вместе с живыми.
+            wait = self._retry_after(exc)
+            self._throttled_until = time.time() + wait
+            log.log(
+                level,
+                "server throttled %s (HTTP %d) -- buffering, retry in %.0fs",
+                msg_type,
+                exc.code,
+                wait,
+            )
+            return "throttled"
+        if 400 <= exc.code < 500:
+            log.log(level, "server rejected %s (HTTP %d) -- dropping", msg_type, exc.code)
+            return "drop"
+        log.log(level, "server error HTTP %d on %s", exc.code, msg_type)
+        self._down = self.last_error
+        return "retry"
+
+    def _record_error(self, err: str) -> int:
+        """Remember err as last_error; return its log level -- WARNING once per outage,
+        DEBUG while the same error repeats (2 attempts + a flush every <=60 s filled
+        85 % of the 4 x 1 MB log with one line, rotating out the cause in days)."""
+        level = logging.DEBUG if err == self.last_error else logging.WARNING
+        self.last_error = err
+        return level
 
     @staticmethod
     def _retry_after(exc: urllib.error.HTTPError) -> float:
@@ -271,7 +335,9 @@ class Transport:
         if not self._buffer.exists():
             return []
         try:
-            lines = self._buffer.read_text(encoding="utf-8").splitlines()
+            # errors=replace: строка, оборванная посреди UTF-8 символа (BSOD, питание),
+            # падает в json.loads и отбрасывается, а не роняет агента (F1).
+            lines = self._buffer.read_text(encoding="utf-8", errors="replace").splitlines()
             return [ln for ln in lines if ln.strip()]
         except OSError as exc:
             log.error("could not read buffer: %s", exc)
