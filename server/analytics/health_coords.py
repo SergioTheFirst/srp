@@ -97,21 +97,26 @@ def _observability(
     # counted event (or factor), and at least one non-None axis value.
     errchain_live = _events_live(errchain)
     axes_live = any(isinstance(v, dict) and v.get("value") is not None for v in axes.values())
-    # (weight, is_live, russian blind-spot string)
+    # (weight, is_live, russian blind-spot string, the live channel's name)
     channels = [
-        (0.35, _ax_val(axes, "storage_risk") is not None, _NO_SMART),
-        (0.15, errchain_live, "нет анализа событий"),
-        (0.15, _perf_live(axes, trends), "нет телеметрии производительности"),
-        (0.15, depth_live, "нет истории трендов"),
-        (0.10, axes_live, "нет инвентаризации/идентификации"),
-        (0.10, cohort_live, "нет когорты для сравнения"),
+        (0.35, _ax_val(axes, "storage_risk") is not None, _NO_SMART, "SMART диска"),
+        (0.15, errchain_live, "нет анализа событий", "анализ событий"),
+        (
+            0.15,
+            _perf_live(axes, trends),
+            "нет телеметрии производительности",
+            "телеметрия производительности",
+        ),
+        (0.15, depth_live, "нет истории трендов", "история трендов"),
+        (0.10, axes_live, "нет инвентаризации/идентификации", "инвентаризация/идентификация"),
+        (0.10, cohort_live, "нет когорты для сравнения", "когорта для сравнения"),
     ]
-    value = round(sum(w for w, live, _ in channels if live) * 100, 1)
-    blind = [msg for w, live, msg in channels if not live]
+    value = round(sum(w for w, live, _, _ in channels if live) * 100, 1)
+    blind = [msg for w, live, msg, _ in channels if not live]
+    # the channel is named: a reason is "what is seen", and on the public stand, where
+    # "(вес N)" is cut, unnamed labels collapsed into one phrase repeated N times
     evidence = [
-        {"label": f"источник данных активен (вес {w:.2f})", "delta": w}
-        for w, live, _ in channels
-        if live
+        {"label": f"{name} (вес {w:.2f})", "delta": w} for w, live, _, name in channels if live
     ]
     band = "good" if value >= 75 else "watch" if value >= 40 else "bad"
     conf = "high" if value >= 75 else "medium" if value >= 40 else "low"

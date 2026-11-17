@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import pytest
 from server import db
+from server.web import health_view
 
 pytestmark = pytest.mark.integration
 
@@ -51,7 +53,7 @@ def test_axis_over_threshold_visible_before_details(client) -> None:
         {"score100": {"storage_risk": _axis(55.0, reason="ошибки чтения растут")}},
     )
     body = client.get("/device/card-1").text
-    axis = body.find("Здоровье диска (SMART)")
+    axis = body.find("Риск отказа диска (SMART)")
     details = body.find('id="device-diagnostics"')
     assert axis != -1 and details != -1
     assert axis < details, "плохая ось (55) должна быть видна сразу, не в раскрывашке"
@@ -60,7 +62,7 @@ def test_axis_over_threshold_visible_before_details(client) -> None:
 def test_axis_healthy_hidden_inside_details(client) -> None:
     _seed("card-2", "CARD-2", {"score100": {"storage_risk": _axis(5.0)}})
     body = client.get("/device/card-2").text
-    axis = body.find("Здоровье диска (SMART)")
+    axis = body.find("Риск отказа диска (SMART)")
     details = body.find('id="device-diagnostics"')
     assert axis != -1 and details != -1
     assert details < axis, "здоровая ось (5) должна лежать внутри раскрывашки"
@@ -69,7 +71,7 @@ def test_axis_healthy_hidden_inside_details(client) -> None:
 def test_axis_unknown_value_hidden_inside_details(client) -> None:
     _seed("card-3", "CARD-3", {"score100": {"network_risk": _axis(None, confidence=None)}})
     body = client.get("/device/card-3").text
-    axis = body.find("Здоровье сети")
+    axis = body.find("Риск сетевых проблем")
     details = body.find('id="device-diagnostics"')
     assert details != -1 and axis != -1 and details < axis
 
@@ -275,6 +277,27 @@ def test_specs_block_renders_without_scores(client) -> None:
     assert "Intel(R) Core(TM) i5-10400" in body
 
 
+@pytest.mark.parametrize(
+    ("payload", "shown"),
+    [
+        # Сбой сбора heartbeat: агент шлёт конверт без данных, строка хранится как {}.
+        # Пока ПК молчит, она остаётся последней -- карточка offline-машины давала 500
+        # («'dict object' has no attribute 'cpu_pct'»).
+        ({}, []),
+        # Контракт аддитивный: любое поле heartbeat может отсутствовать.
+        ({"cpu_pct": 37.0}, ["загрузка сейчас: 37%"]),
+    ],
+)
+def test_specs_block_survives_heartbeat_without_readings(client, payload, shown) -> None:
+    _seed_with_inventory("card-17", "CARD-17")
+    db.store_heartbeat("card-17", _iso_now(), payload)
+    resp = client.get("/device/card-17")
+    assert resp.status_code == 200
+    assert "Intel(R) Core(TM) i5-10400" in resp.text
+    # «сейчас»-строки -- только для пришедших значений: нет значения -- нет строки
+    assert re.findall(r'<div class="spec-now">([^<]*)</div>', resp.text) == shown
+
+
 # --------------------------------------------------------------------------- #
 # Агент 0.3.8: гигиена безопасности в блоке «Компьютер»
 # --------------------------------------------------------------------------- #
@@ -310,3 +333,15 @@ def test_security_unknown_renders_no_chips(client) -> None:
     assert "антивирус" not in body.lower().replace("антивирус: нет данных", "")
     assert "не готов к Windows 11" not in body
     assert "нет данных" in body
+
+
+def test_risk_axes_are_named_as_risks_like_the_heatmap(client) -> None:
+    # every score100 axis is a risk (higher = worse): «Здоровье диска (SMART) 100 из 100»
+    # read as a healthy disk. The card and the fleet heatmap use the same names.
+    keys = ("storage", "os_degradation", "disk_fill", "network", "fleet_anomaly", "trajectory")
+    _seed("card-names", "CARD-N", {"score100": {f"{k}_risk": _axis(60.0) for k in keys}})
+    body = client.get("/device/card-names").text
+    for _key, label in health_view._HEATMAP_AXES:
+        assert label == "Старение ПО" or label in body, label  # aging has no card axis
+    for old in ("Здоровье диска", "Здоровье сети", "Стабильность ОС", "Риск траектории"):
+        assert old not in body, old

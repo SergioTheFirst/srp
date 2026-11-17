@@ -312,6 +312,7 @@ def test_reachability_one_root_cause_and_suppressed_downstream():
         NetdiscoConfig(enabled=True),
         get_known=lambda: _REACH_DEVICES,
         get_links=lambda: _REACH_LINKS,
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: ip == "10.0.0.1",  # only the router answers
         set_status=lambda nid, st: statuses.__setitem__(nid, st),
         store_change=lambda kind, nid, detail=None, ts=None: log.append((kind, nid)),
@@ -329,6 +330,7 @@ def test_reachability_marks_recovered_device_up():
             {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "down"}
         ],
         get_links=lambda: [],
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: True,  # back online
         set_status=lambda nid, st: statuses.__setitem__(nid, st),
         store_change=lambda *a, **k: None,
@@ -344,6 +346,7 @@ def test_reachability_revives_eligible_purge_device():
             {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "eligible_purge"}
         ],
         get_links=lambda: [],
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: True,  # back online
         set_status=lambda nid, st: statuses.__setitem__(nid, st),
         store_change=lambda *a, **k: None,
@@ -378,6 +381,7 @@ def test_reachability_probe_exception_leaves_status_untouched():
         NetdiscoConfig(enabled=True),
         get_known=lambda: devices,
         get_links=lambda: [{"a_nid": "R", "b_nid": "h1"}],
+        get_snapshots=lambda: [],
         is_alive=flaky_is_alive,
         set_status=lambda nid, st: statuses.__setitem__(nid, st),
         store_change=lambda kind, nid, detail=None, ts=None: changes_log.append((kind, nid)),
@@ -404,6 +408,7 @@ def test_reachability_cycle_appends_status_readings():
         NetdiscoConfig(enabled=True),
         get_known=lambda: devices,
         get_links=lambda: links,
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: ip == "10.0.0.1",  # R answers, h1 doesn't
         set_status=lambda *a, **k: None,
         store_change=lambda *a, **k: None,
@@ -428,6 +433,7 @@ def test_reachability_cycle_touches_last_seen_for_every_live_device():
         NetdiscoConfig(enabled=True),
         get_known=lambda: devices,
         get_links=lambda: [],
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: ip == "10.0.0.1",  # only R answers
         set_status=lambda *a, **k: None,
         store_change=lambda *a, **k: None,
@@ -445,6 +451,7 @@ def test_reachability_cycle_never_touches_seen_for_a_dead_probe():
         NetdiscoConfig(enabled=True),
         get_known=lambda: devices,
         get_links=lambda: [],
+        get_snapshots=lambda: [],
         is_alive=lambda ip, **k: False,  # never answers
         set_status=lambda *a, **k: None,
         store_change=lambda *a, **k: None,
@@ -452,3 +459,138 @@ def test_reachability_cycle_never_touches_seen_for_a_dead_probe():
         touch_seen=lambda nid, ts=None: touched.__setitem__(nid, ts),
     )
     assert touched == {}
+
+
+# --- agents' evidence of life (Task 1.7) ---
+_NOW = "2026-08-23T12:00:00+00:00"
+_OLD = "2026-08-23T08:00:00+00:00"
+
+
+_ROUTER = {"device_nid": "R", "ip": "10.0.0.1", "dev_type": "router", "status": "up"}
+
+
+def _run_evidence(devices, snapshots, probe_ok_at=None):
+    out: dict = {"status": {}, "changes": [], "readings": [], "touched": []}
+    out["probe_ok_at"] = {} if probe_ok_at is None else probe_ok_at
+    reconcile.run_reachability_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=lambda: [_ROUTER, *devices],
+        get_links=lambda: [{"a_nid": "R", "b_nid": "h1"}],
+        get_snapshots=lambda: snapshots,
+        is_alive=lambda ip, **k: ip == "10.0.0.1",  # only the root answers
+        set_status=lambda nid, st: out["status"].__setitem__(nid, st),
+        store_change=lambda kind, nid, detail=None, ts=None: out["changes"].append((kind, nid)),
+        store_reading=lambda nid, d, status=None, received_at=None: out["readings"].append(
+            (nid, d.get("source"), status)
+        ),
+        touch_seen=lambda nid, ts=None: out["touched"].append(nid),
+        probe_ok_at=out["probe_ok_at"],
+        now=_NOW,
+    )
+    return out
+
+
+def _host(status):
+    return {
+        "device_nid": "h1",
+        "ip": "10.0.0.3",
+        "mac": "AA-BB-CC-DD-EE-03",
+        "dev_type": "endpoint",
+        "status": status,
+    }
+
+
+_OBS_AD = {"mac": "AA-BB-CC-DD-EE-09", "ipv4": ["10.0.0.9"], "gateway": "10.0.0.1"}
+
+
+def _observer(neighbors, at=_NOW):
+    ad = {**_OBS_AD, "up": True, "role": "lan"}
+    return {
+        "device_id": "o",
+        "snapshot_at": at,
+        "last_seen": at,
+        "neighbors": neighbors,
+        "adapters": [ad],
+    }
+
+
+def test_reachability_arp_alive_device_is_up_not_unreachable():
+    nb = [{"ip": "10.0.0.3", "mac": "aa:bb:cc:dd:ee:03", "state": "Reachable"}]
+    out = _run_evidence([_host("unreachable")], [_observer(nb)])
+    assert out["status"] == {"h1": "up"}
+    assert out["readings"] == [("h1", "agent", "up")]
+    assert "h1" not in out["touched"] and out["changes"] == []
+
+
+def test_reachability_missing_silent_device_is_left_alone():
+    out = _run_evidence([_host("missing")], [])
+    assert out["status"] == {} and out["readings"] == [] and out["changes"] == []
+
+
+def test_reachability_root_cause_only_on_transition_to_down():
+    again = _run_evidence([_host("down")], [])
+    assert again["status"] == {"h1": "down"} and again["changes"] == []
+    first = _run_evidence([_host("up")], [])
+    assert first["changes"] == [("root_cause", "h1")]
+
+
+def _agent_snap(last_seen):
+    ad = {"mac": "AA-BB-CC-DD-EE-03", "ipv4": ["10.0.0.3"], "up": True, "role": "lan"}
+    return {"device_id": "a", "last_seen": last_seen, "snapshot_at": last_seen, "adapters": [ad]}
+
+
+def test_reachability_agent_with_fresh_heartbeat_is_up_without_root_cause(monkeypatch):
+    monkeypatch.setattr(db, "STALE_AFTER_SEC", 600)
+    out = _run_evidence([_host("down")], [_agent_snap("2026-08-23T11:59:00+00:00")])
+    assert out["status"] == {"h1": "up"} and out["changes"] == []
+
+
+def test_reachability_agent_with_old_heartbeat_is_still_down(monkeypatch):
+    monkeypatch.setattr(db, "STALE_AFTER_SEC", 600)
+    out = _run_evidence([_host("up")], [_agent_snap(_OLD)])
+    assert out["status"] == {"h1": "down"} and out["changes"] == [("root_cause", "h1")]
+
+
+# --- F1: old agent evidence must not hide a real outage ---
+_ARP_H1 = [{"ip": "10.0.0.3", "mac": "aa:bb:cc:dd:ee:03", "state": "Reachable"}]
+_ARP_AT = "2026-08-23T11:58:00+00:00"
+
+
+def test_reachability_probe_ok_newer_than_arp_evidence_is_not_kept_up():
+    probe_ok = {"h1": "2026-08-23T11:59:00+00:00"}  # answered the previous cycle
+    out = _run_evidence([_host("up")], [_observer(_ARP_H1, at=_ARP_AT)], probe_ok)
+    assert out["status"] == {"h1": "down"} and out["changes"] == [("root_cause", "h1")]
+
+
+def test_reachability_never_probe_ok_with_evidence_is_up():
+    out = _run_evidence([_host("down")], [_observer(_ARP_H1, at=_ARP_AT)])
+    assert out["status"] == {"h1": "up"}
+
+
+def test_reachability_evidence_newer_than_probe_ok_is_up():
+    probe_ok = {"h1": "2026-08-23T11:00:00+00:00"}
+    out = _run_evidence([_host("down")], [_observer(_ARP_H1, at=_ARP_AT)], probe_ok)
+    assert out["status"] == {"h1": "up"}
+
+
+def test_reachability_records_probe_ok_time_for_live_nodes():
+    out = _run_evidence([_host("up")], [])
+    assert out["probe_ok_at"] == {"R": _NOW}
+
+
+# --- F4: a node with no prior status that answers the probe becomes up ---
+def test_reachability_answering_node_without_prior_status_becomes_up():
+    statuses: dict = {}
+    reconcile.run_reachability_cycle(
+        NetdiscoConfig(enabled=True),
+        get_known=lambda: [{"device_nid": "X", "ip": "10.0.0.7", "dev_type": "endpoint"}],
+        get_links=lambda: [],
+        get_snapshots=lambda: [],
+        is_alive=lambda ip, **k: True,
+        set_status=lambda nid, st: statuses.__setitem__(nid, st),
+        store_change=lambda *a, **k: None,
+        store_reading=lambda *a, **k: None,
+        touch_seen=lambda *a, **k: None,
+        probe_ok_at={},
+    )
+    assert statuses == {"X": "up"}

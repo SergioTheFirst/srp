@@ -203,6 +203,17 @@ def test_store_net_change_appends(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Readers
 # --------------------------------------------------------------------------- #
+def test_upsert_endpoint_never_demotes_known_type(tmp_path: Path) -> None:
+    p = tmp_path / "srp.db"
+    db.init_db(p)
+    db.upsert_net_device({"device_nid": "nd-1", "dev_type": "printer"})
+    db.upsert_net_device({"device_nid": "nd-1", "dev_type": "endpoint"})
+    db.upsert_net_device({"device_nid": "nd-2", "dev_type": "endpoint"})
+    db.upsert_net_device({"device_nid": "nd-2", "dev_type": "switch"})
+    types = {r["device_nid"]: r["dev_type"] for r in _rows(p, "SELECT * FROM net_devices")}
+    assert types == {"nd-1": "printer", "nd-2": "switch"}
+
+
 def test_get_net_devices_lists_and_filters_by_type(tmp_path: Path) -> None:
     p = tmp_path / "srp.db"
     db.init_db(p)

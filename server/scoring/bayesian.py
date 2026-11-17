@@ -49,7 +49,7 @@ _CLASS_LABELS = {
     "storage": "Накопитель (SSD/HDD)",
     "power_thermal": "Питание / перегрев",
     "memory": "Память (RAM)",
-    "stability": "Стабильность ОС/ПО",
+    "stability": "Сбои ОС/ПО",
 }
 
 _BASE_PRIOR = {

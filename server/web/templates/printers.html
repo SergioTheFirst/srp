@@ -41,7 +41,7 @@ td.r, th.r { text-align:right; }
     <a href="/printers?days=90" class="{{ 'active' if days == 90 }}">90д</a>
     <a href="/printers?days=0"  class="{{ 'active' if days == 0 }}">Всё</a>
   </div>
-  <button class="poll-btn" id="poll-btn" onclick="pollNow()" {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>⟳ Опросить принтеры сейчас</button>
+  <button class="poll-btn" id="poll-btn" onclick="pollNow()" {% if read_only() %}disabled title="{{ read_only() }}"{% endif %}>⟳ Опросить принтеры сейчас</button>
   <span id="poll-result"></span>
   <span class="psearch"><input id="psearch" type="text" placeholder="поиск: имя / IP / вендор…" oninput="filterRows()"></span>
 </div>

@@ -3,7 +3,8 @@
     python -m server.main
 
 Binds host/port from ``server/config.json`` (default 0.0.0.0:8000 so the whole
-fleet can reach it). The DB is initialized once on startup from the same config.
+fleet can reach it), plus 127.0.0.1:<internet_view.proxy_port> (default 8001) for
+the internet-view proxy. The DB is initialized once on startup from the same config.
 """
 
 from __future__ import annotations
@@ -606,8 +607,9 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
             "Задайте ingest_token в server/config.json, чтобы включить проверку."
         )
         _authlog.warning(
-            "ingest_token не задан — из интернета сервер закрыт целиком, "
-            "агенты за пределами локальной сети получают 404."
+            "ingest_token не задан — из интернета порт %d отвечает 404 на всё, "
+            "агенты за пределами локальной сети не подключатся.",
+            cfg.port,
         )
     elif not cfg.admin_token:
         # Без admin_token кнопки удаления/очистки на дашборде получают 401 и
@@ -623,6 +625,9 @@ def create_app(cfg: ServerConfig | None = None) -> FastAPI:
     # Для кнопки «Отправить сейчас» и /zabbix/status: сам ServerConfig, чтобы
     # эндпоинт мог перечитать блок zabbix с диска ровно так же, как это делает цикл.
     app.state.server_config = cfg
+    # Порт прокси просмотра из интернета (None -- выключен): по нему main() открывает
+    # второй сокет, а шлюз узнаёт запросы оттуда. Считается один раз.
+    app.state.internet_port = cfg.internet_view_port()
     app.state.zabbix_from_disk = zabbix_from_disk
     app.state.netdisco_config = cfg.netdisco_config()  # for the /discovery/poll force button
     # D1: lets /network-map/collect skip the printers phase gracefully when the
@@ -684,17 +689,68 @@ def _disable_quickedit() -> None:
         k32.SetConsoleMode(handle, (mode.value & ~_ENABLE_QUICK_EDIT_MODE) | _ENABLE_EXTENDED_FLAGS)
 
 
+def _file_logging() -> dict:
+    """Журнал в файл SRP_LOG_FILE (его задаёт трей); без переменной -- как в окне.
+
+    Под треем окна нет: корневой логгер INFO пишет в файл с датой и уровнем (иначе srp.*,
+    включая журнал входов из интернета, уходят в lastResort -- в stderr). Возвращает
+    добавку к uvicorn.Config: своей настройки журнала нет, журнала запросов нет (каждый
+    опрос трея лёг бы строкой).
+    """
+    import os
+    from logging.handlers import RotatingFileHandler
+
+    path = os.environ.get("SRP_LOG_FILE")
+    if not path:
+        return {}
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(path, maxBytes=10 * 2**20, backupCount=2, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    return {"log_config": None, "access_log": False}
+
+
 def main() -> None:
+    import socket
+
     import uvicorn
 
     _disable_quickedit()
-    cfg = load_config()
+    log_kwargs = _file_logging()  # до первой записи: предупреждение о порте прокси -- в файл
+    # Хост и оба порта -- из того же приложения, что читает шлюз (без второго load_config).
+    cfg = app.state.server_config
+    proxy_port = app.state.internet_port
+    # socket.create_server, а не Config.bind_socket: тот ставит SO_REUSEADDR (на Windows
+    # занятый порт молча делит второй процесс) и при ошибке зовёт sys.exit.
+    family = socket.AF_INET6 if ":" in cfg.host else socket.AF_INET
+    socks = [socket.create_server((cfg.host, cfg.port), family=family)]
+    if proxy_port is not None:
+        try:
+            socks.append(socket.create_server(("127.0.0.1", proxy_port)))
+        except OSError as exc:
+            _authlog.warning(
+                "127.0.0.1:%d не открыть (%s) — просмотр из интернета выключен, "
+                "локальная сеть и агенты работают как прежде",
+                proxy_port,
+                exc,
+            )
     # X-Forwarded-For -- только от прокси на этом же ПК (Caddy): иначе внешний клиент
     # назвался бы «внутренним» (server/external_access.py). Явно, чтобы переменная
     # окружения FORWARDED_ALLOW_IPS не расширила доверие.
-    uvicorn.run(
-        app, host=cfg.host, port=cfg.port, log_level="info", forwarded_allow_ips="127.0.0.1"
+    server = uvicorn.Server(
+        uvicorn.Config(app, log_level="info", forwarded_allow_ips="127.0.0.1", **log_kwargs)
     )
+    # С sockets= uvicorn строку «Uvicorn running on» не пишет; его логгер настроен Config.
+    logging.getLogger("uvicorn.error").info(
+        "Сервер слушает %s (Ctrl+C — остановить)",
+        ", ".join("http://%s:%d" % s.getsockname()[:2] for s in socks),
+    )
+    with contextlib.suppress(KeyboardInterrupt):
+        server.run(sockets=socks)
+    if not server.started:
+        sys.exit(3)  # как uvicorn.run (STARTUP_FAILURE): иначе упавший lifespan -- exit 0
 
 
 if __name__ == "__main__":

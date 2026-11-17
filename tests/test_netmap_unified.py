@@ -552,6 +552,25 @@ def test_merge_agents_dedups_by_any_adapter_not_just_primary():
     assert n["device_id"] == "d1"
 
 
+def test_pc_with_two_net_device_rows_is_one_agent_node_on_the_active_nic():
+    dead, live = device_nid(mac=A1), device_nid(mac=A2)
+    sw = device_nid(mac=SW)
+    net_devices = [
+        _nd(dead, "agent", mac=A1, ip="192.168.56.1", device_id="d1"),
+        _nd(live, "endpoint", mac=A2, ip="10.0.0.9", device_id="d1"),
+        _nd(sw, "switch", mac=SW),
+    ]
+    snap = _snap("d1", A2, ip="10.0.0.9")
+    snap["adapters"].insert(
+        0, {"name": "x", "kind": "ethernet", "mac": A1, "up": False, "ipv4": ["192.168.56.1"]}
+    )
+    g = build_network_map(net_devices, [_link(dead, sw)], [snap], [])
+    by = _by_nid(g)
+    assert dead not in by and {live, sw} <= set(by)  # no duplicate, no stub
+    assert by[live]["dev_type"] == "agent" and by[live]["ip"] == "10.0.0.9"
+    assert [(e["a"], e["b"]) for e in g["links"] if e["link_kind"] == "l2-edge"] == [(live, sw)]
+
+
 # --- F5: _agent_nid must not match on a virtual/tunnel adapter's MAC or IP ---
 def _snap_with_virtual_adapter(did, mac, ip):
     return {
@@ -596,3 +615,28 @@ def test_agent_nid_ignores_virtual_adapter_shared_across_fleet():
     g = build_network_map(net_devices, [], [snap1, snap2], [])
     agent_nids = {n["nid"] for n in g["nodes"] if n.get("device_id")}
     assert agent_nids == {device_nid(mac="AA-BB-CC-00-00-01"), device_nid(mac="AA-BB-CC-00-00-02")}
+
+
+def _segment_snap():
+    s = _snap("d1", A1)
+    s["adapters"][0].update({"role": "lan", "link_mbps": 1000.0})
+    s["neighbors"].append({"ip": "192.168.1.50", "mac": PR, "state": "Reachable"})
+    s["neighbors"].append({"ip": "192.168.1.60", "mac": "00-11-22-33-44-66", "state": "Stale"})
+    return s
+
+
+def test_arp_neighbour_gets_segment_link_to_gateway():
+    pc, rt = device_nid(mac=PR), device_nid(mac=RT)
+    nd = [_nd(pc, "endpoint", ip="192.168.1.50", mac=PR)]
+    g = build_network_map(nd, [], [_segment_snap()], [])
+    seg = [e for e in g["links"] if e["link_kind"] == "l2-segment"]
+    assert [(e["a"], e["b"], e["observers"]) for e in seg] == [(pc, rt, 1)]
+    # the unknown neighbour (.60) is not a node and has no link
+    assert device_nid(mac="00-11-22-33-44-66") not in _by_nid(g)
+    assert all({"speed_mbps", "port_down"} <= set(e) for e in g["links"])
+
+
+def test_agent_uplink_carries_link_speed():
+    g = build_network_map([], [], [_segment_snap()], [])
+    (up,) = [e for e in g["links"] if e["link_kind"] == "agent-uplink"]
+    assert up["speed_mbps"] == 1000 and isinstance(up["speed_mbps"], int)

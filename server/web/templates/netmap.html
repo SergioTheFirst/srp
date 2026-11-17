@@ -39,7 +39,7 @@ table.net-inv th { position: static; }
 <div class="net-toolbar">
   <input id="netgraph-search" class="net-search" type="search"
          placeholder="фильтр: имя / IP / MAC / тип…" autocomplete="off">
-  <button class="net-poll-btn" id="net-poll-btn" onclick="pollNetworkMap()" {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>⟳ Собрать карту сейчас</button>
+  <button class="net-poll-btn" id="net-poll-btn" onclick="pollNetworkMap()" {% if read_only() %}disabled title="{{ read_only() }}"{% endif %}>⟳ Собрать карту сейчас</button>
   <span id="net-poll-result" class="net-poll-result"></span>
   {% if snapshots %}
   <span id="ng-timemachine" class="net-poll-result"></span>
@@ -50,6 +50,16 @@ table.net-inv th { position: static; }
     <div class="stat"><div class="n {{ 'bad' if graph.totals.anomalies }}">{{ graph.totals.anomalies }}</div><div class="l">аномалий</div></div>
   </div>
 </div>
+{% set cov = graph.totals.coverage %}
+{% if cov %}
+<p class="muted small" style="margin-bottom:8px">
+  Полнота: к порту {{ cov.nodes.port }} · к сегменту {{ cov.nodes.segment }} · только шлюз {{ cov.nodes.uplink }} · без связи {{ cov.nodes.none }}
+  {% for h in cov.hints %}
+    {% if h.code == 'no_port_evidence' %}<br>Порты и кабели не видны: сетевое оборудование не опрашивается и не объявляет себя — карта показывает сегменты.
+    {% elif h.code == 'subnet_no_vantage' %}<br>Подсетей без агента: {{ h.count }} — их устройства видны без связей. Поставьте агент на любой ПК такой подсети.{% endif %}
+  {% endfor %}
+</p>
+{% endif %}
 {% if history %}
 <p class="muted small" style="margin-bottom:8px">
   Показан исторический кадр топологии ({{ history.received_at[:16]|replace('T',' ') if history.received_at else '—' }}).

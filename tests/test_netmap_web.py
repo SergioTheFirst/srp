@@ -81,7 +81,7 @@ def test_device_page_shows_axis_and_subnet_note(client):
     page = client.get("/device/map-21")
     assert page.status_code == 200
     body = page.text
-    assert "Здоровье сети" in body  # axis card
+    assert "Риск сетевых проблем" in body  # axis card
     assert "инфраструктур" in body  # subnet annotation (D8)
     assert "Качество связи" in body  # probes table
 
@@ -682,3 +682,73 @@ def test_net_device_card_shows_interfaces_and_links(client):
 
 def test_net_device_card_404(client):
     assert client.get("/netdisco/device/nope").status_code == 404
+
+
+def test_netgraph_segment_link_tooltip(client):
+    """l2-segment links carry observers into the canvas and get their own tooltip text."""
+    body = client.get("/netmap").text
+    assert "observers: l.observers" in body
+    assert "один сегмент (ARP агентов)" in body
+    assert "видят агентов: " in body
+
+
+# --------------------------------------------------------------------------- #
+# «Полнота» line: aggregates + Russian hints under the toolbar
+# --------------------------------------------------------------------------- #
+def _graph_with_coverage(hints):
+    return {
+        "nodes": [],
+        "links": [],
+        "subnets": [],
+        "totals": {
+            "nodes": 0,
+            "links": 0,
+            "anomalies": 0,
+            "coverage": {
+                "nodes": {"present": 10, "port": 1, "segment": 4, "uplink": 3, "none": 2},
+                "links": {},
+                "hints": hints,
+            },
+        },
+    }
+
+
+def _page_with_hints(client, monkeypatch, hints):
+    import server.web.dashboard as dash
+
+    monkeypatch.setattr(dash, "_unified_map_graph", lambda _r: _graph_with_coverage(hints))
+    return client.get("/netmap").text
+
+
+def test_netmap_coverage_line_and_known_hints(client, monkeypatch):
+    body = _page_with_hints(
+        client,
+        monkeypatch,
+        [{"code": "no_port_evidence"}, {"code": "subnet_no_vantage", "count": 3}],
+    )
+    assert "Полнота: к порту 1 · к сегменту 4 · только шлюз 3 · без связи 2" in body
+    assert (
+        "Порты и кабели не видны: сетевое оборудование не опрашивается и не объявляет себя"
+        " — карта показывает сегменты." in body
+    )
+    assert (
+        "Подсетей без агента: 3 — их устройства видны без связей."
+        " Поставьте агент на любой ПК такой подсети." in body
+    )
+
+
+def test_netmap_coverage_unknown_hint_renders_nothing(client, monkeypatch):
+    body = _page_with_hints(client, monkeypatch, [{"code": "from_the_future"}])
+    assert "Полнота:" in body
+    assert "Порты и кабели" not in body and "Подсетей без агента" not in body
+
+
+def test_netmap_historical_frame_has_no_coverage_line(client):
+    import server.db as db
+
+    graph = {"nodes": [{"nid": "nd-1", "dev_type": "router", "ip": "10.0.0.1"}], "links": []}
+    db.store_topology_snapshot(graph, received_at="2026-06-20T00:00:00+00:00")
+    sid = db.list_topology_snapshots(limit=1)[0]["id"]
+    body = client.get(f"/netmap?at={sid}").text
+    assert "Показан исторический кадр" in body
+    assert "Полнота:" not in body

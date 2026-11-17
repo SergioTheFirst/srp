@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Вход — J-Space{% endblock %}
+{% block subtitle %}просмотр из интернета{% endblock %}
+
+{% block extra_head %}
+<style>
+  .login { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }
+  .login label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 14px; }
+  .login input {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: var(--r-btn); padding: 9px 11px; font: 16px/1.3 var(--font-body);
+  }
+  .login input:focus { outline: none; border-color: var(--accent); }
+  .login button {
+    cursor: pointer; border: 1px solid var(--accent); background: var(--accent-dim); color: var(--accent);
+    font: 700 14px/1 var(--font-body); padding: 10px 16px; border-radius: var(--r-btn);
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="section-label">Вход</div>
+{% if failed %}
+<div class="alert-banner alert-bad" role="alert">Неверное имя или пароль</div>
+{% endif %}
+{# Без action: форма уходит на тот же /login?next=…; сам next в страницу не выводится. #}
+<form method="post" class="login">
+  <label>Имя <input name="username" autocomplete="username" required autofocus></label>
+  <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Войти</button>
+</form>
+{% endblock %}

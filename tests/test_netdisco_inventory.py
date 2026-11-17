@@ -75,6 +75,27 @@ def test_agents_are_classified_as_agent_with_their_identity() -> None:
     assert by["nd-mac-AA-BB-CC-DD-EE-02"].dev_type == "agent"
 
 
+def test_agent_is_keyed_by_its_active_lan_adapter_not_the_first_one() -> None:
+    snap = {
+        "device_id": "dev-C",
+        "hostname": "PC-C",
+        "adapters": [
+            {"mac": "02-00-00-00-00-01", "ipv4": ["192.168.56.1"], "up": False},
+            {"mac": "02-00-00-00-00-02", "ipv4": ["172.17.0.1"], "up": True, "role": "virtual"},
+            {
+                "mac": "AA-BB-CC-DD-EE-03",
+                "ipv4": ["10.0.0.30"],
+                "up": True,
+                "gateway": "10.0.0.1",
+            },
+        ],
+        "neighbors": [],
+    }
+    agent = next(d for d in build_inventory([snap]) if d.dev_type == "agent")
+    assert agent.nid == "nd-mac-AA-BB-CC-DD-EE-03"
+    assert agent.ip == "10.0.0.30"
+
+
 def test_agentless_neighbor_becomes_endpoint_with_oui_vendor() -> None:
     by = {d.nid: d for d in build_inventory([_SNAP_A, _SNAP_B])}
     gw = by["nd-mac-00-50-56-AA-BB-CC"]

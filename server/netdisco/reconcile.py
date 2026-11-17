@@ -35,6 +35,7 @@ from server.netdisco.graph import build_graph
 from server.netdisco.metrics import METRICS
 from server.netdisco.models import NetDevice, NetInterface, ResolvedLink
 from server.netdisco.scheduler import _bind_community, _make_session, _poll_lock
+from server.netdisco.segments import alive_nids
 from server.netdisco.wireless import collect_wireless
 from server.printers.discovery import is_rfc1918
 
@@ -297,6 +298,114 @@ def run_topology_cycle(
 _ROOT_TYPES = frozenset({"agent", "router"})
 
 
+def _device_resolver(devices: List[dict[str, Any]]) -> Callable[..., Optional[str]]:
+    """(mac, ip) -> an existing device_nid: normalised MAC first, then IP."""
+    by_mac = {normalize_mac(d["mac"]): d["device_nid"] for d in devices if d.get("mac")}
+    by_ip = {d["ip"]: d["device_nid"] for d in devices if d.get("ip")}
+
+    def resolve(mac: Optional[str], ip: Optional[str]) -> Optional[str]:
+        return by_mac.get(normalize_mac(mac)) or by_ip.get(ip or "")
+
+    return resolve
+
+
+# ponytail: process-local, lost on restart -- a device that dies during a server restart is
+# treated as probe-silent until its agent evidence expires; upgrade path = persist the last
+# successful probe time per node.
+_PROBE_OK_AT: dict[str, str] = {}
+
+
+def _probe(cfg: NetdiscoConfig, devices: List[dict[str, Any]], is_alive: Callable[..., bool]):
+    """Probe every RFC1918 device in a pool -> ``(live_nids, down_set)``.
+
+    o5-B6: the pure ``ip -> bool`` probe is the only thing that runs off-thread; the pool
+    is sized ``min(cfg.scan_workers, len(targets) or 1)`` like ``scan.scan()``."""
+    community = resolve_community(cfg, store=default_store())
+    targets = [
+        (dev.get("ip"), dev.get("device_nid"))
+        for dev in devices
+        if dev.get("ip") and dev.get("device_nid") and is_rfc1918(dev.get("ip"))
+    ]
+
+    def probe_one(ip: str) -> Optional[bool]:
+        try:
+            return is_alive(ip, ports=cfg.scan_ports, community=community, version=cfg.snmp_version)
+        except Exception:
+            # F1: a probe crash (fd/port exhaustion under the thread fan-out) is
+            # NOT the same fact as "host is down" -- None means "status untouched
+            # this cycle", never landing in down_set (which would false-cascade
+            # the whole segment to DOWN/UNREACHABLE). UNKNOWN over false confidence.
+            _log.warning("reachability probe failed for %s", ip, exc_info=True)
+            return None
+
+    live_nids: set = set()
+    down_set: set = set()
+    with ThreadPoolExecutor(max_workers=min(cfg.scan_workers, len(targets) or 1)) as pool:
+        for (_ip, nid), answered in zip(targets, pool.map(probe_one, [t[0] for t in targets])):
+            if answered is not None:  # None = probe error -- leave this status untouched
+                (live_nids if answered else down_set).add(nid)
+    return live_nids, down_set
+
+
+def _agent_alive(
+    cfg: NetdiscoConfig, devices: List[dict[str, Any]], snapshots: list, ok_at: dict, now: str
+) -> set:
+    """Agents' evidence of life: an L2-adjacent observer saw the device, so a failed probe
+    is not failure -- unless the probe answered more recently than that evidence (F1)."""
+    evidence = alive_nids(
+        snapshots,
+        _device_resolver(devices),
+        now=now,
+        fresh_sec=cfg.missing_after_sec,
+        agent_fresh_sec=db.STALE_AFTER_SEC,  # ServerConfig.stale_after_sec
+    )
+    return {
+        nid
+        for nid, ts in evidence.items()
+        if nid not in ok_at or (changes._age_seconds(ts, ok_at[nid]) or 0) > 0
+    }
+
+
+def _roots(devices: List[dict[str, Any]]) -> set:
+    return {
+        d["device_nid"] for d in devices if d.get("dev_type") in _ROOT_TYPES and d.get("device_nid")
+    }
+
+
+def _apply_verdicts(verdicts: dict, prior: dict, set_status, store_reading, store_change, now):
+    """Persist DOWN/UNREACHABLE verdicts -> ``(down, unreachable)`` counts."""
+    down = unreachable = 0
+    for nid, verdict in verdicts.items():
+        if prior.get(nid) in (changes.MISSING, changes.ELIGIBLE_PURGE):
+            continue  # lifecycle status stays; the node still took part in correlation
+        set_status(nid, verdict.status)
+        store_reading(nid, {"source": "reachability"}, status=verdict.status)
+        if verdict.status == correlation.DOWN:
+            down += 1
+            if prior.get(nid) != correlation.DOWN:
+                store_change("root_cause", nid, {"status": correlation.DOWN}, now)
+        else:
+            unreachable += 1
+    return down, unreachable
+
+
+def _apply_up(live_nids: set, agent_alive: set, prior: dict, set_status, store_reading) -> None:
+    for nid in live_nids:  # a device that answers again (or for the first time) is up
+        if prior.get(nid) in (
+            None,
+            correlation.DOWN,
+            correlation.UNREACHABLE,
+            changes.MISSING,
+            changes.ELIGIBLE_PURGE,
+        ):
+            set_status(nid, "up")
+            store_reading(nid, {"source": "reachability"}, status="up")
+    for nid in agent_alive - live_nids:  # agents see it alive -> up (once, on transition)
+        if nid in prior and prior[nid] != "up":
+            set_status(nid, "up")
+            store_reading(nid, {"source": "agent"}, status="up")
+
+
 def run_reachability_cycle(
     cfg: NetdiscoConfig,
     *,
@@ -307,95 +416,40 @@ def run_reachability_cycle(
     store_change: Callable[..., None] = db.store_net_change,
     store_reading: Callable[..., None] = db.store_net_device_reading,
     touch_seen: Callable[[str, Optional[str]], None] = db.touch_net_device_seen,
+    get_snapshots: Callable[[], list] = db.get_network_snapshots,
+    probe_ok_at: Optional[dict] = None,
     now: Optional[str] = None,
 ) -> dict[str, int]:
     """Ping known RFC1918 devices, correlate failures into DOWN vs UNREACHABLE.
 
     A device whose path to a root (agent/router) crosses another down device is
     UNREACHABLE (suppressed); the upstream failure is the single root cause raised.
-    Gated by ``cfg.enabled``, serialized by the shared lock, read-only liveness only.
-
-    o5-B6: the liveness probe (``is_alive``, a pure ``ip -> bool`` network check) for
-    every RFC1918 target runs in a ``ThreadPoolExecutor`` sized
-    ``min(cfg.scan_workers, len(targets) or 1)``, mirroring
-    ``server/netdisco/scan.py``'s ``scan()``. All the DB writes below (set_status /
-    store_reading / store_change) already ran AFTER the probe loop even before this
-    change -- that shape is preserved, so nothing but the pure probe ever runs
-    off-thread. A device that answers again is returned to ``up``. All dependencies
-    injectable."""
+    Gated by ``cfg.enabled``, serialized by the shared lock, read-only liveness only;
+    all DB writes run after the probe pool. All dependencies injectable."""
     if not cfg.enabled:
         return {"down": 0, "unreachable": 0, "busy": 0}
     if not _poll_lock.acquire(blocking=False):
         return {"down": 0, "unreachable": 0, "busy": 1}
     try:
-        community = resolve_community(cfg, store=default_store())
         devices = get_known()
-        targets = [
-            (dev.get("ip"), dev.get("device_nid"))
-            for dev in devices
-            if dev.get("ip") and dev.get("device_nid") and is_rfc1918(dev.get("ip"))
-        ]
-        ips = [ip for ip, _nid in targets]
-
-        def probe_one(ip: str) -> Optional[bool]:
-            try:
-                return is_alive(
-                    ip, ports=cfg.scan_ports, community=community, version=cfg.snmp_version
-                )
-            except Exception:
-                # F1: a probe crash (fd/port exhaustion under the thread fan-out) is
-                # NOT the same fact as "host is down" -- None means "status untouched
-                # this cycle", never landing in down_set (which would false-cascade
-                # the whole segment to DOWN/UNREACHABLE). UNKNOWN over false confidence.
-                _log.warning("reachability probe failed for %s", ip, exc_info=True)
-                return None
-
-        workers = min(cfg.scan_workers, len(targets) or 1)
-        down_set: set = set()
-        live_nids: set = set()
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for (_ip, nid), alive in zip(targets, pool.map(probe_one, ips)):
-                if alive is None:
-                    continue  # probe error -- leave this device's status untouched
-                (live_nids if alive else down_set).add(nid)
-        # D2: a host that just answered a TCP/SNMP probe WAS seen right now --
-        # advance last_seen independent of the DOWN/UNREACHABLE correlation
-        # verdict below (set_net_device_status/set_status deliberately never
-        # touches last_seen, see its own docstring).
-        # F9/LOW-5 (review): this probe is IP-only (no MAC confirmation), so a
-        # reassigned IP that now answers for a DIFFERENT, departed device's old
-        # host still keeps ITS last_seen fresh until the next MAC-confirmed
-        # sighting (inventory/topology). Accepted -- same evidence class as the
-        # status="up" verdict above; an ICMP/ARP-confirmed probe would be the
-        # upgrade path if this ever needs tightening.
+        stamp = now or _iso_now()
+        ok_at = _PROBE_OK_AT if probe_ok_at is None else probe_ok_at
+        live_nids, down_set = _probe(cfg, devices, is_alive)
+        # D2: a host that just answered WAS seen right now -- advance last_seen regardless
+        # of the verdict (set_status never touches it). F9/LOW-5: IP-only probe, so a
+        # reassigned IP keeps a departed device's last_seen fresh -- accepted.
         for nid in live_nids:
             touch_seen(nid, now)
-        graph = build_graph(devices, get_links())
-        roots = {
-            d["device_nid"]
-            for d in devices
-            if d.get("dev_type") in _ROOT_TYPES and d.get("device_nid")
-        }
-        verdicts = correlation.correlate(graph, down_set, roots)
-        down = unreachable = 0
-        for nid, verdict in verdicts.items():
-            set_status(nid, verdict.status)
-            store_reading(nid, {"source": "reachability"}, status=verdict.status)
-            if verdict.status == correlation.DOWN:
-                down += 1
-                store_change("root_cause", nid, {"status": correlation.DOWN}, now)
-            else:
-                unreachable += 1
+            ok_at[nid] = stamp
+        agent_alive = _agent_alive(cfg, devices, get_snapshots(), ok_at, stamp)
+        verdicts = correlation.correlate(
+            build_graph(devices, get_links()), down_set - agent_alive, _roots(devices)
+        )
         prior = {d.get("device_nid"): d.get("status") for d in devices}
-        for nid in live_nids:  # a device that answers again recovers to up
-            if prior.get(nid) in (
-                correlation.DOWN,
-                correlation.UNREACHABLE,
-                changes.MISSING,
-                changes.ELIGIBLE_PURGE,
-            ):
-                set_status(nid, "up")
-                store_reading(nid, {"source": "reachability"}, status="up")
+        down, unreachable = _apply_verdicts(
+            verdicts, prior, set_status, store_reading, store_change, now
+        )
+        _apply_up(live_nids, agent_alive, prior, set_status, store_reading)
         METRICS.observe_cycle("reachability", down=down, unreachable=unreachable)
         return {"down": down, "unreachable": unreachable, "busy": 0}
     finally:

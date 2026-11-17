@@ -133,6 +133,7 @@ def test_delete_device_nulls_net_link(db_init):
     row = db.get_net_device("nd-mac-AA")
     assert row is not None  # the MAC-keyed network node is NOT deleted
     assert row["device_id"] is None  # the dangling agent FK is cleared
+    assert row["dev_type"] == "endpoint"  # no longer an agent node
 
 
 # --------------------------------------------------------------------------- #

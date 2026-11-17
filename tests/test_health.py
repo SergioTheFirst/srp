@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pytest
+from server import demo_redact
 from server.analytics.health import (
     _ACTIONS,
     _BLIND_ACTION,
@@ -915,3 +916,14 @@ def test_unknown_state_is_not_painted_good() -> None:
 
     band, _factors = _reconcile("unknown", 95.0, 65.0)
     assert band == "unknown", f"вердикт «нет видимости» покрашен как {band}"
+
+
+def test_observability_evidence_names_each_live_channel() -> None:
+    # a reason is "what is seen": each live channel is named, so labels stay distinct
+    # once the public stand cuts "(вес N)" (they used to collapse into one phrase)
+    axes = {"storage_risk": _axis(5.0), "disk_fill_risk": _axis(5.0)}
+    real = {**_HOLLOW_ERRCHAIN, "counts": {"early": 3, "damage": 0, "crash": 0, "app_hang": 0}}
+    o, _blind = _observability(axes, {}, real, None)
+    labels = [demo_redact.strip_weight(e["label"]) for e in o.evidence]
+    assert labels[:2] == ["SMART диска", "анализ событий"]
+    assert len(labels) == len(set(labels)) >= 3

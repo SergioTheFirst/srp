@@ -9,6 +9,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional
 
+from server import limits
 from server.netdisco.config import NetdiscoConfig, load_netdisco_config
 from server.printers.config import PrinterConfig, load_printer_config
 from server.zabbix.config import ZabbixConfig, load_zabbix_config
@@ -122,6 +123,31 @@ class ServerConfig:
     # Отдельного enabled нет: непустой zabbix.server = включено. Блок парсится
     # в ZabbixConfig через zabbix_config(), как printers/netdisco.
     zabbix: Optional[dict[str, Any]] = None
+    # Просмотр дашборда из интернета: Caddy -> 127.0.0.1:proxy_port. Блок сырой, как
+    # zabbix; решение -- internet_view_port().
+    internet_view: Optional[dict[str, Any]] = None
+
+    def internet_view_port(self) -> Optional[int]:
+        """Порт прокси просмотра из интернета или None (выключено).
+
+        Одно решение и для второго сокета (main()), и для шлюза. Выключает только JSON
+        false; нет блока или ключа -- 8001. Не бросает: зовётся из create_app() при
+        импорте server.main, а падение там -- вечный перезапуск в start_server.bat.
+        """
+        iv = self.internet_view if isinstance(self.internet_view, dict) else {}
+        if limits.DEMO_MODE or self.internet_view is False or iv.get("enabled") is False:
+            return None
+        port = iv.get("proxy_port", 8001)
+        # type() is int: bool и строка -- не порт.
+        if type(port) is int and 1 <= port <= 65535 and port != self.port:
+            return port
+        logger.warning(
+            "internet_view.proxy_port=%r -- нужен порт 1-65535, не равный port=%d; "
+            "просмотр из интернета выключен",
+            port,
+            self.port,
+        )
+        return None
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
@@ -167,6 +193,10 @@ def load_config(path: Optional[Path] = None) -> ServerConfig:
                 continue
             if key in known:
                 setattr(cfg, key, value)
+    # «"port": "8000"» в кавычках uvicorn.run принимал (getaddrinfo); socket.create_server
+    # в main() и сравнение в internet_view_port() -- только int. Мусор -- как до ветки, на bind.
+    if isinstance(cfg.port, str) and cfg.port.strip().isdecimal():
+        cfg.port = int(cfg.port)
     env_dir = os.environ.get(_ORG_DIRECTORY_ENV)
     if env_dir:
         cfg.org_directory_path = env_dir

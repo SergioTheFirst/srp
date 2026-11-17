@@ -237,6 +237,14 @@ def test_heatmap_z_is_discrete_band_ordinals_in_column_order() -> None:
     assert hm["z"][0] == [1, 2, 0, 3, 2, 0, 1, 0, 0, 3]
     assert len(hm["cols"]) == 10
     assert hm["cols"][:4] == ["Состояние", "Повреждения (D)", "Устойчивость (R)", "Видимость (O)"]
+    assert hm["cols"][4:] == [
+        "Риск отказа диска (SMART)",
+        "Старение ПО",
+        "Риск сбоев ОС",
+        "Риск нехватки места и сбоя обновлений",
+        "Риск сетевых проблем",
+        "Риск по трендам",
+    ]
 
 
 def test_heatmap_caps_at_100_rows() -> None:

@@ -362,7 +362,7 @@
         a: a, b: b, conf: l.confidence, kind: l.link_kind,
         ambiguous: !!l.ambiguous, medium: l.medium, quality: l.quality, vlan: l.vlan,
         via: l.via_source, a_port: l.a_port, b_port: l.b_port,
-        speed: l.speed_mbps, portDown: !!l.port_down, bridge: !!l.bridge,
+        observers: l.observers, speed: l.speed_mbps, portDown: !!l.port_down, bridge: !!l.bridge,
         change: l.change, cidr: l.cidr, idx: links.length
       });
     }
@@ -1005,7 +1005,9 @@
     tip.textContent = "";
     row("t-head", "связь");
     row("t-muted", "тип: " + (L.kind === "agent-uplink" ? "аплинк агента" :
+        L.kind === "l2-segment" ? "один сегмент (ARP агентов)" :
         (L.kind === "l3" || (L.kind || "").indexOf("l3") !== -1) ? "L3-маршрут" : "L2-линк"));
+    if (typeof L.observers === "number") row("t-muted", "видят агентов: " + L.observers);
     if (L.via) row("t-muted", "источник: " + L.via);
     if (L.conf) row(tipCls(L.conf === "high" ? "good" : L.conf === "medium" ? "warn" : "muted"), "уверенность: " + L.conf);
     if (L.medium) row("t-muted", "среда: " + (L.medium === "wireless" ? "беспроводная" :

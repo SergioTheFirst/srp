@@ -1,0 +1,15 @@
+# Внешний IP сервера — в ДВУХ местах: default_sni и адрес сайта
+{
+	admin off
+	auto_https disable_redirects
+	default_sni 203.0.113.10
+}
+203.0.113.10 {
+	tls {
+		issuer acme {
+			profile shortlived
+			disable_http_challenge
+		}
+	}
+	reverse_proxy 127.0.0.1:8001
+}

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from server.analytics.netmap import (
+    primary_adapter,
     quality_overlay,
     subnet_anomaly,
     subnet_hint,
@@ -24,6 +25,8 @@ from server.analytics.netmap import (
 from server.analytics.oui import normalize_mac, vendor_for_mac
 from server.netdisco.graph import build_graph, find_articulation_points, find_bridges
 from server.netdisco.identity import device_nid
+from server.netdisco.metrics import map_coverage
+from server.netdisco.segments import segment_links
 
 # Adapter ``kind`` substrings that mark an agent uplink (and Ф7 wireless edges).
 _WIRELESS_KINDS = ("wifi", "wireless", "wi-fi", "802.11", "wlan")
@@ -166,7 +169,7 @@ def _agent_nid(snap: dict[str, Any], by_mac: _Index, by_ip: _Index) -> str:
         ip = (a.get("ipv4") or [None])[0]
         if not _is_unplaceable_ip(ip) and ip in by_ip:
             return by_ip[ip]
-    a0 = _primary_adapter(snap)
+    a0 = primary_adapter(snap.get("adapters"))
     ip0 = (a0.get("ipv4") or [None])[0]
     return _resolve_nid(a0.get("mac"), ip0, by_mac, by_ip)
 
@@ -254,12 +257,8 @@ def _seed_net_devices(
     return nodes, by_mac, by_ip, by_device_id, by_printer_id
 
 
-def _primary_adapter(snap: dict[str, Any]) -> dict[str, Any]:
-    return next((a for a in snap.get("adapters") or [] if isinstance(a, dict)), {})
-
-
 def _synth_agent_node(nid: str, snap: dict[str, Any], did: str) -> _Node:
-    a0 = _primary_adapter(snap)
+    a0 = primary_adapter(snap.get("adapters"))
     ip0 = (a0.get("ipv4") or [None])[0]
     mac0 = normalize_mac(a0.get("mac"))
     return {
@@ -284,11 +283,11 @@ def _synth_agent_node(nid: str, snap: dict[str, Any], did: str) -> _Node:
 
 
 def _enrich_agent(node: _Node, snap: dict[str, Any], did: str) -> None:
-    a0 = _primary_adapter(snap)
+    a0 = primary_adapter(snap.get("adapters"))
     ip0 = (a0.get("ipv4") or [None])[0]
     mac0 = normalize_mac(a0.get("mac"))
     node["device_id"] = did
-    if node.get("dev_type") in (None, "unknown"):
+    if node.get("dev_type") in (None, "unknown", "endpoint"):
         node["dev_type"] = "agent"
     if not node.get("ip"):
         node["ip"] = ip0
@@ -310,32 +309,58 @@ def _enrich_agent(node: _Node, snap: dict[str, Any], did: str) -> None:
     node["card_url"] = _card_url(did, node.get("printer_id"), node["nid"])
 
 
+def _drop_agent_dupes(
+    nodes: dict[str, _Node], did: str, keep: str, indexes: tuple[_Index, ...], owners: set
+) -> dict[str, str]:
+    """Remove the other nodes of agent *did* (its other NICs, from *owners*); re-point their
+    index entries to *keep*. Returns {dropped nid: keep} so stored links can follow."""
+    dupes = {n for n in owners if n != keep and nodes.get(n, {}).get("device_id") == did}
+    if not dupes:
+        return {}
+    for n in dupes:
+        del nodes[n]
+    for idx in indexes:
+        for k, v in idx.items():
+            if v in dupes:
+                idx[k] = keep
+    return dict.fromkeys(dupes, keep)
+
+
 def _merge_agents(
     nodes: dict[str, _Node],
     snapshots: list[dict[str, Any]],
     by_mac: _Index,
     by_ip: _Index,
     by_device_id: _Index,
-) -> None:
+) -> dict[str, str]:
+    """Merge agents into *nodes*; returns the alias map of dropped duplicate nids."""
+    alias: dict[str, str] = {}
+    owners: dict[str, set] = {}  # device_id -> nids, built once (not a scan per snapshot)
+    for n, v in nodes.items():
+        owners.setdefault(v.get("device_id") or "", set()).add(n)
     for snap in snapshots:
         did = snap.get("device_id")
         if not did:
             continue
-        a0 = _primary_adapter(snap)
+        a0 = primary_adapter(snap.get("adapters"))
         ip0 = (a0.get("ipv4") or [None])[0]
         nm0 = normalize_mac(a0.get("mac"))
-        nid = by_device_id.get(did) or _agent_nid(snap, by_mac, by_ip)
+        nid = by_mac.get(nm0 or "") or by_device_id.get(did) or _agent_nid(snap, by_mac, by_ip)
         if nid == "nd-unknown":
             continue  # no MAC/IP -> unplaceable; never collide on the null-identity bucket
         if nid in nodes:
             _enrich_agent(nodes[nid], snap, did)
         else:
             nodes[nid] = _synth_agent_node(nid, snap, did)
+        indexes = (by_mac, by_ip, by_device_id)
+        alias.update(_drop_agent_dupes(nodes, did, nid, indexes, owners.get(did, set())))
+        owners[did] = {nid}
         by_device_id[did] = nid
         if nm0:
             by_mac.setdefault(nm0, nid)
         if ip0:
             by_ip.setdefault(ip0, nid)
+    return alias
 
 
 def _synth_printer_node(nid: str, p: dict[str, Any], pid: str) -> _Node:
@@ -506,20 +531,20 @@ def _real_links(
     return out
 
 
-def _gateways(snap: dict[str, Any]) -> dict[str, tuple[Optional[str], Optional[int], bool]]:
-    """gateway-IP -> (kind, phys_medium, is_tunnel) of the adapter carrying it (medium hint).
+def _gateways(snap: dict[str, Any]) -> dict[str, tuple[Optional[str], Optional[int], bool, Any]]:
+    """gateway-IP -> (kind, phys_medium, is_tunnel, link_mbps) of the carrying adapter.
 
     Adapters with ``up`` True are considered before ``up`` False/unknown ones
     (Python's sort is stable, so ties keep the agent's own adapter order) -- a
     stale/disabled ethernet NIC with a leftover gateway entry must not paint a
     live Wi-Fi uplink as wired (З.5)."""
-    out: dict[str, tuple[Optional[str], Optional[int], bool]] = {}
+    out: dict[str, tuple[Optional[str], Optional[int], bool, Any]] = {}
     adapters = [a for a in snap.get("adapters") or [] if isinstance(a, dict)]
     for a in sorted(adapters, key=lambda a: a.get("up") is not True):
         gw = a.get("gateway")
         if gw and str(gw) not in out:
             is_tunnel = a.get("tunnel") is True or a.get("role") == "tunnel"
-            out[str(gw)] = (a.get("kind"), a.get("phys_medium"), is_tunnel)
+            out[str(gw)] = (a.get("kind"), a.get("phys_medium"), is_tunnel, a.get("link_mbps"))
     return out
 
 
@@ -561,6 +586,12 @@ def _ensure_gateway(
     }
 
 
+def _speed(mbps: Any) -> Any:
+    if isinstance(mbps, bool) or not isinstance(mbps, (int, float)):
+        return None
+    return int(mbps) if float(mbps).is_integer() else mbps
+
+
 def _agent_uplinks(
     snapshots: list[dict[str, Any]],
     nodes: dict[str, _Node],
@@ -579,7 +610,7 @@ def _agent_uplinks(
         gw_mac = {
             n.get("ip"): n.get("mac") for n in snap.get("neighbors") or [] if isinstance(n, dict)
         }
-        for gw, (kind, phys_medium, is_tunnel) in _gateways(snap).items():
+        for gw, (kind, phys_medium, is_tunnel, mbps) in _gateways(snap).items():
             gw_nid = _resolve_nid(gw_mac.get(gw), gw, by_mac, by_ip)
             _ensure_gateway(nodes, gw_nid, gw, gw_mac.get(gw))
             q = quality_overlay(snap, gw)
@@ -598,7 +629,7 @@ def _agent_uplinks(
                         "vlan": None,
                         "a_port": None,
                         "b_port": None,
-                        "speed_mbps": None,
+                        "speed_mbps": _speed(mbps),
                         "port_down": False,
                         "quality": q,
                     }
@@ -721,11 +752,23 @@ def build_network_map(
     enriched with interface physics (S3) plus per-subnet anomaly and chokepoint (S4)
     overlays. Pure over already-read inputs."""
     nodes, by_mac, by_ip, by_device_id, by_printer_id = _seed_net_devices(net_devices)
-    _merge_agents(nodes, snapshots, by_mac, by_ip, by_device_id)
+    alias = _merge_agents(nodes, snapshots, by_mac, by_ip, by_device_id)
     _merge_printers(nodes, printers, by_mac, by_ip, by_printer_id)
+    net_links = [
+        {**lk, **{k: alias.get(lk.get(k) or "", lk.get(k)) for k in ("a_nid", "b_nid")}}
+        for lk in net_links
+    ]
     links = _real_links(net_links, nodes, _index_interfaces(net_interfaces or []))
     uplinks, subnets = _agent_uplinks(snapshots, nodes, by_mac, by_ip, by_device_id)
+    skip = {n["nid"] for n in nodes.values() if n.get("device_id")}
+    skip |= {e[k] for e in links for k in ("a", "b")}
     links += uplinks
+
+    def resolve(mac: Optional[str], ip: Optional[str]) -> Optional[str]:
+        nid = _resolve_nid(mac, ip, by_mac, by_ip)
+        return nid if nid in nodes else None
+
+    links += segment_links(snapshots, resolve, skip)
     links += _route_links(net_routes, by_ip, nodes)
     node_list = sorted(nodes.values(), key=lambda n: n["nid"])
     link_list = sorted(links, key=lambda e: (e["link_kind"], e["a"], e["b"]))
@@ -742,5 +785,6 @@ def build_network_map(
             "printers": len({n["printer_id"] for n in node_list if n.get("printer_id")}),
             "anomalies": sum(1 for s in subnets if s["anomaly"]),
             "wireless_links": sum(1 for e in link_list if e["medium"] == "wireless"),
+            "coverage": map_coverage(node_list, link_list),
         },
     }

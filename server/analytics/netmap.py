@@ -62,6 +62,25 @@ def agent_mac_index(snapshots: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def primary_adapter(adapters: Any) -> dict[str, Any]:
+    """The adapter that identifies an agent (single rule for inventory and the map).
+
+    Ranked: usable (up, not tunnel/virtual) > has a gateway > has a valid MAC; the
+    first in snapshot order wins a tie. ``{}`` when there are no adapters.
+    """
+    best: dict[str, Any] = {}
+    best_rank = (-1, -1, -1)
+    for a in adapters or []:
+        if not isinstance(a, dict):
+            continue
+        usable = a.get("up") is True and a.get("tunnel") is not True
+        usable = usable and a.get("role") not in ("tunnel", "virtual")
+        rank = (int(usable), int(bool(a.get("gateway"))), int(bool(normalize_mac(a.get("mac")))))
+        if rank > best_rank:
+            best, best_rank = a, rank
+    return best
+
+
 def _icmp_filtered(rows: list[dict[str, Any]]) -> bool:
     """Every probe lost 100% with no reply -> firewall vs outage is undecidable (D5)."""
     if not rows:

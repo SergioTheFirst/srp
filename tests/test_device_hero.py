@@ -167,7 +167,7 @@ def test_hero_renders_three_coordinate_bars_labelled_in_russian(client) -> None:
     frag = _hero_fragment(body)
     assert "Повреждения" in frag
     assert "Устойчивость" in frag
-    assert "Наблюдаемость" in frag
+    assert "Видимость" in frag
 
 
 def test_hero_index_caption_present(client) -> None:

@@ -16,6 +16,9 @@ X-Forwarded-For только от 127.0.0.1 (main.py пинает ``forwarded_al
 внешний клиент заголовком «внутренним» не станет. Всегда включено, без флага; кроме
 демо-витрины (limits.DEMO_MODE, Vercel): там посетители -- весь интернет, а сама
 витрина только для чтения.
+
+Запрос на порт прокси просмотра из интернета (``app.state.internet_port``, за Caddy)
+решает server/internet_view.py -- раньше адреса: за Caddy все приходят с 127.0.0.1.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketClose
 
-from server import limits
+from server import internet_view, limits
 from server.ingest_guards import check_rate_limit, count_reject, retry_after_sec
 
 AGENT_PATHS = frozenset({"/api/v1/ingest", "/api/v1/agent/update", "/api/v1/agent/update/package"})
@@ -38,7 +41,8 @@ AGENT_PATHS = frozenset({"/api/v1/ingest", "/api/v1/agent/update", "/api/v1/agen
 # утренний старт (каждый ПК шлёт ~6 конвертов разом) и досылка буфера после ночи без
 # связи -- до ~600/мин. Сверху -- 429 с Retry-After, агент дошлёт из буфера. Ключи живут
 # в общем словаре ingest_guards (обрезка _TRIM_THRESHOLD): число IP ограничено
-# держателями токена, чужие без токена в окно не попадают.
+# держателями токена, чужие без токена в окно не попадают. Вход с порта прокси (ключи
+# login-ip:) добавляет не больше ключа на scrypt -- он один за раз (internet_view).
 EXTERNAL_MAX_PER_MINUTE = 600
 
 # Явный список вместо ip.is_private: тот включает 2001::/23 (Teredo -- адрес из
@@ -100,12 +104,19 @@ class ExternalAccessMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket") or limits.DEMO_MODE:
+        if scope["type"] not in ("http", "websocket"):  # у lifespan нет scope["server"]
             await self.app(scope, receive, send)
             return
+        # Порт прокси решает раньше адреса: за Caddy все приходят с 127.0.0.1.
+        port = scope["app"].state.internet_port
+        if port is not None and scope["server"][1] == port:
+            await internet_view.gate(self.app, scope, receive, send)
+            return
+        # Сеть; до выхода демо, иначе стенд Vercel получил бы вид «из интернета».
+        internet_view.VIEWER.set(None)
         client = scope.get("client")
         host = client[0] if client else ""
-        if is_internal(host):
+        if limits.DEMO_MODE or is_internal(host):
             await self.app(scope, receive, send)
             return
         if scope["type"] == "websocket":

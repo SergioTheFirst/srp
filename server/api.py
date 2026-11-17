@@ -23,7 +23,7 @@ from shared.schema import (
     utcnow_iso,
 )
 
-from server import db, health_journal, limits, org_directory, updates
+from server import db, demo_redact, health_journal, internet_view, limits, org_directory, updates
 from server.analytics.diagnostics import compute_diagnostics
 from server.analytics.health import apply_health_staleness
 from server.ingest_guards import (
@@ -120,10 +120,16 @@ def list_devices(all: bool = False) -> list[dict]:  # noqa: A002 -- имя query
     """Флот без записей, вытесненных переустановкой (spec 2026-10-24); ``?all=1`` --
     все строки, как раньше (нужно для чистки призраков по API)."""
     rows = db.get_devices()
-    if all:
-        return rows
-    ghosts = db.superseded_ids()
-    return [d for d in rows if d["device_id"] not in ghosts]
+    if not all:
+        ghosts = db.superseded_ids()
+        rows = [d for d in rows if d["device_id"] not in ghosts]
+    return demo_redact.for_public(rows)
+
+
+# Сырые блобы агента: контракт extra="allow" -- будущее поле агента ушло бы в интернет.
+# Срез -- здесь, а не ключами redact: на них держится карточка ПК (шаблон), а этот маршрут
+# страницы не читают.
+_RAW_BLOBS = frozenset({"inventory", "historical", "latest_heartbeat"})
 
 
 @router.get("/devices/{device_id}")
@@ -131,7 +137,9 @@ def get_device(device_id: str) -> dict:
     device = db.get_device(device_id)
     if device is None:
         raise HTTPException(status_code=404, detail="device not found")
-    return device
+    if internet_view.is_internet():
+        device = {k: v for k, v in device.items() if k not in _RAW_BLOBS}
+    return demo_redact.for_public(device)
 
 
 @router.get("/device-card")
@@ -160,7 +168,7 @@ def diagnostics(device_id: str) -> dict:
     result = compute_diagnostics(device_id)
     if result is None:
         raise HTTPException(status_code=404, detail="device not found")
-    return result
+    return demo_redact.for_public(result)
 
 
 class AckBody(BaseModel):
@@ -495,7 +503,7 @@ def device_health(device_id: str) -> dict:
     health = (scores.get("risk") or {}).get("health")
     if health is None:
         return {"available": False}
-    return _with_health_staleness(health, scores.get("ts"))
+    return demo_redact.for_public(_with_health_staleness(health, scores.get("ts")))
 
 
 def _decode_departments(raw: list[dict]) -> list[dict]:
@@ -535,7 +543,7 @@ def fleet_print_analytics(
         days=_clamp_days(days), date_from=_q(date_from), date_to=_q(date_to)
     )
     data["departments"] = _decode_departments(data["departments"])
-    return data
+    return demo_redact.for_public(data)
 
 
 @router.get("/fleet/print/summary")
@@ -654,6 +662,29 @@ def _export_filename(f: db.PrintFilter) -> str:
     return f"print_export_{_filename_date(f.date_from)}_{_filename_date(f.date_to)}.csv"
 
 
+def _export_rate_ok() -> bool:
+    # Из интернета -- своё окно: зритель с сессией не запирает выгрузку CSV офису.
+    suffix = ":inet" if internet_view.is_internet() else ""
+    return check_rate_limit("endpoint:print_export" + suffix)
+
+
+_EXPORT_FIELDS = [
+    "ts",
+    "device_id",
+    "hostname",
+    "org_name",
+    "dept_name",
+    "printer",
+    "ip",
+    "pages",
+    "size_bytes",
+    "user_name",
+    "department",
+    "source",
+    "validation",
+]
+
+
 @router.get("/fleet/print/export.csv")
 def fleet_print_export(
     request: Request,
@@ -665,7 +696,7 @@ def fleet_print_export(
 ) -> StreamingResponse:
     # Самый дорогой read-эндпоинт (до _EXPORT_ROW_MAX строк в память и в ответ).
     # Токен намеренно НЕ требуется -- доверенная LAN, как у ack/meta (решение владельца).
-    if not check_rate_limit("endpoint:print_export"):
+    if not _export_rate_ok():
         raise HTTPException(status_code=429, detail="rate limit exceeded")
     f = _print_filter(date_from, date_to, device, printer, ip)
     rows = db.export_print_rows(f)
@@ -681,24 +712,9 @@ def fleet_print_export(
         row["validation"] = _PRINT_VALIDATION.get(row.get("source") or "", ("—", "na"))[0]
         out.append({k: _csv_safe(v) for k, v in row.items()})
     buf = io.StringIO()
-    fieldnames = [
-        "ts",
-        "device_id",
-        "hostname",
-        "org_name",
-        "dept_name",
-        "printer",
-        "ip",
-        "pages",
-        "size_bytes",
-        "user_name",
-        "department",
-        "source",
-        "validation",
-    ]
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer = csv.DictWriter(buf, fieldnames=_EXPORT_FIELDS, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(out)
+    writer.writerows(demo_redact.for_public(out))  # из интернета колонка user_name пуста
     headers = {"Content-Disposition": f"attachment; filename={_export_filename(f)}"}
     if len(rows) >= db._EXPORT_ROW_MAX:
         # Молчаливая обрезка учётного отчёта хуже отказа: оператор не отличит
@@ -708,7 +724,7 @@ def fleet_print_export(
         # (pandas без comment='#') иначе спотыкается о разное число полей.
         writer.writerow(
             {
-                fieldnames[0]: f"# ВНИМАНИЕ: выгрузка обрезана на {db._EXPORT_ROW_MAX}"
+                _EXPORT_FIELDS[0]: f"# ВНИМАНИЕ: выгрузка обрезана на {db._EXPORT_ROW_MAX}"
                 " строках (показаны самые свежие). Сузьте период или фильтр."
             }
         )
@@ -739,7 +755,7 @@ def fleet_print_by_device_export(
     printer: Optional[str] = None,
     ip: Optional[str] = None,
 ) -> StreamingResponse:
-    if not check_rate_limit("endpoint:print_export"):
+    if not _export_rate_ok():
         raise HTTPException(status_code=429, detail="rate limit exceeded")
     f = _print_filter(date_from, date_to, device, printer, ip)
     rows = db.get_print_by_device(f)

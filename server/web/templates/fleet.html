@@ -374,7 +374,7 @@ tbody td .trend-up {
     <span id="liveinfo" class="muted small">обновлено 0с назад</span>
   </div>
   <button id="purgebtn" class="toolbtn" type="button"
-          {% if demo_mode() %}disabled title="демо: только чтение"
+          {% if read_only() %}disabled title="{{ read_only() }}"
           {% else %}title="удалить из базы машины, давно не выходившие на связь"{% endif %}>Очистить офлайн…</button>
 </div>
 

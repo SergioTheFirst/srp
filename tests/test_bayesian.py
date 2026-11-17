@@ -292,3 +292,10 @@ def test_storage_and_os_factor_labels_are_russian():
     assert engine_labels, f"подписи движков не найдены среди {labels}"
     for ln in engine_labels:
         assert re.search(r"[А-Яа-я]", ln), f"английская подпись движка: {ln!r}"
+
+
+def test_class_labels_name_the_failure_not_a_virtue():
+    # shown with a risk level («высокий»): «Стабильность ОС/ПО — высокий» read as stable
+    labels = {c["name"]: c["label"] for c in _risk(healthy)["classes"]}
+    assert labels["stability"] == "Сбои ОС/ПО"
+    assert not any(lab.startswith(("Стабильн", "Здоров", "Надёжн")) for lab in labels.values())

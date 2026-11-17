@@ -15,19 +15,22 @@
 {% set level_ru = {"Critical": "Критич.", "Error": "Ошибка", "Warning": "Предупр.", "Information": "Инфо"} %}
 
 {% import "_axis_macros.html" as axm with context %}
-{# Метаданные всех score100-осей: (ключ, название, tip, na_tip).
+{# Метаданные всех score100-осей: (ключ, название, tip, na_tip). Все оси -- риски
+   (выше = хуже), поэтому название говорит «риск», а не «здоровье»/«стабильность»:
+   «Здоровье диска 100 из 100» читалось как исправный диск. Те же названия -- в
+   тепловой карте (server/web/health_view.py, _HEATMAP_AXES).
    Tip-тексты перенесены 1:1 со старых axis-card — не менять формулировки. #}
 {% set axes_meta = [
-  ("storage_risk", "Здоровье диска (SMART)",
+  ("storage_risk", "Риск отказа диска (SMART)",
    "Риск отказа диска на основе данных SMART: переназначенные секторы, ошибки чтения/записи, температура, износ SSD. 0–100, выше = хуже",
    "Нет данных SMART, диск не поддерживает мониторинг или источник не прошёл проверку доверия"),
-  ("os_degradation_risk", "Стабильность ОС",
+  ("os_degradation_risk", "Риск сбоев ОС",
    "Нестабильность ОС: RSI Windows (индекс стабильности 1–10, ниже = хуже), синие экраны, неожиданные выключения, время загрузки. 0–100, выше = хуже",
    "Нет данных RSI и счётчиков сбоев или источник не прошёл проверку доверия — не можем оценить"),
-  ("disk_fill_risk", "Заполнение диска / обслуживание Windows",
+  ("disk_fill_risk", "Риск нехватки места и сбоя обновлений",
    "Риск нехватки места на диске и сбоя обслуживания Windows (обновления, патчи). Основан на медиане свободного места за 14 дней и ошибках обновлений. 0–100, выше = хуже",
    "Нет данных о свободном месте или источник не прошёл проверку доверия"),
-  ("network_risk", "Здоровье сети",
+  ("network_risk", "Риск сетевых проблем",
    "Состояние сети машины: потери и задержка до шлюза, адрес без DHCP (APIPA), слабый Wi-Fi. 0–100, выше = хуже. Блокировка ICMP честно показывается как «не видно», а не как авария",
    "Нет сетевой телеметрии или источник не прошёл проверку доверия"),
   ("fleet_anomaly_risk", "Аномалии флота",
@@ -694,6 +697,9 @@
 })();
 </script>
 
+{# Правка комментария и ПДн (поля и скрипты) -- только из сети: из интернета только
+   чтение. Стиль ниже -- вне условия: .btn-small носят и кнопки 30д/90д (_device_hero). #}
+{% if not internet_view() %}
 {# ── Machine comment (free-text label) ──────────────────────────────────── #}
 {# Отдел теперь берётся из справочника по коду (заголовок выше); здесь —
    произвольная метка машины. Поле «отдел» (department) устарело. #}
@@ -702,9 +708,10 @@
   <input id="comment-input" class="dept-input" type="text"
          placeholder="Например: касса №3"
          value="{{ d.comment or '' }}">
-  <button id="comment-save" class="btn-small" {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>Сохранить</button>
+  <button id="comment-save" class="btn-small" {% if read_only() %}disabled title="{{ read_only() }}"{% endif %}>Сохранить</button>
   <span id="comment-status" class="small muted"></span>
 </div>
+{% endif %}
 <style>
 .dept-row { display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap; }
 .dept-input {
@@ -723,6 +730,7 @@
 .dept-ok  { color: var(--good); }
 .dept-err { color: var(--bad); }
 </style>
+{% if not internet_view() %}
 <script>
 (function () {
   var did = {{ d.device_id | tojson }};
@@ -772,7 +780,7 @@
          maxlength="32" value="{{ d.owner_phone or '' }}">
 </div>
 <div class="dept-row">
-  <button id="owner-save" class="btn-small" {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>Сохранить</button>
+  <button id="owner-save" class="btn-small" {% if read_only() %}disabled title="{{ read_only() }}"{% endif %}>Сохранить</button>
   <span id="owner-status" class="small muted"></span>
 </div>
 <script>
@@ -828,4 +836,5 @@
   });
 })();
 </script>
+{% endif %}
 {% endblock %}

@@ -45,6 +45,7 @@ def test_metrics_fleet_counts_match_ingested_devices(client):
     assert isinstance(fleet["stale"], int)
     assert isinstance(fleet["at_risk"], int)
     assert isinstance(fleet["scored"], int)
+    assert isinstance(fleet["last_seen"], str)
     assert fleet["at_risk"] <= fleet["total"]
     assert fleet["scored"] <= fleet["total"]
 
@@ -144,6 +145,20 @@ def test_pipeline_metrics_hb_1h_excludes_a_heartbeat_older_than_an_hour_today(db
     metrics = db_init.get_pipeline_metrics()
     assert metrics["ingest"]["heartbeats_1h"] == 0
     assert metrics["ingest"]["heartbeats_5m"] == 0
+
+
+@pytest.mark.unit
+def test_pipeline_metrics_fleet_last_seen_is_the_newest_agent_signal(db_init):
+    from datetime import datetime, timedelta, timezone
+
+    # Трей сервера: значок вспыхивает, когда сигнал агента новее прошлого опроса, и желтеет,
+    # когда он старше stale_after_sec. Пинг строк heartbeat не пишет -- нужен last_seen.
+    assert db_init.get_pipeline_metrics()["fleet"]["last_seen"] is None  # пустая база
+    now = datetime.now(timezone.utc)
+    newest, older = now.isoformat(), (now - timedelta(minutes=30)).isoformat()
+    db_init.touch_device("dev-newest", newest, "0.1.0", received_at=newest)
+    db_init.touch_device("dev-older", older, "0.1.0", received_at=older)
+    assert db_init.get_pipeline_metrics()["fleet"]["last_seen"] == newest
 
 
 # ── P1-6 follow-up: at_risk floor must match band_for_risk_score's "bad" ─── #

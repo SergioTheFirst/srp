@@ -29,7 +29,7 @@ from client.winflags import AGENT_ARCH
 log = logging.getLogger(__name__)
 
 # Stamped onto every envelope; root VERSION carries the same number (test_version_pin).
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.1.0"
 # The contract the agent speaks (shared.schema.CONTRACT_VERSION; the agent is stdlib-only
 # and cannot import it -- a test pins the two). The server's 406 gate reads it, so the
 # agent's own version may have its own MAJOR.

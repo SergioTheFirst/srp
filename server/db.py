@@ -612,6 +612,21 @@ CREATE TABLE IF NOT EXISTS health_outcomes (
   note        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_health_outcomes_device ON health_outcomes(device_id, id);
+-- Просмотр из интернета (спека 2026-11-05 §4-5): username хранится после casefold()
+-- (NOCASE не складывает кириллицу); у сессии только SHA-256 токена cookie, без IP.
+CREATE TABLE IF NOT EXISTS users (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  username            TEXT NOT NULL UNIQUE,
+  password_hash       TEXT NOT NULL,
+  disabled            INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL,
+  password_changed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_sha256 TEXT PRIMARY KEY,
+  user_id      INTEGER NOT NULL,
+  created_at   TEXT NOT NULL
+);
 """
 
 
@@ -2411,6 +2426,9 @@ def upsert_net_device(dev: dict[str, Any], received_at: Optional[str] = None) ->
               dev_type      = CASE
                                 WHEN excluded.dev_type IS NOT NULL
                                  AND excluded.dev_type != 'unknown'
+                                 AND NOT (excluded.dev_type = 'endpoint'
+                                          AND COALESCE(net_devices.dev_type, 'unknown')
+                                              NOT IN ('unknown', 'endpoint'))
                                 THEN excluded.dev_type ELSE net_devices.dev_type END,
               sys_object_id = COALESCE(excluded.sys_object_id, net_devices.sys_object_id),
               model         = COALESCE(excluded.model, net_devices.model),
@@ -3257,7 +3275,12 @@ def _delete_device_rows(conn: sqlite3.Connection, device_id: str) -> None:
     # deliberately absent from _DEVICE_TABLES. Clear the soft agent FK instead of
     # deleting the node: a purged agent leaves no dangling link (cleanup-not-
     # continuity) while the network node itself survives.
-    conn.execute("UPDATE net_devices SET device_id=NULL WHERE device_id=?", (device_id,))
+    conn.execute(
+        "UPDATE net_devices SET device_id=NULL,"
+        " dev_type=CASE WHEN dev_type='agent' THEN 'endpoint' ELSE dev_type END"
+        " WHERE device_id=?",
+        (device_id,),
+    )
 
 
 def delete_device(device_id: str) -> bool:
@@ -3649,6 +3672,105 @@ def get_ack(device_id: str) -> Optional[dict[str, Any]]:
             "SELECT note, acked_at FROM acknowledgements WHERE device_id=?", (device_id,)
         ).fetchone()
     return {"note": row["note"], "acked_at": row["acked_at"]} if row else None
+
+
+# Просмотр из интернета (спека 2026-11-05 §4-5). Имя приходит уже после casefold()
+# (server/users.py). Сессия годна, пока created_at моложе SESSION_DAYS; тот же срок --
+# Max-Age cookie. Просроченные удаляет вход, фонового цикла нет.
+SESSION_DAYS = 30
+
+
+def create_user(username: str, password_hash: str) -> bool:
+    """Новая запись; False -- имя уже занято."""
+    now = _now_iso()
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, password_changed_at)"
+            " VALUES (?,?,?,?) ON CONFLICT(username) DO NOTHING",
+            (username, password_hash, now, now),
+        ).rowcount
+    return n > 0
+
+
+def get_user(username: str) -> Optional[dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash, disabled FROM users WHERE username=?",
+            (username,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_user_password(user_id: int, password_hash: str) -> None:
+    """Новый пароль гасит все сессии записи сразу."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash=?, password_changed_at=? WHERE id=?",
+            (password_hash, _now_iso(), user_id),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+
+def set_user_disabled(user_id: int, disabled: bool) -> None:
+    """Отключение гасит сессии записи сразу; включение их не трогает (спека §5)."""
+    with _lock, _connect() as conn:
+        conn.execute("UPDATE users SET disabled=? WHERE id=?", (int(disabled), user_id))
+        if disabled:
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+
+def list_users() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT username, disabled, created_at, password_changed_at FROM users"
+            " ORDER BY username"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_session(token_sha256: str, user_id: int, password_hash: str) -> bool:
+    """Сессия -- только если запись та же, что проверил вход (хэш, не отключена).
+
+    passwd/disable из users.bat (другой процесс) могут закоммититься, пока идёт scrypt:
+    их DELETE сессий уже прошёл, и сессия по старому паролю жила бы SESSION_DAYS.
+    INSERT ... SELECT идёт под write-lock SQLite и видит последнее состояние users.
+    False -- запись сменилась, сессии нет.
+    """
+    with _lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM sessions WHERE created_at <= ?", (_cutoff_iso(days=SESSION_DAYS),)
+        )
+        n = conn.execute(
+            "INSERT INTO sessions (token_sha256, user_id, created_at)"
+            " SELECT ?, id, ? FROM users WHERE id=? AND password_hash=? AND disabled=0",
+            (token_sha256, _now_iso(), user_id, password_hash),
+        ).rowcount
+    return n > 0
+
+
+def get_session_user(token_sha256: str) -> Optional[str]:
+    """Имя записи живой сессии: запись не отключена, сессия не старше SESSION_DAYS."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT u.username FROM sessions s JOIN users u ON u.id = s.user_id"
+            " WHERE s.token_sha256=? AND u.disabled=0 AND s.created_at > ?",
+            (token_sha256, _cutoff_iso(days=SESSION_DAYS)),
+        ).fetchone()
+    return row["username"] if row else None
+
+
+def delete_session(token_sha256: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE token_sha256=?", (token_sha256,))
+
+
+def delete_sessions(user_id: Optional[int] = None) -> int:
+    """Погасить сессии записи (None -- все сессии); возвращает число удалённых."""
+    with _lock, _connect() as conn:
+        n = conn.execute(
+            "DELETE FROM sessions WHERE ? IS NULL OR user_id=?", (user_id, user_id)
+        ).rowcount
+    return n
 
 
 def _primary_ip(hist_payload: Optional[str]) -> Optional[str]:
@@ -5593,7 +5715,9 @@ def _reject_counts_snapshot() -> dict[str, int]:
 def get_pipeline_metrics() -> dict[str, Any]:
     """Single-pass pipeline health stats for /api/v1/metrics and /pipeline page."""
     with _connect() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+        # last_seen -- самый свежий сигнал агента (время приёма сервером; NULL -- ПК нет):
+        # по нему трей сервера видит, что агенты на связи (пинг liveness строк heartbeat не пишет).
+        total, last_seen = conn.execute("SELECT COUNT(*), MAX(last_seen) FROM devices").fetchone()
         stale = conn.execute(
             "SELECT COUNT(*) FROM devices WHERE last_seen < ?",
             (_cutoff_iso(seconds=_STALE_AFTER_SEC),),
@@ -5690,6 +5814,7 @@ def get_pipeline_metrics() -> dict[str, Any]:
             "stale": stale,
             "at_risk": at_risk,
             "scored": scored,
+            "last_seen": last_seen,
         },
         "ingest": {
             "heartbeats_5m": hb_5m,

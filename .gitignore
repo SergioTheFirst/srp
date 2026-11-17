@@ -1,6 +1,7 @@
 # SRP runtime artifacts (generated; must never be committed)
 srp.db
 *.log
+logs/
 __pycache__/
 client/status.json
 client/print_state.json

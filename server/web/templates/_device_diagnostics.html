@@ -105,11 +105,14 @@
     <i style="width:{{ 0 if c.trust == 'unknown' else {'low': 25, 'elevated': 50, 'high': 75, 'critical': 100}.get(c.level, 0) }}%"></i>
   </div>
   <ul class="factors">
-    {% for f in c.factors %}
+    {# public stand: the calibration prior and the signal weights stay off-screen (server/demo_redact.py) #}
+    {% for f in c.factors if not (demo_mode() and f.label.startswith("Базовый риск класса")) %}
     <li>
       <span>{{ f.label }}</span>
+      {% if not demo_mode() %}
       <span class="w {{ 'pos' if f.weight > 0 else 'neg' }}"
             title="Вес сигнала: положительный — повышает оценку риска, отрицательный — понижает">{{ "%+.2f"|format(f.weight) }}</span>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
@@ -133,8 +136,10 @@
     {% for f in items %}
     <li>
       <span>{{ f.label }}</span>
+      {% if not demo_mode() %}
       <span class="w {{ 'neg' if f.delta < 0 else 'pos' }}"
             title="Изменение балла: отрицательное = улучшает оценку, положительное = ухудшает">{{ "%+.1f"|format(f.delta) }}</span>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>

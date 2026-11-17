@@ -53,7 +53,7 @@
     </div>
     {% endfor %}
   </div>
-  {% set state_ev = ((health.state_evidence or [])|map(attribute="label")|join("; ")) %}
+  {% set state_ev = ((health.state_evidence or [])|map(attribute="label")|map("public_label")|join("; ")) %}
   {% if state_ev %}<p class="hero-why">почему: {{ state_ev }}</p>{% endif %}
 
   {# 3. Три координаты: значение подписано («NN из 100»), направление шкалы
@@ -61,13 +61,13 @@
   {% set coord_meta = [
       ("damage", "Повреждения", "накопленный необратимый износ железа · выше = хуже"),
       ("resilience", "Устойчивость", "запас прочности к новым сбоям · выше = лучше"),
-      ("observability", "Наблюдаемость", "полнота данных для оценки · выше = лучше"),
+      ("observability", "Видимость", "полнота данных для оценки · выше = лучше"),
   ] %}
   <div class="hero-coords">
     {% for key, label, sub in coord_meta %}
     {% set coord = health[key] or {} %}
     {% set cband = band_class(coord.band) %}
-    {% set cev = ((coord.evidence or [])|map(attribute="label")|join("; ")) %}
+    {% set cev = ((coord.evidence or [])|map(attribute="label")|map("public_label")|join("; ")) %}
     <div class="coord-card">
       <div class="head">
         <span class="name">{{ label }}</span>

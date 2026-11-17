@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from shared.schema import parse_version
 
-from server import db, fleet_canon, limits, org_directory
+from server import db, demo_redact, fleet_canon, internet_view, limits, org_directory
 from server.analytics.disk_bus import disk_reading, is_removable_disk
 from server.analytics.errchain import CRASH as _CRASH_EVENT_IDS
 from server.analytics.health import (
@@ -37,11 +37,38 @@ from server.web.health_view import router as _health_router
 from server.web.security_flags import security_flags
 from server.web.trust_labels import PS_ENGINE_TOKENS, collector_failures, identity_reason_ru
 
-_TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
+
+class _Templates(Jinja2Templates):
+    """Одна точка всех рендеров: зрителю из интернета -- контекст без ПДн (internet_view)."""
+
+    # Явная подпись вместо перегрузок starlette: все вызовы -- (request, name, context).
+    def TemplateResponse(self, request: Request, name: str, context: dict, **kw: Any):  # type: ignore[override]
+        if internet_view.is_internet():
+            context = internet_view.redact(context)
+        return super().TemplateResponse(request, name, context, **kw)
+
+
+_TEMPLATES = _Templates(directory=str(Path(__file__).with_name("templates")))
 # Регистрирован ВЫЗЫВАЕМЫМ (не снимком значения на импорте): снимок не поддаётся
 # monkeypatch в тестах, а health_view.py читает тот же _TEMPLATES без второй
-# регистрации (единственная точка Jinja2Templates( в репозитории).
+# регистрации (единственная точка _Templates( в репозитории).
 _TEMPLATES.env.globals["demo_mode"] = lambda: limits.DEMO_MODE
+# Запрос с порта прокси (просмотр из интернета) -- тоже вызываемый: флаг на каждый запрос.
+_TEMPLATES.env.globals["internet_view"] = internet_view.is_internet
+# Имя записи из сессии -- для шапки (имя и «Выйти»); «» -- в сети и у анонима на /login.
+_TEMPLATES.env.globals["internet_user"] = lambda: internet_view.VIEWER.get("") or ""
+
+
+def _read_only() -> str:
+    """Подсказка у неактивных кнопок (disabled title=…); «» -- в сети кнопки работают."""
+    if limits.DEMO_MODE:
+        return "демо: только чтение"
+    return "только чтение" if internet_view.is_internet() else ""
+
+
+_TEMPLATES.env.globals["read_only"] = _read_only
+# Public stand: labels lose their «(вес N)» calibration note (server/demo_redact.py).
+_TEMPLATES.env.filters["public_label"] = demo_redact.public_label
 _TEMPLATES.env.globals["security_flags"] = security_flags
 
 _EMPTY_GRAPH = {

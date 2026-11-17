@@ -305,7 +305,7 @@
       </div>
       <div class="mc-row" style="margin-top:6px">
         <button class="zx-btn" id="zx-btn" onclick="zabbixSendNow()"
-                {% if demo_mode() %}disabled title="демо: только чтение"{% endif %}>
+                {% if read_only() %}disabled title="{{ read_only() }}"{% endif %}>
           ⟳ Отправить сейчас
         </button>
         <span id="zx-result" class="mc-val na" style="font-size:13px"></span>

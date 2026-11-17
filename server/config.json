@@ -1,6 +1,10 @@
 {
   "host": "0.0.0.0",
   "port": 8000,
+  "internet_view": {
+    "enabled": true,
+    "proxy_port": 8001
+  },
   "db_path": "srp.db",
   "retain_heartbeats": 2000,
   "retain_events": 5000,

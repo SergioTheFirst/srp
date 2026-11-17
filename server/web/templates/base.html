@@ -580,6 +580,19 @@ window.srpEsc = function (s) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
 };
+{% if internet_view() %}
+// Просмотр из интернета (server/internet_view.py): сессия кончилась или отозвана --
+// опрос получает 303 на /login (fetch идёт за ним сам) или 401 от /api. Перезагрузка
+// покажет форму входа, а не вставит её в #fleet; одна правка на все опросы страниц.
+(function (orig) {
+  window.fetch = function () {
+    return orig.apply(window, arguments).then(function (r) {
+      if (r.redirected || r.status === 401) location.reload();
+      return r;
+    });
+  };
+})(window.fetch);
+{% endif %}
 </script>
 </head>
 <body>
@@ -593,12 +606,13 @@ window.srpEsc = function (s) {
     <a href="/print">печать</a>
     <a href="/printers">принтеры</a>
     <a href="/netmap">карта сети</a>
-    <a href="/deploy">развёртывание</a>
+    {# Из интернета /deploy -- 404: команды установки указывали бы на порт прокси. #}
+    {% if not internet_view() %}<a href="/deploy">развёртывание</a>{% endif %}
     <a href="/api/v1/devices">API</a>
     <button id="theme-toggle" onclick="(function(){
       var h=document.documentElement;
       var themes=['','meta','vercel'];
-      var labels={'':'Meta','meta':'Vercel','vercel':'Тёмный'};
+      var labels={'':'Айс','meta':'Vercel','vercel':'Тёмный'};
       var cur=h.getAttribute('data-theme')||'';
       var next=themes[(themes.indexOf(cur)+1)%themes.length];
       h.setAttribute('data-theme',next);
@@ -610,10 +624,15 @@ window.srpEsc = function (s) {
        всегда истинный, и любая новая демо-разметка (задачи 9+) молча включится
        вне демо-режима. #}
     {% if demo_mode() %}<span class="chip accent" title="Публичное демо: данные вымышленные, изменение отключено">ДЕМО · только чтение</span>{% endif %}
+    {# Выход -- POST с проверкой Origin (internet_view._logout), поэтому форма, не ссылка. #}
+    {% if internet_user() %}
+    <span class="chip na" title="Просмотр из интернета: только чтение">{{ internet_user() }}</span>
+    <form method="post" action="/logout" style="margin:0"><button type="submit" class="chip na" style="cursor:pointer">Выйти</button></form>
+    {% endif %}
   </nav>
 </header>
 <main>
-{% if not demo_mode() and not request.app.state.ingest_token %}
+{% if not read_only() and not request.app.state.ingest_token %}
 <div class="alert-banner alert-warn" role="alert" style="margin-bottom:16px">
   ingest_token не задан — сервер принимает телеметрию и запросы на удаление/обновление
   БЕЗ аутентификации. Задайте <code>ingest_token</code> в <code>server/config.json</code>.
@@ -624,9 +643,9 @@ window.srpEsc = function (s) {
 <script>
 (function () {
   var btn = document.getElementById("theme-toggle");
-  var labels = {'': 'Meta', 'meta': 'Vercel', 'vercel': 'Тёмный'};
+  var labels = {'': 'Айс', 'meta': 'Vercel', 'vercel': 'Тёмный'};
   var cur = document.documentElement.getAttribute('data-theme') || '';
-  btn.textContent = labels[cur] || 'Meta';
+  btn.textContent = labels[cur] || 'Айс';
 })();
 </script>
 </body>
